@@ -1,10 +1,11 @@
 import * as THREE from 'three'
 import { clock } from './clock.js'
 import { createMap } from './map.js'
-import { player } from './player.js'
+import { initPlayer, getPlayer } from './player.js'
 import { camera, initCameraControls, updateCamera } from './camera.js'
 import { initControls, updateMovement } from './controls.js'
 import { initHUD, updateHUD } from './hud.js'
+import { MeshRegistry } from './MeshRegistry.js'
 
 // Scene setup
 const scene = new THREE.Scene()
@@ -40,12 +41,16 @@ scene.add(sandLight)
 const map = createMap()
 scene.add(map)
 
-scene.add(player)
+// Initialize player (pass scene for regeneration support)
+initPlayer(scene)
 
 // Initialize systems
 initCameraControls(renderer.domElement)
 initControls()
 initHUD()
+
+// Debug: show registry contents
+MeshRegistry.debug()
 
 // Handle window resize
 window.addEventListener('resize', () => {
@@ -68,3 +73,15 @@ function animate() {
 }
 
 animate()
+
+// Log controls help
+console.log(`
+🐟 Fish Controls:
+   WASD - Move
+   Space/Shift - Up/Down
+   Mouse - Look
+   Scroll - Zoom in/out
+   
+   M - Mutate fish (new random design)
+   P - Print current seed
+`)

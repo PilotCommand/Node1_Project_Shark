@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { player, fishParts } from './player.js'
+import { getPlayer, getFishParts } from './player.js'
 
 // Create camera
 export const camera = new THREE.PerspectiveCamera(
@@ -61,11 +61,18 @@ export function initCameraControls(domElement) {
 }
 
 export function updateCamera() {
+  const player = getPlayer()
+  if (!player) return
+  
+  const fishParts = getFishParts()
+  
   // Toggle fish visibility based on camera mode
   const showFish = cameraMode === 'orbit'
-  Object.values(fishParts).forEach(part => {
-    part.visible = showFish
-  })
+  if (fishParts) {
+    Object.values(fishParts).forEach(part => {
+      part.visible = showFish
+    })
+  }
   
   if (cameraMode === 'first-person') {
     // First person: camera at player position

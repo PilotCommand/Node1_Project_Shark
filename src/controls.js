@@ -1,6 +1,8 @@
 import * as THREE from 'three'
-import { player } from './player.js'
+import { getPlayer } from './player.js'
 import { getYaw, getPitch, getCameraMode } from './camera.js'
+import { regeneratePlayerFish, getCurrentSeed } from './player.js'
+import { seedToString } from './Fishes.js'
 
 const keys = {
   w: false,
@@ -23,6 +25,22 @@ export function initControls() {
       case 'Space': keys.space = true; e.preventDefault(); break
       case 'ShiftLeft': 
       case 'ShiftRight': keys.shift = true; break
+      
+      // M = Mutate fish
+      case 'KeyM':
+        const newSeed = regeneratePlayerFish()
+        if (newSeed !== null) {
+          showSeedNotification(newSeed)
+        }
+        break
+      
+      // P = Print current seed to console
+      case 'KeyP':
+        const currentSeed = getCurrentSeed()
+        if (currentSeed !== null) {
+          console.log(`Current fish seed: ${seedToString(currentSeed)} (${currentSeed})`)
+        }
+        break
     }
   })
   
@@ -39,7 +57,46 @@ export function initControls() {
   })
 }
 
+/**
+ * Show temporary notification with new seed
+ */
+function showSeedNotification(seed) {
+  // Remove existing notification if any
+  const existing = document.getElementById('seed-notification')
+  if (existing) existing.remove()
+  
+  // Create notification element
+  const notification = document.createElement('div')
+  notification.id = 'seed-notification'
+  notification.style.cssText = `
+    position: fixed;
+    top: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(0, 0, 0, 0.8);
+    color: #00ff88;
+    padding: 12px 24px;
+    border-radius: 8px;
+    font-family: monospace;
+    font-size: 16px;
+    z-index: 1000;
+    transition: opacity 0.3s;
+  `
+  notification.textContent = `New Fish: ${seedToString(seed)}`
+  
+  document.body.appendChild(notification)
+  
+  // Fade out and remove
+  setTimeout(() => {
+    notification.style.opacity = '0'
+    setTimeout(() => notification.remove(), 300)
+  }, 2000)
+}
+
 export function updateMovement(delta) {
+  const player = getPlayer()
+  if (!player) return
+  
   const yaw = getYaw()
   const pitch = getPitch()
   
