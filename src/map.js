@@ -4,11 +4,18 @@ import {
   createSandFloor,
   createBoulder,
   createWaterSurface,
+  getTerrainHeight,
 } from './TerrainMaker.js'
 import { MeshRegistry, Category, Tag } from './MeshRegistry.js'
 
-export function createMap(seed = null) {
+// Default map seed (can be overridden for multiplayer sync)
+const DEFAULT_SEED = 12345
+
+export function createMap(seed = DEFAULT_SEED) {
   const group = new THREE.Group()
+  
+  const mapSize = 1000
+  const floorY = -50  // Base floor level
 
   // Sky dome
   const sky = createSkyDome({
@@ -24,14 +31,13 @@ export function createMap(seed = null) {
     metadata: { type: 'skybox' }
   }, true)
 
-  // Ocean floor (sand)
+  // Ocean floor (sand) with Perlin terrain
   const floor = createSandFloor({
-    size: 1000,
-    segments: 100,
-    bumpiness: 2,
+    size: mapSize,
+    segments: 200,  // Higher detail for exaggerated terrain
     seed: seed,
   })
-  floor.position.y = -50
+  floor.position.y = floorY
   group.add(floor)
 
   MeshRegistry.register('floor', {
@@ -41,20 +47,32 @@ export function createMap(seed = null) {
     metadata: {
       type: 'boundary',
       boundaryType: 'floor',
-      yLevel: -50
+      yLevel: floorY,
+      seed: seed,
     }
   }, true)
 
-  // Rocks/Boulders
+  // Rocks/Boulders - placed on terrain
+  const rng = createSeededRNG(seed + 9999)  // Offset seed for boulder placement
+  
   for (let i = 0; i < 15; i++) {
+    const size = rng() * 3 + 1
     const rock = createBoulder({
-      size: Math.random() * 3 + 1,
-      seed: seed ? seed + i * 3000 : null,
+      size: size,
+      seed: seed + i * 3000,
     })
+    
+    // Random XZ position
+    const x = rng() * 400 - 200
+    const z = rng() * 400 - 200
+    
+    // Get terrain height at this position and place boulder on it
+    const terrainY = getTerrainHeight(x, z, mapSize, seed)
+    
     rock.position.set(
-      Math.random() * 400 - 200,
-      -50 + Math.random() * 2,
-      Math.random() * 400 - 200
+      x,
+      floorY + terrainY + size * 0.3,  // Partially buried
+      z
     )
     group.add(rock)
 
@@ -68,7 +86,7 @@ export function createMap(seed = null) {
 
   // Water surface
   const surface = createWaterSurface({
-    size: 1000,
+    size: mapSize,
     opacity: 0.5
   })
   surface.position.y = 30
@@ -92,6 +110,7 @@ export function createMap(seed = null) {
     tags: [Tag.STATIC],
     metadata: {
       type: 'container',
+      seed: seed,
       bounds: {
         minX: -500, maxX: 500,
         minY: -50, maxY: 30,
@@ -101,4 +120,14 @@ export function createMap(seed = null) {
   }, true)
 
   return group
+}
+
+// Simple seeded RNG for boulder placement
+function createSeededRNG(seed) {
+  return function() {
+    let t = seed += 0x6D2B79F5
+    t = Math.imul(t ^ t >>> 15, t | 1)
+    t ^= t + Math.imul(t ^ t >>> 7, t | 61)
+    return ((t ^ t >>> 14) >>> 0) / 4294967296
+  }
 }

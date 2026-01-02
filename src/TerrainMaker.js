@@ -14,7 +14,7 @@
 import * as THREE from 'three'
 
 // ============================================================================
-// SEEDED RANDOM (for multiplayer sync)
+// SEEDED RANDOM
 // ============================================================================
 
 function createRNG(seed) {
@@ -31,6 +31,120 @@ function range(rng, min, max) {
 }
 
 // ============================================================================
+// PERLIN NOISE
+// ============================================================================
+
+/**
+ * Seeded Perlin noise implementation
+ */
+class PerlinNoise {
+  constructor(seed = 0) {
+    this.seed = seed
+    this.permutation = this.generatePermutation(seed)
+  }
+  
+  generatePermutation(seed) {
+    const rng = createRNG(seed)
+    const p = []
+    for (let i = 0; i < 256; i++) p[i] = i
+    
+    // Fisher-Yates shuffle with seeded RNG
+    for (let i = 255; i > 0; i--) {
+      const j = Math.floor(rng() * (i + 1))
+      ;[p[i], p[j]] = [p[j], p[i]]
+    }
+    
+    // Duplicate for overflow
+    return [...p, ...p]
+  }
+  
+  fade(t) {
+    return t * t * t * (t * (t * 6 - 15) + 10)
+  }
+  
+  lerp(a, b, t) {
+    return a + t * (b - a)
+  }
+  
+  grad(hash, x, y) {
+    const h = hash & 3
+    const u = h < 2 ? x : y
+    const v = h < 2 ? y : x
+    return ((h & 1) === 0 ? u : -u) + ((h & 2) === 0 ? v : -v)
+  }
+  
+  noise2D(x, y) {
+    const p = this.permutation
+    
+    const xi = Math.floor(x) & 255
+    const yi = Math.floor(y) & 255
+    
+    const xf = x - Math.floor(x)
+    const yf = y - Math.floor(y)
+    
+    const u = this.fade(xf)
+    const v = this.fade(yf)
+    
+    const aa = p[p[xi] + yi]
+    const ab = p[p[xi] + yi + 1]
+    const ba = p[p[xi + 1] + yi]
+    const bb = p[p[xi + 1] + yi + 1]
+    
+    const x1 = this.lerp(this.grad(aa, xf, yf), this.grad(ba, xf - 1, yf), u)
+    const x2 = this.lerp(this.grad(ab, xf, yf - 1), this.grad(bb, xf - 1, yf - 1), u)
+    
+    return this.lerp(x1, x2, v)
+  }
+  
+  /**
+   * Fractal Brownian Motion - layered noise for natural terrain
+   * @param {number} x 
+   * @param {number} y 
+   * @param {number} octaves - Number of noise layers
+   * @param {number} persistence - Amplitude multiplier per octave
+   * @param {number} lacunarity - Frequency multiplier per octave
+   * @returns {number} Value between -1 and 1
+   */
+  fbm(x, y, octaves = 4, persistence = 0.5, lacunarity = 2.0) {
+    let total = 0
+    let amplitude = 1
+    let frequency = 1
+    let maxValue = 0
+    
+    for (let i = 0; i < octaves; i++) {
+      total += this.noise2D(x * frequency, y * frequency) * amplitude
+      maxValue += amplitude
+      amplitude *= persistence
+      frequency *= lacunarity
+    }
+    
+    return total / maxValue
+  }
+  
+  /**
+   * Ridged noise - creates sharp ridges
+   */
+  ridged(x, y, octaves = 4, persistence = 0.5, lacunarity = 2.0) {
+    let total = 0
+    let amplitude = 1
+    let frequency = 1
+    let maxValue = 0
+    
+    for (let i = 0; i < octaves; i++) {
+      let n = this.noise2D(x * frequency, y * frequency)
+      n = 1 - Math.abs(n)  // Create ridges
+      n = n * n            // Sharpen
+      total += n * amplitude
+      maxValue += amplitude
+      amplitude *= persistence
+      frequency *= lacunarity
+    }
+    
+    return total / maxValue
+  }
+}
+
+// ============================================================================
 // CONFIGURATION
 // ============================================================================
 
@@ -42,6 +156,18 @@ export const TerrainConfig = {
     emissiveIntensity: 0.15,
     roughness: 1.0,
     metalness: 0.0,
+    
+    // Elevation color gradient (low to high) - Realistic Tropical Underwater
+    // Natural sand that appears more blue/teal in deeper water
+    elevationColors: [
+      { height: -50, color: new THREE.Color(0x1a6b6b) },  // Trench - deep teal
+      { height: -25, color: new THREE.Color(0x3d9d94) },  // Deep - teal
+      { height: -10, color: new THREE.Color(0x7dbdaf) },  // Mid-deep - turquoise tint
+      { height: 0,   color: new THREE.Color(0xfff5e0) },  // Mid - pale white sand ← PRIORITY
+      { height: 15,  color: new THREE.Color(0xfff9ed) },  // Mid-high - lighter sand
+      { height: 30,  color: new THREE.Color(0xfffdf7) },  // High - bright sand
+      { height: 50,  color: new THREE.Color(0xffffff) },  // Peak - pure white
+    ],
   },
   
   // Boulders/Rocks
@@ -68,6 +194,66 @@ export const TerrainConfig = {
       bottom: 0xc9dff0,   // Pale warm horizon
     },
   },
+  
+  // Terrain generation defaults
+  terrain: {
+    // Base terrain
+    baseScale: 0.004,         // Slightly larger features
+    baseHeight: 25,           // More height variation (was 15)
+    
+    // Large features (trenches, plateaus)
+    featureScale: 0.0015,     // Bigger, broader features
+    featureHeight: 45,        // Much taller plateaus (was 25)
+    
+    // Ridges
+    ridgeScale: 0.006,        // Wider ridges
+    ridgeHeight: 18,          // Taller ridges (was 8)
+    ridgeWeight: 0.5,         // More prominent (was 0.3)
+    
+    // Detail
+    detailScale: 0.02,        // Fine detail frequency
+    detailHeight: 3,          // Slightly more detail (was 2)
+    
+    // Trenches
+    trenchScale: 0.0025,      // Wider trenches
+    trenchDepth: 40,          // Much deeper (was 20)
+    trenchThreshold: 0.5,     // More trenches (was 0.6)
+  },
+}
+
+// ============================================================================
+// COLOR UTILITIES
+// ============================================================================
+
+/**
+ * Get interpolated color based on elevation
+ * @param {number} height - Terrain height
+ * @param {Array} colorStops - Array of { height, color } objects
+ * @returns {THREE.Color}
+ */
+function getElevationColor(height, colorStops) {
+  // Find the two color stops to interpolate between
+  let lower = colorStops[0]
+  let upper = colorStops[colorStops.length - 1]
+  
+  for (let i = 0; i < colorStops.length - 1; i++) {
+    if (height >= colorStops[i].height && height <= colorStops[i + 1].height) {
+      lower = colorStops[i]
+      upper = colorStops[i + 1]
+      break
+    }
+  }
+  
+  // Handle edge cases
+  if (height <= lower.height) return lower.color.clone()
+  if (height >= upper.height) return upper.color.clone()
+  
+  // Interpolate
+  const t = (height - lower.height) / (upper.height - lower.height)
+  const color = new THREE.Color()
+  color.lerpColors(lower.color, upper.color, t)
+  
+  return color
 }
 
 // ============================================================================
@@ -75,39 +261,112 @@ export const TerrainConfig = {
 // ============================================================================
 
 /**
- * Create sand floor with gentle height variation
+ * Create sand floor with Perlin noise terrain features and elevation coloring
  * @param {object} options
  * @param {number} [options.size=1000] - Floor size
  * @param {number} [options.segments=100] - Geometry segments (detail level)
- * @param {number} [options.bumpiness=2] - Height variation amount
- * @param {number} [options.seed] - Random seed for consistent generation
+ * @param {number} [options.seed=0] - Random seed for consistent generation
+ * @param {object} [options.terrain] - Override terrain generation settings
  * @returns {THREE.Mesh}
  */
 export function createSandFloor(options = {}) {
   const {
     size = 1000,
     segments = 100,
-    bumpiness = 2,
-    seed = null,
+    seed = 0,
+    terrain = {},
   } = options
   
-  const rng = seed !== null ? createRNG(seed) : Math.random
+  // Merge terrain config with overrides
+  const t = { ...TerrainConfig.terrain, ...terrain }
   
+  const perlin = new PerlinNoise(seed)
   const geometry = new THREE.PlaneGeometry(size, size, segments, segments)
   
-  // Add random height variation for natural look
   const vertices = geometry.attributes.position.array
+  const halfSize = size / 2
+  
+  // Store heights for color calculation
+  const heights = []
+  
+  // First pass: calculate all heights
   for (let i = 0; i < vertices.length; i += 3) {
-    vertices[i + 2] += rng() * bumpiness - bumpiness / 2
+    const x = vertices[i]
+    const y = vertices[i + 1]
+    
+    const nx = (x + halfSize) / size
+    const ny = (y + halfSize) / size
+    
+    let height = 0
+    
+    // 1. Base terrain - rolling hills/valleys (FBM)
+    const baseNoise = perlin.fbm(
+      nx / t.baseScale * 0.01, 
+      ny / t.baseScale * 0.01, 
+      4, 0.5, 2.0
+    )
+    height += baseNoise * t.baseHeight
+    
+    // 2. Large features - broad plateaus and depressions
+    const featureNoise = perlin.fbm(
+      nx / t.featureScale * 0.01, 
+      ny / t.featureScale * 0.01, 
+      2, 0.5, 2.0
+    )
+    height += featureNoise * t.featureHeight
+    
+    // 3. Ridges - sharp underwater ridges
+    const ridgeNoise = perlin.ridged(
+      nx / t.ridgeScale * 0.01, 
+      ny / t.ridgeScale * 0.01, 
+      3, 0.5, 2.0
+    )
+    height += ridgeNoise * t.ridgeHeight * t.ridgeWeight
+    
+    // 4. Trenches - deep cuts in the terrain
+    const trenchNoise = perlin.fbm(
+      nx / t.trenchScale * 0.01 + 100,
+      ny / t.trenchScale * 0.01 + 100, 
+      2, 0.5, 2.0
+    )
+    if (trenchNoise > t.trenchThreshold) {
+      const trenchFactor = (trenchNoise - t.trenchThreshold) / (1 - t.trenchThreshold)
+      height -= trenchFactor * trenchFactor * t.trenchDepth
+    }
+    
+    // 5. Fine detail - small bumps and texture
+    const detailNoise = perlin.fbm(
+      nx / t.detailScale * 0.01, 
+      ny / t.detailScale * 0.01, 
+      2, 0.5, 2.0
+    )
+    height += detailNoise * t.detailHeight
+    
+    vertices[i + 2] = height
+    heights.push(height)
   }
+  
+  // Second pass: apply vertex colors based on elevation
+  const colors = new Float32Array(heights.length * 3)
+  const colorStops = TerrainConfig.sand.elevationColors
+  
+  for (let i = 0; i < heights.length; i++) {
+    const color = getElevationColor(heights[i], colorStops)
+    colors[i * 3] = color.r
+    colors[i * 3 + 1] = color.g
+    colors[i * 3 + 2] = color.b
+  }
+  
+  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3))
   geometry.computeVertexNormals()
   
   const material = new THREE.MeshStandardMaterial({
-    color: TerrainConfig.sand.color,
+    vertexColors: true,  // Use vertex colors
     roughness: TerrainConfig.sand.roughness,
     metalness: TerrainConfig.sand.metalness,
-    emissive: TerrainConfig.sand.emissive,
-    emissiveIntensity: TerrainConfig.sand.emissiveIntensity,
+    // Reduced emissive since we have vertex colors
+    emissive: 0x443322,
+    emissiveIntensity: 0.08,
   })
   
   const floor = new THREE.Mesh(geometry, material)
@@ -116,8 +375,51 @@ export function createSandFloor(options = {}) {
   // Mark for terrain identification
   floor.userData.terrainType = 'sand'
   floor.userData.collidable = true
+  floor.userData.seed = seed
   
   return floor
+}
+
+/**
+ * Get terrain height at a world position
+ * Useful for placing objects on terrain
+ * @param {number} x - World X position
+ * @param {number} z - World Z position  
+ * @param {number} size - Terrain size
+ * @param {number} seed - Same seed used for terrain
+ * @param {object} terrain - Same terrain config used for generation
+ * @returns {number} Height at position
+ */
+export function getTerrainHeight(x, z, size = 1000, seed = 0, terrain = {}) {
+  const t = { ...TerrainConfig.terrain, ...terrain }
+  const perlin = new PerlinNoise(seed)
+  const halfSize = size / 2
+  
+  const nx = (x + halfSize) / size
+  const ny = (z + halfSize) / size
+  
+  let height = 0
+  
+  // Same calculations as createSandFloor
+  const baseNoise = perlin.fbm(nx / t.baseScale * 0.01, ny / t.baseScale * 0.01, 4, 0.5, 2.0)
+  height += baseNoise * t.baseHeight
+  
+  const featureNoise = perlin.fbm(nx / t.featureScale * 0.01, ny / t.featureScale * 0.01, 2, 0.5, 2.0)
+  height += featureNoise * t.featureHeight
+  
+  const ridgeNoise = perlin.ridged(nx / t.ridgeScale * 0.01, ny / t.ridgeScale * 0.01, 3, 0.5, 2.0)
+  height += ridgeNoise * t.ridgeHeight * t.ridgeWeight
+  
+  const trenchNoise = perlin.fbm(nx / t.trenchScale * 0.01 + 100, ny / t.trenchScale * 0.01 + 100, 2, 0.5, 2.0)
+  if (trenchNoise > t.trenchThreshold) {
+    const trenchFactor = (trenchNoise - t.trenchThreshold) / (1 - t.trenchThreshold)
+    height -= trenchFactor * trenchFactor * t.trenchDepth
+  }
+  
+  const detailNoise = perlin.fbm(nx / t.detailScale * 0.01, ny / t.detailScale * 0.01, 2, 0.5, 2.0)
+  height += detailNoise * t.detailHeight
+  
+  return height
 }
 
 // ============================================================================
@@ -330,6 +632,7 @@ export default {
   
   // Floor
   createSandFloor,
+  getTerrainHeight,
   
   // Rocks
   createBoulder,
