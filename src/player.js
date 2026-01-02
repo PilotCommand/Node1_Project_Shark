@@ -1,78 +1,74 @@
 import * as THREE from 'three'
-import { generateFish, generateStarterFish, randomSeed, seedToString, FishClass } from './Fishes.js'
+import { 
+  CreatureType,
+  FishClass,
+  generateCreature,
+  generateStarter,
+  getAllCreatureClasses,
+  randomSeed,
+  seedToString,
+} from './Encyclopedia.js'
 import { MeshRegistry, Category, Tag } from './MeshRegistry.js'
 
-let currentFish = null
-let fishParts = null
+let currentCreature = null
+let creatureParts = null
+let currentType = CreatureType.FISH
 let currentClass = FishClass.STARTER
+let currentIndex = 0
 
-// Class cycle order - biologically organized
-const CLASS_ORDER = [
-  FishClass.STARTER,
-  // Cartilaginous
-  FishClass.SHARK,
-  FishClass.RAY,
-  // Elongated
-  FishClass.EEL,
-  FishClass.BARRACUDA,
-  // Pelagic
-  FishClass.TUNA,
-  FishClass.MARLIN,
-  // Reef - large
-  FishClass.GROUPER,
-  // Reef - small
-  FishClass.TANG,
-  FishClass.ANGELFISH,
-  FishClass.PUFFER,
-  // Benthic
-  FishClass.FLOUNDER,
-]
+// All creature classes from Encyclopedia - fish AND mammals
+const CREATURE_CATALOG = getAllCreatureClasses()
 
 let sceneRef = null
 
 export function initPlayer(scene) {
   sceneRef = scene
   
-  currentFish = generateStarterFish()
+  // Start with the fish starter
+  currentCreature = generateStarter(CreatureType.FISH)
+  currentType = CreatureType.FISH
   currentClass = FishClass.STARTER
-  fishParts = currentFish.parts
+  currentIndex = 0
+  creatureParts = currentCreature.parts
   
-  currentFish.mesh.position.set(0, 0, 0)
-  scene.add(currentFish.mesh)
+  currentCreature.mesh.position.set(0, 0, 0)
+  scene.add(currentCreature.mesh)
   
   MeshRegistry.register('player', {
-    mesh: currentFish.mesh,
+    mesh: currentCreature.mesh,
     body: null,
     category: Category.PLAYER,
     tags: [Tag.COLLIDABLE, Tag.ANIMATED],
     metadata: {
       health: 100,
       speed: 10,
-      seed: currentFish.seed,
-      fishClass: currentFish.fishClass,
-      traits: currentFish.traits,
-      parts: fishParts
+      seed: currentCreature.seed,
+      creatureType: currentType,
+      creatureClass: currentClass,
+      traits: currentCreature.traits,
+      parts: creatureParts
     }
   }, true)
   
-  const size = currentFish.traits.length?.toFixed(1) || '1.5'
-  console.log(`Player: ${currentFish.fishClass} | ${size}m | Seed: ${seedToString(currentFish.seed)}`)
+  const size = currentCreature.traits.length?.toFixed(1) || '1.5'
+  console.log(`Player: ${currentClass} | ${size}m | Seed: ${seedToString(currentCreature.seed)}`)
   
-  return currentFish.mesh
+  return currentCreature.mesh
 }
 
-function swapFish(newFishData) {
-  if (!sceneRef || !currentFish) {
+function swapCreature(newCreatureData, newType, newClass) {
+  if (!sceneRef || !currentCreature) {
     console.warn('Player not initialized')
     return null
   }
   
-  const position = currentFish.mesh.position.clone()
-  const rotation = currentFish.mesh.rotation.clone()
+  const position = currentCreature.mesh.position.clone()
+  const rotation = currentCreature.mesh.rotation.clone()
   
-  sceneRef.remove(currentFish.mesh)
+  sceneRef.remove(currentCreature.mesh)
   
-  currentFish.mesh.traverse(child => {
+  // Dispose old mesh
+  currentCreature.mesh.traverse(child => {
     if (child.geometry) child.geometry.dispose()
     if (child.material) {
       if (Array.isArray(child.material)) {
@@ -85,124 +81,206 @@ function swapFish(newFishData) {
   
   MeshRegistry.unregister('player')
   
-  currentFish = newFishData
-  currentClass = newFishData.fishClass
-  fishParts = newFishData.parts
+  // Set new creature
+  currentCreature = newCreatureData
+  currentType = newType
+  currentClass = newClass
+  creatureParts = newCreatureData.parts
   
-  currentFish.mesh.position.copy(position)
-  currentFish.mesh.rotation.copy(rotation)
+  currentCreature.mesh.position.copy(position)
+  currentCreature.mesh.rotation.copy(rotation)
   
-  sceneRef.add(currentFish.mesh)
+  sceneRef.add(currentCreature.mesh)
   
   MeshRegistry.register('player', {
-    mesh: currentFish.mesh,
+    mesh: currentCreature.mesh,
     body: null,
     category: Category.PLAYER,
     tags: [Tag.COLLIDABLE, Tag.ANIMATED],
     metadata: {
       health: 100,
       speed: 10,
-      seed: currentFish.seed,
-      fishClass: currentFish.fishClass,
-      traits: currentFish.traits,
-      parts: fishParts
+      seed: currentCreature.seed,
+      creatureType: currentType,
+      creatureClass: currentClass,
+      traits: currentCreature.traits,
+      parts: creatureParts
     }
   }, true)
   
   return {
-    seed: currentFish.seed,
-    fishClass: currentFish.fishClass,
-    traits: currentFish.traits
+    seed: currentCreature.seed,
+    creatureType: currentType,
+    creatureClass: currentClass,
+    traits: currentCreature.traits
   }
 }
 
-export function regeneratePlayerFish() {
+/**
+ * Mutate - generate new random creature of same type/class
+ */
+export function regeneratePlayerCreature() {
   const newSeed = randomSeed()
   
-  let newFishData
+  // If on starter, jump to first real class
+  let targetType = currentType
+  let targetClass = currentClass
+  
   if (currentClass === FishClass.STARTER) {
-    newFishData = generateFish(newSeed, FishClass.TANG)
-    currentClass = FishClass.TANG
-  } else {
-    newFishData = generateFish(newSeed, currentClass)
+    // Find first non-starter fish
+    const firstFish = CREATURE_CATALOG.find(c => c.type === CreatureType.FISH && !c.isStarter)
+    if (firstFish) {
+      targetType = firstFish.type
+      targetClass = firstFish.class
+      currentIndex = CREATURE_CATALOG.indexOf(firstFish)
+    }
   }
   
-  const result = swapFish(newFishData)
+  const newCreatureData = generateCreature(newSeed, targetType, targetClass)
+  if (!newCreatureData) return null
+  
+  const result = swapCreature(newCreatureData, targetType, targetClass)
   
   if (result) {
     const size = result.traits?.length?.toFixed(1) || '?'
-    console.log(`New ${result.fishClass}: ${size}m | Seed: ${seedToString(result.seed)}`)
+    console.log(`New ${result.creatureClass}: ${size}m | Seed: ${seedToString(result.seed)}`)
   }
   
   return result
 }
 
+/**
+ * Cycle to next creature class (across ALL types)
+ */
 export function cyclePlayerClass() {
-  const currentIndex = CLASS_ORDER.indexOf(currentClass)
-  const nextIndex = (currentIndex + 1) % CLASS_ORDER.length
-  const nextClass = CLASS_ORDER[nextIndex]
+  currentIndex = (currentIndex + 1) % CREATURE_CATALOG.length
+  const next = CREATURE_CATALOG[currentIndex]
   
   const newSeed = randomSeed()
   
-  let newFishData
-  if (nextClass === FishClass.STARTER) {
-    newFishData = generateStarterFish()
+  let newCreatureData
+  if (next.isStarter) {
+    newCreatureData = generateStarter(next.type)
   } else {
-    newFishData = generateFish(newSeed, nextClass)
+    newCreatureData = generateCreature(newSeed, next.type, next.class)
   }
   
-  const result = swapFish(newFishData)
+  if (!newCreatureData) return null
+  
+  const result = swapCreature(newCreatureData, next.type, next.class)
   
   if (result) {
     const size = result.traits?.length?.toFixed(1) || '?'
-    console.log(`Switched to ${result.fishClass}: ${size}m | Seed: ${seedToString(result.seed)}`)
+    console.log(`Switched to ${result.creatureClass}: ${size}m | Seed: ${seedToString(result.seed)}`)
   }
   
   return result
 }
 
-export function setPlayerFish(seed, fishClass = null) {
-  const targetClass = fishClass || currentClass
+/**
+ * Cycle to previous creature class
+ */
+export function cyclePreviousClass() {
+  currentIndex = (currentIndex - 1 + CREATURE_CATALOG.length) % CREATURE_CATALOG.length
+  const prev = CREATURE_CATALOG[currentIndex]
   
-  let newFishData
-  if (targetClass === FishClass.STARTER) {
-    newFishData = generateStarterFish()
+  const newSeed = randomSeed()
+  
+  let newCreatureData
+  if (prev.isStarter) {
+    newCreatureData = generateStarter(prev.type)
   } else {
-    newFishData = generateFish(seed, targetClass)
+    newCreatureData = generateCreature(newSeed, prev.type, prev.class)
   }
   
-  const result = swapFish(newFishData)
+  if (!newCreatureData) return null
+  
+  const result = swapCreature(newCreatureData, prev.type, prev.class)
   
   if (result) {
-    console.log(`Fish set: ${result.fishClass} | Seed: ${seedToString(result.seed)}`)
+    const size = result.traits?.length?.toFixed(1) || '?'
+    console.log(`Switched to ${result.creatureClass}: ${size}m | Seed: ${seedToString(result.seed)}`)
   }
   
   return result
 }
+
+/**
+ * Set player to specific creature
+ */
+export function setPlayerCreature(seed, creatureType, creatureClass) {
+  const targetType = creatureType || currentType
+  const targetClass = creatureClass || currentClass
+  
+  let newCreatureData
+  
+  // Find index in catalog
+  const catalogEntry = CREATURE_CATALOG.find(c => c.type === targetType && c.class === targetClass)
+  if (catalogEntry) {
+    currentIndex = CREATURE_CATALOG.indexOf(catalogEntry)
+  }
+  
+  if (catalogEntry?.isStarter) {
+    newCreatureData = generateStarter(targetType)
+  } else {
+    newCreatureData = generateCreature(seed, targetType, targetClass)
+  }
+  
+  if (!newCreatureData) return null
+  
+  const result = swapCreature(newCreatureData, targetType, targetClass)
+  
+  if (result) {
+    console.log(`Creature set: ${result.creatureClass} | Seed: ${seedToString(result.seed)}`)
+  }
+  
+  return result
+}
+
+// ============================================================================
+// GETTERS
+// ============================================================================
 
 export function getPlayer() {
-  return currentFish?.mesh
+  return currentCreature?.mesh
 }
 
-export function getFishParts() {
-  return fishParts
+export function getCreatureParts() {
+  return creatureParts
 }
 
 export function getCurrentSeed() {
-  return currentFish?.seed
+  return currentCreature?.seed
+}
+
+export function getCurrentType() {
+  return currentType
 }
 
 export function getCurrentClass() {
   return currentClass
 }
 
-export function getCurrentFish() {
-  return currentFish
+export function getCurrentCreature() {
+  return currentCreature
 }
 
+export function getCreatureCatalog() {
+  return CREATURE_CATALOG
+}
+
+export function getCurrentIndex() {
+  return currentIndex
+}
+
+// Legacy aliases for compatibility
+export const getFishParts = getCreatureParts
+export const getCurrentFish = getCurrentCreature
+export const regeneratePlayerFish = regeneratePlayerCreature
+
 export let player = null
-export { fishParts }
+export { creatureParts as fishParts }
 
 export function _updateExports() {
-  player = currentFish?.mesh
+  player = currentCreature?.mesh
 }

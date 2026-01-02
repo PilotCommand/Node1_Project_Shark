@@ -69,34 +69,61 @@ animate()
 
 // Controls documentation
 console.log(`
-🐟 FISH SIMULATOR
+🌊 OCEAN CREATURE SIMULATOR
 ═══════════════════════════════════════════════════════════════
 
   CONTROLS:
     WASD / Space / Shift  - Swim
     Mouse                 - Look
     Scroll                - Zoom in/out
-    M                     - Mutate (new fish, same family)
-    N                     - Next family
-    P                     - Print fish info
+    M                     - Mutate (new creature, same species)
+    N                     - Next species
+    B                     - Back (previous species)
+    P                     - Print creature info
 
-  FISH FAMILIES (1 unit = 1 meter):
+  ENCYCLOPEDIA (36 creatures, 1 unit = 1 meter):
   ───────────────────────────────────────────────────────────────
   
-  CARTILAGINOUS FISH (Chondrichthyes):
-    🦈 Shark      │ Selachimorpha      │ 1.5-5.0m   │ Torpedo, large dorsal
-    🦅 Ray        │ Batoidea           │ 1.5-6.0m   │ Flat disc, wing fins
+  🐟 FISH (23 species):
   
-  BONY FISH (Osteichthyes):
-    🐍 Eel        │ Anguilliformes     │ 0.8-3.0m   │ Serpentine, segmented
-    🐟 Grouper    │ Serranidae         │ 0.4-2.5m   │ Bulky, large mouth
-    🐟 Tuna       │ Scombridae         │ 0.5-3.0m   │ Torpedo, lunate tail
-    🐟 Barracuda  │ Sphyraenidae       │ 0.6-2.0m   │ Cylindrical, pike-like
-    🐠 Tang       │ Acanthuridae       │ 0.15-0.5m  │ Disc, laterally flat
-    🐠 Angelfish  │ Pomacanthidae      │ 0.15-0.45m │ Disc, flowing fins
-    🐡 Puffer     │ Tetraodontidae     │ 0.1-0.6m   │ Boxy, inflatable
-    🗡️ Marlin     │ Istiophoridae      │ 1.5-4.0m   │ Bill, sail dorsal
-    🫓 Flounder   │ Pleuronectiformes  │ 0.25-2.0m  │ Flat, bottom-dweller
+    Cartilaginous:
+      🦈 Shark, 🔨 Hammerhead, 🦅 Ray, 🦅 Manta
+    
+    Elongated:
+      🐍 Eel, 🐍 Moray, 🐟 Barracuda
+    
+    Pelagic:
+      🐟 Tuna, 🗡️ Marlin, ✈️ Flying Fish
+    
+    Reef:
+      🐟 Grouper, 🐠 Tang, 🐠 Angelfish, 🦁 Lionfish,
+      👑 Betta, 🐡 Puffer, 😈 Piranha, 🐴 Seahorse
+    
+    Deep Sea:
+      🔦 Anglerfish
+    
+    Unusual:
+      🌞 Sunfish
+    
+    Benthic:
+      🫓 Flounder, 🐱 Catfish
+
+  🐬 MARINE MAMMALS (13 species):
+  
+    Large Whales:
+      🐋 Blue Whale (20-30m), 🐋 Humpback (12-16m), 🐋 Sperm Whale
+    
+    Small Whales:
+      🐳 Beluga, 🦄 Narwhal, 🐋 Pilot Whale
+    
+    Dolphins:
+      🐬 Dolphin, 🐬 Orca
+    
+    Pinnipeds:
+      🦭 Seal, 🦭 Sea Lion, 🦭 Walrus
+    
+    Other:
+      🦦 Sea Otter, 🐘 Manatee
 
 ═══════════════════════════════════════════════════════════════
 `)

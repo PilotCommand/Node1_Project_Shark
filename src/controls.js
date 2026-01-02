@@ -1,8 +1,21 @@
 import * as THREE from 'three'
 import { getPlayer } from './player.js'
 import { getYaw, getPitch, getCameraMode } from './camera.js'
-import { regeneratePlayerFish, getCurrentSeed, getCurrentClass, cyclePlayerClass } from './player.js'
-import { seedToString, FishClass } from './Fishes.js'
+import { 
+  regeneratePlayerCreature, 
+  getCurrentSeed, 
+  getCurrentType,
+  getCurrentClass, 
+  cyclePlayerClass,
+  cyclePreviousClass,
+  getCurrentIndex,
+  getCreatureCatalog,
+} from './player.js'
+import { 
+  seedToString, 
+  getCreatureDisplayName, 
+  getCreatureShortName,
+} from './Encyclopedia.js'
 
 const keys = {
   w: false,
@@ -15,38 +28,6 @@ const keys = {
 
 const moveSpeed = 10
 
-// Biological class display names
-const CLASS_DISPLAY_NAMES = {
-  [FishClass.SHARK]: '🦈 Shark (Selachimorpha)',
-  [FishClass.RAY]: '🦅 Ray (Batoidea)',
-  [FishClass.EEL]: '🐍 Eel (Anguilliformes)',
-  [FishClass.GROUPER]: '🐟 Grouper (Serranidae)',
-  [FishClass.TUNA]: '🐟 Tuna (Scombridae)',
-  [FishClass.BARRACUDA]: '🐟 Barracuda (Sphyraenidae)',
-  [FishClass.TANG]: '🐠 Tang (Acanthuridae)',
-  [FishClass.ANGELFISH]: '🐠 Angelfish (Pomacanthidae)',
-  [FishClass.PUFFER]: '🐡 Puffer (Tetraodontidae)',
-  [FishClass.MARLIN]: '🗡️ Marlin (Istiophoridae)',
-  [FishClass.FLOUNDER]: '🫓 Flounder (Pleuronectiformes)',
-  [FishClass.STARTER]: '⭐ Starter',
-}
-
-// Short names for HUD
-const CLASS_SHORT_NAMES = {
-  [FishClass.SHARK]: 'Shark',
-  [FishClass.RAY]: 'Ray',
-  [FishClass.EEL]: 'Eel',
-  [FishClass.GROUPER]: 'Grouper',
-  [FishClass.TUNA]: 'Tuna',
-  [FishClass.BARRACUDA]: 'Barracuda',
-  [FishClass.TANG]: 'Tang',
-  [FishClass.ANGELFISH]: 'Angelfish',
-  [FishClass.PUFFER]: 'Puffer',
-  [FishClass.MARLIN]: 'Marlin',
-  [FishClass.FLOUNDER]: 'Flounder',
-  [FishClass.STARTER]: 'Starter',
-}
-
 export function initControls() {
   window.addEventListener('keydown', (e) => {
     switch(e.code) {
@@ -58,32 +39,51 @@ export function initControls() {
       case 'ShiftLeft': 
       case 'ShiftRight': keys.shift = true; break
       
-      // M = Mutate fish (new random in same class)
+      // M = Mutate creature (new random of same type/class)
       case 'KeyM':
-        const result = regeneratePlayerFish()
+        const result = regeneratePlayerCreature()
         if (result) {
           const size = result.traits?.length?.toFixed(1) || '?'
+          const shortName = getCreatureShortName(result.creatureType, result.creatureClass)
           showNotification(
-            `${CLASS_SHORT_NAMES[result.fishClass]} | ${size}m | ${seedToString(result.seed)}`,
+            `${shortName} | ${size}m | ${seedToString(result.seed)}`,
             '#00ff88'
           )
         }
         break
       
-      // N = Next class
+      // N = Next class (cycle forward through ALL creatures)
       case 'KeyN':
-        const newClass = cyclePlayerClass()
-        if (newClass) {
-          showNotification(CLASS_DISPLAY_NAMES[newClass.fishClass], '#ffaa00')
+        const next = cyclePlayerClass()
+        if (next) {
+          const displayName = getCreatureDisplayName(next.creatureType, next.creatureClass)
+          const index = getCurrentIndex()
+          const total = getCreatureCatalog().length
+          showNotification(`${displayName} [${index + 1}/${total}]`, '#ffaa00')
+        }
+        break
+      
+      // B = Back/Previous class (cycle backward)
+      case 'KeyB':
+        const prev = cyclePreviousClass()
+        if (prev) {
+          const displayName = getCreatureDisplayName(prev.creatureType, prev.creatureClass)
+          const index = getCurrentIndex()
+          const total = getCreatureCatalog().length
+          showNotification(`${displayName} [${index + 1}/${total}]`, '#ffaa00')
         }
         break
       
       // P = Print current info to console
       case 'KeyP':
         const currentSeed = getCurrentSeed()
+        const currentType = getCurrentType()
         const currentClass = getCurrentClass()
         if (currentSeed !== null) {
-          const info = `${CLASS_DISPLAY_NAMES[currentClass]} | Seed: ${seedToString(currentSeed)}`
+          const displayName = getCreatureDisplayName(currentType, currentClass)
+          const index = getCurrentIndex()
+          const total = getCreatureCatalog().length
+          const info = `${displayName} [${index + 1}/${total}] | Seed: ${seedToString(currentSeed)}`
           console.log(info)
           showNotification(info, '#88aaff')
         }
@@ -105,11 +105,11 @@ export function initControls() {
 }
 
 function showNotification(message, color = '#00ff88') {
-  const existing = document.getElementById('fish-notification')
+  const existing = document.getElementById('creature-notification')
   if (existing) existing.remove()
   
   const notification = document.createElement('div')
-  notification.id = 'fish-notification'
+  notification.id = 'creature-notification'
   notification.style.cssText = `
     position: fixed;
     top: 20px;
