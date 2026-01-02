@@ -1,19 +1,51 @@
 import * as THREE from 'three'
 import { getPlayer } from './player.js'
 import { getYaw, getPitch, getCameraMode } from './camera.js'
-import { regeneratePlayerFish, getCurrentSeed } from './player.js'
-import { seedToString } from './Fishes.js'
+import { regeneratePlayerFish, getCurrentSeed, getCurrentClass, cyclePlayerClass } from './player.js'
+import { seedToString, FishClass } from './Fishes.js'
 
 const keys = {
   w: false,
   a: false,
   s: false,
   d: false,
-  space: false,    // Up
-  shift: false     // Down
+  space: false,
+  shift: false
 }
 
-const moveSpeed = 10 // Units per second
+const moveSpeed = 10
+
+// Biological class display names
+const CLASS_DISPLAY_NAMES = {
+  [FishClass.SHARK]: '🦈 Shark (Selachimorpha)',
+  [FishClass.RAY]: '🦅 Ray (Batoidea)',
+  [FishClass.EEL]: '🐍 Eel (Anguilliformes)',
+  [FishClass.GROUPER]: '🐟 Grouper (Serranidae)',
+  [FishClass.TUNA]: '🐟 Tuna (Scombridae)',
+  [FishClass.BARRACUDA]: '🐟 Barracuda (Sphyraenidae)',
+  [FishClass.TANG]: '🐠 Tang (Acanthuridae)',
+  [FishClass.ANGELFISH]: '🐠 Angelfish (Pomacanthidae)',
+  [FishClass.PUFFER]: '🐡 Puffer (Tetraodontidae)',
+  [FishClass.MARLIN]: '🗡️ Marlin (Istiophoridae)',
+  [FishClass.FLOUNDER]: '🫓 Flounder (Pleuronectiformes)',
+  [FishClass.STARTER]: '⭐ Starter',
+}
+
+// Short names for HUD
+const CLASS_SHORT_NAMES = {
+  [FishClass.SHARK]: 'Shark',
+  [FishClass.RAY]: 'Ray',
+  [FishClass.EEL]: 'Eel',
+  [FishClass.GROUPER]: 'Grouper',
+  [FishClass.TUNA]: 'Tuna',
+  [FishClass.BARRACUDA]: 'Barracuda',
+  [FishClass.TANG]: 'Tang',
+  [FishClass.ANGELFISH]: 'Angelfish',
+  [FishClass.PUFFER]: 'Puffer',
+  [FishClass.MARLIN]: 'Marlin',
+  [FishClass.FLOUNDER]: 'Flounder',
+  [FishClass.STARTER]: 'Starter',
+}
 
 export function initControls() {
   window.addEventListener('keydown', (e) => {
@@ -26,19 +58,34 @@ export function initControls() {
       case 'ShiftLeft': 
       case 'ShiftRight': keys.shift = true; break
       
-      // M = Mutate fish
+      // M = Mutate fish (new random in same class)
       case 'KeyM':
-        const newSeed = regeneratePlayerFish()
-        if (newSeed !== null) {
-          showSeedNotification(newSeed)
+        const result = regeneratePlayerFish()
+        if (result) {
+          const size = result.traits?.length?.toFixed(1) || '?'
+          showNotification(
+            `${CLASS_SHORT_NAMES[result.fishClass]} | ${size}m | ${seedToString(result.seed)}`,
+            '#00ff88'
+          )
         }
         break
       
-      // P = Print current seed to console
+      // N = Next class
+      case 'KeyN':
+        const newClass = cyclePlayerClass()
+        if (newClass) {
+          showNotification(CLASS_DISPLAY_NAMES[newClass.fishClass], '#ffaa00')
+        }
+        break
+      
+      // P = Print current info to console
       case 'KeyP':
         const currentSeed = getCurrentSeed()
+        const currentClass = getCurrentClass()
         if (currentSeed !== null) {
-          console.log(`Current fish seed: ${seedToString(currentSeed)} (${currentSeed})`)
+          const info = `${CLASS_DISPLAY_NAMES[currentClass]} | Seed: ${seedToString(currentSeed)}`
+          console.log(info)
+          showNotification(info, '#88aaff')
         }
         break
     }
@@ -57,40 +104,36 @@ export function initControls() {
   })
 }
 
-/**
- * Show temporary notification with new seed
- */
-function showSeedNotification(seed) {
-  // Remove existing notification if any
-  const existing = document.getElementById('seed-notification')
+function showNotification(message, color = '#00ff88') {
+  const existing = document.getElementById('fish-notification')
   if (existing) existing.remove()
   
-  // Create notification element
   const notification = document.createElement('div')
-  notification.id = 'seed-notification'
+  notification.id = 'fish-notification'
   notification.style.cssText = `
     position: fixed;
     top: 20px;
     left: 50%;
     transform: translateX(-50%);
-    background: rgba(0, 0, 0, 0.8);
-    color: #00ff88;
+    background: rgba(0, 0, 0, 0.85);
+    color: ${color};
     padding: 12px 24px;
     border-radius: 8px;
     font-family: monospace;
-    font-size: 16px;
+    font-size: 14px;
     z-index: 1000;
     transition: opacity 0.3s;
+    border: 1px solid ${color}44;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
   `
-  notification.textContent = `New Fish: ${seedToString(seed)}`
+  notification.textContent = message
   
   document.body.appendChild(notification)
   
-  // Fade out and remove
   setTimeout(() => {
     notification.style.opacity = '0'
     setTimeout(() => notification.remove(), 300)
-  }, 2000)
+  }, 2500)
 }
 
 export function updateMovement(delta) {
@@ -100,24 +143,19 @@ export function updateMovement(delta) {
   const yaw = getYaw()
   const pitch = getPitch()
   
-  // Calculate forward direction based on camera yaw AND pitch (true 3D movement)
   const forward = new THREE.Vector3(
     -Math.sin(yaw) * Math.cos(pitch),
     Math.sin(pitch),
     -Math.cos(yaw) * Math.cos(pitch)
   )
   
-  // Right vector (always horizontal)
   const right = new THREE.Vector3(
     Math.cos(yaw),
     0,
     -Math.sin(yaw)
   )
   
-  // Up vector (world up)
   const up = new THREE.Vector3(0, 1, 0)
-  
-  // Calculate movement
   const velocity = new THREE.Vector3()
   
   if (keys.w) velocity.add(forward)
@@ -127,30 +165,23 @@ export function updateMovement(delta) {
   if (keys.space) velocity.add(up)
   if (keys.shift) velocity.sub(up)
   
-  // Normalize so diagonal movement isn't faster
   if (velocity.length() > 0) {
     velocity.normalize()
     
-    // In orbit mode, rotate fish to face movement direction
     if (getCameraMode() === 'orbit') {
       const targetYaw = Math.atan2(-velocity.x, -velocity.z)
       const targetPitch = Math.asin(velocity.y)
       
-      // Smooth rotation
       const rotationSpeed = 10 * delta
       
-      // Lerp yaw
       let yawDiff = targetYaw - player.rotation.y
-      // Handle wrap-around
       while (yawDiff > Math.PI) yawDiff -= Math.PI * 2
       while (yawDiff < -Math.PI) yawDiff += Math.PI * 2
       player.rotation.y += yawDiff * rotationSpeed
       
-      // Lerp pitch (rotation on X axis)
       player.rotation.x += (targetPitch - player.rotation.x) * rotationSpeed
     }
   }
   
-  // Apply movement scaled by delta time and speed
   player.position.add(velocity.multiplyScalar(moveSpeed * delta))
 }

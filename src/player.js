@@ -1,32 +1,45 @@
 import * as THREE from 'three'
-import { generateFish, generateStarterFish, randomSeed, seedToString } from './Fishes.js'
+import { generateFish, generateStarterFish, randomSeed, seedToString, FishClass } from './Fishes.js'
 import { MeshRegistry, Category, Tag } from './MeshRegistry.js'
 
-// Current fish data
 let currentFish = null
 let fishParts = null
+let currentClass = FishClass.STARTER
 
-// Reference to scene (set during init)
+// Class cycle order - biologically organized
+const CLASS_ORDER = [
+  FishClass.STARTER,
+  // Cartilaginous
+  FishClass.SHARK,
+  FishClass.RAY,
+  // Elongated
+  FishClass.EEL,
+  FishClass.BARRACUDA,
+  // Pelagic
+  FishClass.TUNA,
+  FishClass.MARLIN,
+  // Reef - large
+  FishClass.GROUPER,
+  // Reef - small
+  FishClass.TANG,
+  FishClass.ANGELFISH,
+  FishClass.PUFFER,
+  // Benthic
+  FishClass.FLOUNDER,
+]
+
 let sceneRef = null
 
-/**
- * Initialize player with starter fish
- * @param {THREE.Scene} scene - The scene to add player to
- */
 export function initPlayer(scene) {
   sceneRef = scene
   
-  // Create starter fish
   currentFish = generateStarterFish()
+  currentClass = FishClass.STARTER
   fishParts = currentFish.parts
   
-  // Starting position
   currentFish.mesh.position.set(0, 0, 0)
-  
-  // Add to scene
   scene.add(currentFish.mesh)
   
-  // Register with MeshRegistry
   MeshRegistry.register('player', {
     mesh: currentFish.mesh,
     body: null,
@@ -36,33 +49,29 @@ export function initPlayer(scene) {
       health: 100,
       speed: 10,
       seed: currentFish.seed,
+      fishClass: currentFish.fishClass,
+      traits: currentFish.traits,
       parts: fishParts
     }
   }, true)
   
-  console.log(`Player fish created with seed: ${seedToString(currentFish.seed)}`)
+  const size = currentFish.traits.length?.toFixed(1) || '1.5'
+  console.log(`Player: ${currentFish.fishClass} | ${size}m | Seed: ${seedToString(currentFish.seed)}`)
   
   return currentFish.mesh
 }
 
-/**
- * Regenerate player fish with a new random design
- * @returns {number} The new seed
- */
-export function regeneratePlayerFish() {
+function swapFish(newFishData) {
   if (!sceneRef || !currentFish) {
     console.warn('Player not initialized')
     return null
   }
   
-  // Store current position and rotation
   const position = currentFish.mesh.position.clone()
   const rotation = currentFish.mesh.rotation.clone()
   
-  // Remove old fish from scene
   sceneRef.remove(currentFish.mesh)
   
-  // Dispose old mesh
   currentFish.mesh.traverse(child => {
     if (child.geometry) child.geometry.dispose()
     if (child.material) {
@@ -74,22 +83,17 @@ export function regeneratePlayerFish() {
     }
   })
   
-  // Unregister old fish
   MeshRegistry.unregister('player')
   
-  // Generate new fish with random seed
-  const newSeed = randomSeed()
-  currentFish = generateFish(newSeed)
-  fishParts = currentFish.parts
+  currentFish = newFishData
+  currentClass = newFishData.fishClass
+  fishParts = newFishData.parts
   
-  // Restore position and rotation
   currentFish.mesh.position.copy(position)
   currentFish.mesh.rotation.copy(rotation)
   
-  // Add to scene
   sceneRef.add(currentFish.mesh)
   
-  // Re-register with MeshRegistry
   MeshRegistry.register('player', {
     mesh: currentFish.mesh,
     body: null,
@@ -99,95 +103,106 @@ export function regeneratePlayerFish() {
       health: 100,
       speed: 10,
       seed: currentFish.seed,
+      fishClass: currentFish.fishClass,
+      traits: currentFish.traits,
       parts: fishParts
     }
   }, true)
   
-  console.log(`New fish generated! Seed: ${seedToString(newSeed)}`)
-  
-  return newSeed
+  return {
+    seed: currentFish.seed,
+    fishClass: currentFish.fishClass,
+    traits: currentFish.traits
+  }
 }
 
-/**
- * Set player fish to a specific seed
- * @param {number} seed
- */
-export function setPlayerFishSeed(seed) {
-  if (!sceneRef || !currentFish) {
-    console.warn('Player not initialized')
-    return
+export function regeneratePlayerFish() {
+  const newSeed = randomSeed()
+  
+  let newFishData
+  if (currentClass === FishClass.STARTER) {
+    newFishData = generateFish(newSeed, FishClass.TANG)
+    currentClass = FishClass.TANG
+  } else {
+    newFishData = generateFish(newSeed, currentClass)
   }
   
-  // Store current position and rotation
-  const position = currentFish.mesh.position.clone()
-  const rotation = currentFish.mesh.rotation.clone()
+  const result = swapFish(newFishData)
   
-  // Remove old fish
-  sceneRef.remove(currentFish.mesh)
-  currentFish.mesh.traverse(child => {
-    if (child.geometry) child.geometry.dispose()
-    if (child.material) {
-      if (Array.isArray(child.material)) {
-        child.material.forEach(m => m.dispose())
-      } else {
-        child.material.dispose()
-      }
-    }
-  })
-  MeshRegistry.unregister('player')
+  if (result) {
+    const size = result.traits?.length?.toFixed(1) || '?'
+    console.log(`New ${result.fishClass}: ${size}m | Seed: ${seedToString(result.seed)}`)
+  }
   
-  // Generate fish from seed
-  currentFish = generateFish(seed)
-  fishParts = currentFish.parts
-  
-  // Restore position and rotation
-  currentFish.mesh.position.copy(position)
-  currentFish.mesh.rotation.copy(rotation)
-  
-  // Add to scene and register
-  sceneRef.add(currentFish.mesh)
-  MeshRegistry.register('player', {
-    mesh: currentFish.mesh,
-    body: null,
-    category: Category.PLAYER,
-    tags: [Tag.COLLIDABLE, Tag.ANIMATED],
-    metadata: {
-      health: 100,
-      speed: 10,
-      seed: currentFish.seed,
-      parts: fishParts
-    }
-  }, true)
-  
-  console.log(`Fish set to seed: ${seedToString(seed)}`)
+  return result
 }
 
-/**
- * Get current player mesh
- */
+export function cyclePlayerClass() {
+  const currentIndex = CLASS_ORDER.indexOf(currentClass)
+  const nextIndex = (currentIndex + 1) % CLASS_ORDER.length
+  const nextClass = CLASS_ORDER[nextIndex]
+  
+  const newSeed = randomSeed()
+  
+  let newFishData
+  if (nextClass === FishClass.STARTER) {
+    newFishData = generateStarterFish()
+  } else {
+    newFishData = generateFish(newSeed, nextClass)
+  }
+  
+  const result = swapFish(newFishData)
+  
+  if (result) {
+    const size = result.traits?.length?.toFixed(1) || '?'
+    console.log(`Switched to ${result.fishClass}: ${size}m | Seed: ${seedToString(result.seed)}`)
+  }
+  
+  return result
+}
+
+export function setPlayerFish(seed, fishClass = null) {
+  const targetClass = fishClass || currentClass
+  
+  let newFishData
+  if (targetClass === FishClass.STARTER) {
+    newFishData = generateStarterFish()
+  } else {
+    newFishData = generateFish(seed, targetClass)
+  }
+  
+  const result = swapFish(newFishData)
+  
+  if (result) {
+    console.log(`Fish set: ${result.fishClass} | Seed: ${seedToString(result.seed)}`)
+  }
+  
+  return result
+}
+
 export function getPlayer() {
   return currentFish?.mesh
 }
 
-/**
- * Get current fish parts (for animation/visibility)
- */
 export function getFishParts() {
   return fishParts
 }
 
-/**
- * Get current fish seed
- */
 export function getCurrentSeed() {
   return currentFish?.seed
 }
 
-// For backwards compatibility - will be set after initPlayer
+export function getCurrentClass() {
+  return currentClass
+}
+
+export function getCurrentFish() {
+  return currentFish
+}
+
 export let player = null
 export { fishParts }
 
-// Update exports after init
 export function _updateExports() {
   player = currentFish?.mesh
 }
