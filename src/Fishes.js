@@ -8,6 +8,10 @@
  *   180° = ventral (bottom)
  * 
  * Position along body: 0 = snout, 1 = tail base
+ * fin.pos = where fin's FRONT EDGE starts (not center)
+ * 
+ * All meshes must share at least one face/edge with another mesh.
+ * 
  * 1 unit = 1 meter
  * Max 10 meshes per fish
  */
@@ -40,7 +44,6 @@ function chance(rng, probability) {
 }
 
 // Convert degrees to position around body
-// 0° = top, 90° = right, 180° = bottom, -90° = left
 function degToOffset(deg, radiusX, radiusY) {
   const rad = (deg * Math.PI) / 180
   return {
@@ -69,9 +72,9 @@ export const FishClass = {
 }
 
 /**
- * Anatomically accurate class definitions
- * All fin positions use degrees around body (0° = top)
- * All sizes as ratios of body length
+ * Class definitions
+ * All fin.pos values indicate where the fin's FRONT EDGE starts (0-1)
+ * Body segments must have consecutive start/end values (no gaps)
  */
 const CLASS_DEFINITIONS = {
   
@@ -119,16 +122,15 @@ const CLASS_DEFINITIONS = {
   },
   
   // ═══════════════════════════════════════════════════════════════════════════
-  // RAY (Batoidea) - 6 meshes
-  // 2 body + 2 wings + 1 tail + 1 (small pelvic area)
+  // RAY - 5 meshes: 2 body + 2 wings + 1 tail
   // ═══════════════════════════════════════════════════════════════════════════
   [FishClass.RAY]: {
     name: 'Ray',
-    length: { min: 1.5, max: 5.5 },  // Wingspan
+    length: { min: 1.5, max: 5.5 },
     
     bodyRatios: {
-      height: { min: 0.05, max: 0.08 },  // Very flat
-      width: { min: 0.40, max: 0.50 },   // Central disc (wings add more)
+      height: { min: 0.05, max: 0.08 },
+      width: { min: 0.40, max: 0.50 },
     },
     
     palettes: [
@@ -138,25 +140,24 @@ const CLASS_DEFINITIONS = {
     ],
     
     body: [
-      { start: 0.00, end: 0.50, hMult: 1.00, wMult: 1.00 },  // Front disc
-      { start: 0.50, end: 1.00, hMult: 0.70, wMult: 0.60 },  // Rear disc
+      { start: 0.00, end: 0.50, hMult: 1.00, wMult: 1.00 },
+      { start: 0.50, end: 1.00, hMult: 0.70, wMult: 0.60 },
     ],
     
-    // Wings at 90° and -90° (sides)
     fins: [
-      { name: 'wingR', deg: 90,  pos: 0.40, size: [0.40, 0.04, 0.45], isWing: true },
-      { name: 'wingL', deg: -90, pos: 0.40, size: [0.40, 0.04, 0.45], isWing: true },
+      { name: 'wingR', deg: 90,  pos: 0.15, size: [0.55, 0.04, 0.45], isWing: true },
+      { name: 'wingL', deg: -90, pos: 0.15, size: [0.55, 0.04, 0.45], isWing: true },
     ],
     
     tail: {
       type: 'whip',
-      size: [1.20, 0.02, 0.02],  // Very long thin whip
+      size: [1.20, 0.02, 0.02],
     },
   },
   
   // ═══════════════════════════════════════════════════════════════════════════
-  // EEL (Anguilliformes) - 8 meshes
-  // 6 body segments + 1 dorsal ribbon + 1 tail
+  // EEL - 8 meshes: 6 body + 1 dorsal ribbon + 1 tail
+  // Dorsal starts at body segment 2 (where body thickens)
   // ═══════════════════════════════════════════════════════════════════════════
   [FishClass.EEL]: {
     name: 'Eel',
@@ -182,8 +183,9 @@ const CLASS_DEFINITIONS = {
       { start: 0.82, end: 1.00, hMult: 0.60, wMult: 0.60 },
     ],
     
+    // Dorsal starts at 0.28 (where second body segment starts - full thickness)
     fins: [
-      { name: 'dorsalRibbon', deg: 0, pos: 0.25, size: [0.65, 0.04, 0.005], ribbon: true },
+      { name: 'dorsalRibbon', deg: 0, pos: 0.28, size: [0.55, 0.04, 0.005], ribbon: true },
     ],
     
     tail: {
@@ -193,8 +195,7 @@ const CLASS_DEFINITIONS = {
   },
   
   // ═══════════════════════════════════════════════════════════════════════════
-  // GROUPER (Serranidae) - 9 meshes
-  // 3 body + 1 dorsal + 2 pectorals + 1 anal + 1 tail + 1 pelvic
+  // GROUPER - 9 meshes: 3 body + 4 fins + 1 anal + 1 tail
   // ═══════════════════════════════════════════════════════════════════════════
   [FishClass.GROUPER]: {
     name: 'Grouper',
@@ -217,12 +218,12 @@ const CLASS_DEFINITIONS = {
       { start: 0.75, end: 1.00, hMult: 0.55, wMult: 0.50 },
     ],
     
+    // Dorsal starts where main body starts (0.30)
     fins: [
-      { name: 'dorsal',    deg: 0,    pos: 0.30, size: [0.45, 0.18, 0.02] },
-      { name: 'pectoralR', deg: 120,  pos: 0.35, size: [0.16, 0.02, 0.10] },
-      { name: 'pectoralL', deg: -120, pos: 0.35, size: [0.16, 0.02, 0.10] },
-      { name: 'pelvic',    deg: 180,  pos: 0.38, size: [0.10, 0.08, 0.04] },
-      { name: 'anal',      deg: 180,  pos: 0.62, size: [0.18, 0.12, 0.015] },
+      { name: 'dorsal',    deg: 0,    pos: 0.30, size: [0.40, 0.18, 0.02] },
+      { name: 'pectoralR', deg: 120,  pos: 0.32, size: [0.14, 0.02, 0.10] },
+      { name: 'pectoralL', deg: -120, pos: 0.32, size: [0.14, 0.02, 0.10] },
+      { name: 'anal',      deg: 180,  pos: 0.55, size: [0.16, 0.12, 0.015] },
     ],
     
     tail: {
@@ -232,8 +233,7 @@ const CLASS_DEFINITIONS = {
   },
   
   // ═══════════════════════════════════════════════════════════════════════════
-  // TUNA (Scombridae) - 10 meshes
-  // 4 body + 1 dorsal + 2 pectorals + 1 anal + 1 tail + 1 finlets
+  // TUNA - 9 meshes: 4 body + 3 fins + 1 finlets + 1 tail
   // ═══════════════════════════════════════════════════════════════════════════
   [FishClass.TUNA]: {
     name: 'Tuna',
@@ -251,29 +251,28 @@ const CLASS_DEFINITIONS = {
     ],
     
     body: [
-      { start: 0.00, end: 0.20, hMult: 0.60, wMult: 0.50 },   // Pointed head
-      { start: 0.20, end: 0.55, hMult: 1.00, wMult: 1.00 },   // Thick body
-      { start: 0.55, end: 0.80, hMult: 0.50, wMult: 0.45 },   // Tapers
-      { start: 0.80, end: 1.00, hMult: 0.12, wMult: 0.10 },   // Very narrow peduncle
+      { start: 0.00, end: 0.20, hMult: 0.60, wMult: 0.50 },
+      { start: 0.20, end: 0.55, hMult: 1.00, wMult: 1.00 },
+      { start: 0.55, end: 0.80, hMult: 0.50, wMult: 0.45 },
+      { start: 0.80, end: 1.00, hMult: 0.12, wMult: 0.10 },
     ],
     
+    // Dorsal starts where thick body starts (0.20)
     fins: [
-      { name: 'dorsal',    deg: 0,    pos: 0.30, size: [0.12, 0.14, 0.015] },
-      { name: 'pectoralR', deg: 110,  pos: 0.25, size: [0.28, 0.015, 0.05] },  // Long sickle
-      { name: 'pectoralL', deg: -110, pos: 0.25, size: [0.28, 0.015, 0.05] },
-      { name: 'anal',      deg: 180,  pos: 0.58, size: [0.08, 0.06, 0.01] },
-      { name: 'finlets',   deg: 0,    pos: 0.72, size: [0.15, 0.03, 0.01] },   // Dorsal finlets
+      { name: 'dorsal',    deg: 0,    pos: 0.22, size: [0.12, 0.14, 0.015] },
+      { name: 'pectoralR', deg: 110,  pos: 0.20, size: [0.25, 0.015, 0.05] },
+      { name: 'pectoralL', deg: -110, pos: 0.20, size: [0.25, 0.015, 0.05] },
+      { name: 'finlets',   deg: 0,    pos: 0.65, size: [0.12, 0.03, 0.01] },
     ],
     
     tail: {
       type: 'lunate',
-      size: [0.18, 0.30, 0.02],  // Powerful crescent
+      size: [0.18, 0.30, 0.02],
     },
   },
   
   // ═══════════════════════════════════════════════════════════════════════════
-  // BARRACUDA (Sphyraenidae) - 9 meshes
-  // 3 body + 2 dorsals + 2 pectorals + 2 tail lobes
+  // BARRACUDA - 8 meshes: 3 body + 4 fins + 1 tail (forked counts as 1)
   // ═══════════════════════════════════════════════════════════════════════════
   [FishClass.BARRACUDA]: {
     name: 'Barracuda',
@@ -290,16 +289,16 @@ const CLASS_DEFINITIONS = {
     ],
     
     body: [
-      { start: 0.00, end: 0.28, hMult: 0.70, wMult: 0.65 },   // Long pike-like head
-      { start: 0.28, end: 0.72, hMult: 1.00, wMult: 1.00 },   // Cylindrical body
-      { start: 0.72, end: 1.00, hMult: 0.50, wMult: 0.45 },   // Peduncle
+      { start: 0.00, end: 0.28, hMult: 0.70, wMult: 0.65 },
+      { start: 0.28, end: 0.72, hMult: 1.00, wMult: 1.00 },
+      { start: 0.72, end: 1.00, hMult: 0.50, wMult: 0.45 },
     ],
     
     fins: [
-      { name: 'dorsal1',   deg: 0,    pos: 0.38, size: [0.08, 0.10, 0.012] },  // First dorsal
-      { name: 'dorsal2',   deg: 0,    pos: 0.75, size: [0.08, 0.08, 0.012] },  // Second dorsal
-      { name: 'pectoralR', deg: 120,  pos: 0.32, size: [0.10, 0.012, 0.04] },
-      { name: 'pectoralL', deg: -120, pos: 0.32, size: [0.10, 0.012, 0.04] },
+      { name: 'dorsal1',   deg: 0,    pos: 0.35, size: [0.08, 0.10, 0.012] },
+      { name: 'dorsal2',   deg: 0,    pos: 0.72, size: [0.08, 0.08, 0.012] },
+      { name: 'pectoralR', deg: 120,  pos: 0.30, size: [0.10, 0.012, 0.04] },
+      { name: 'pectoralL', deg: -120, pos: 0.30, size: [0.10, 0.012, 0.04] },
     ],
     
     tail: {
@@ -310,16 +309,16 @@ const CLASS_DEFINITIONS = {
   },
   
   // ═══════════════════════════════════════════════════════════════════════════
-  // TANG (Acanthuridae) - 9 meshes
-  // 3 body + 1 dorsal + 2 pectorals + 1 anal + 1 tail + 1 pelvic
+  // TANG - 8 meshes: 3 body + 4 fins + 1 tail
+  // Dorsal starts where main body starts (at thickest point)
   // ═══════════════════════════════════════════════════════════════════════════
   [FishClass.TANG]: {
     name: 'Tang',
     length: { min: 0.12, max: 0.40 },
     
     bodyRatios: {
-      height: { min: 0.55, max: 0.70 },  // Taller than long!
-      width: { min: 0.12, max: 0.18 },   // Compressed
+      height: { min: 0.55, max: 0.70 },
+      width: { min: 0.12, max: 0.18 },
     },
     
     palettes: [
@@ -334,12 +333,12 @@ const CLASS_DEFINITIONS = {
       { start: 0.80, end: 1.00, hMult: 0.45, wMult: 0.55 },
     ],
     
+    // Dorsal starts at 0.25 (main body) and runs to peduncle
     fins: [
-      { name: 'dorsal',    deg: 0,    pos: 0.20, size: [0.55, 0.25, 0.01] },
-      { name: 'pectoralR', deg: 110,  pos: 0.35, size: [0.15, 0.01, 0.07] },
-      { name: 'pectoralL', deg: -110, pos: 0.35, size: [0.15, 0.01, 0.07] },
-      { name: 'pelvic',    deg: 160,  pos: 0.38, size: [0.10, 0.008, 0.04] },
-      { name: 'anal',      deg: 180,  pos: 0.40, size: [0.38, 0.18, 0.01] },
+      { name: 'dorsal',    deg: 0,    pos: 0.25, size: [0.50, 0.25, 0.01] },
+      { name: 'pectoralR', deg: 110,  pos: 0.30, size: [0.15, 0.01, 0.07] },
+      { name: 'pectoralL', deg: -110, pos: 0.30, size: [0.15, 0.01, 0.07] },
+      { name: 'anal',      deg: 180,  pos: 0.35, size: [0.35, 0.18, 0.01] },
     ],
     
     tail: {
@@ -349,16 +348,16 @@ const CLASS_DEFINITIONS = {
   },
   
   // ═══════════════════════════════════════════════════════════════════════════
-  // ANGELFISH (Pomacanthidae) - 9 meshes
-  // 3 body + 1 dorsal + 2 pectorals + 1 anal + 1 tail + 1 pelvic
+  // ANGELFISH - 8 meshes: 3 body + 4 fins + 1 tail
+  // Long dorsal/anal start where body thickens
   // ═══════════════════════════════════════════════════════════════════════════
   [FishClass.ANGELFISH]: {
     name: 'Angelfish',
     length: { min: 0.15, max: 0.45 },
     
     bodyRatios: {
-      height: { min: 0.80, max: 1.00 },  // Nearly circular!
-      width: { min: 0.10, max: 0.15 },   // Paper thin
+      height: { min: 0.80, max: 1.00 },
+      width: { min: 0.10, max: 0.15 },
     },
     
     palettes: [
@@ -373,12 +372,12 @@ const CLASS_DEFINITIONS = {
       { start: 0.85, end: 1.00, hMult: 0.40, wMult: 0.45 },
     ],
     
+    // Dorsal starts at 0.25 (into main body, not head)
     fins: [
-      { name: 'dorsal',    deg: 0,    pos: 0.18, size: [0.60, 0.50, 0.008] },  // Tall flowing
-      { name: 'pectoralR', deg: 100,  pos: 0.32, size: [0.18, 0.008, 0.09] },
-      { name: 'pectoralL', deg: -100, pos: 0.32, size: [0.18, 0.008, 0.09] },
-      { name: 'pelvic',    deg: 150,  pos: 0.35, size: [0.22, 0.006, 0.02] },  // Long filaments
-      { name: 'anal',      deg: 180,  pos: 0.38, size: [0.50, 0.40, 0.008] },  // Tall anal fin
+      { name: 'dorsal',    deg: 0,    pos: 0.25, size: [0.50, 0.50, 0.008] },
+      { name: 'pectoralR', deg: 100,  pos: 0.28, size: [0.16, 0.008, 0.09] },
+      { name: 'pectoralL', deg: -100, pos: 0.28, size: [0.16, 0.008, 0.09] },
+      { name: 'anal',      deg: 180,  pos: 0.35, size: [0.42, 0.40, 0.008] },
     ],
     
     tail: {
@@ -388,8 +387,7 @@ const CLASS_DEFINITIONS = {
   },
   
   // ═══════════════════════════════════════════════════════════════════════════
-  // PUFFER (Tetraodontidae) - 7 meshes
-  // 3 body + 1 dorsal + 2 pectorals + 1 tail
+  // PUFFER - 6 meshes: 3 body + 2 pectorals + 1 tail
   // ═══════════════════════════════════════════════════════════════════════════
   [FishClass.PUFFER]: {
     name: 'Puffer',
@@ -397,7 +395,7 @@ const CLASS_DEFINITIONS = {
     
     bodyRatios: {
       height: { min: 0.50, max: 0.70 },
-      width: { min: 0.45, max: 0.60 },  // Almost spherical
+      width: { min: 0.45, max: 0.60 },
     },
     
     palettes: [
@@ -407,15 +405,14 @@ const CLASS_DEFINITIONS = {
     ],
     
     body: [
-      { start: 0.00, end: 0.30, hMult: 0.85, wMult: 0.85 },  // Blunt head
-      { start: 0.30, end: 0.80, hMult: 1.00, wMult: 1.00 },  // Round body
-      { start: 0.80, end: 1.00, hMult: 0.45, wMult: 0.40 },  // Short peduncle
+      { start: 0.00, end: 0.30, hMult: 0.85, wMult: 0.85 },
+      { start: 0.30, end: 0.80, hMult: 1.00, wMult: 1.00 },
+      { start: 0.80, end: 1.00, hMult: 0.45, wMult: 0.40 },
     ],
     
     fins: [
-      { name: 'dorsal',    deg: 0,   pos: 0.72, size: [0.10, 0.12, 0.02] },   // Far back
-      { name: 'pectoralR', deg: 90,  pos: 0.42, size: [0.12, 0.03, 0.10] },   // Round paddles
-      { name: 'pectoralL', deg: -90, pos: 0.42, size: [0.12, 0.03, 0.10] },
+      { name: 'pectoralR', deg: 90,  pos: 0.38, size: [0.12, 0.03, 0.10] },
+      { name: 'pectoralL', deg: -90, pos: 0.38, size: [0.12, 0.03, 0.10] },
     ],
     
     tail: {
@@ -425,8 +422,8 @@ const CLASS_DEFINITIONS = {
   },
   
   // ═══════════════════════════════════════════════════════════════════════════
-  // MARLIN (Istiophoridae) - 10 meshes
-  // 4 body + 1 bill + 1 sail + 2 pectorals + 2 tail lobes
+  // MARLIN - 9 meshes: 4 body + 1 bill + 2 pectorals + 1 sail + 1 tail
+  // Sail starts where body thickens, not at head
   // ═══════════════════════════════════════════════════════════════════════════
   [FishClass.MARLIN]: {
     name: 'Marlin',
@@ -446,19 +443,21 @@ const CLASS_DEFINITIONS = {
       { start: 0.00, end: 0.18, hMult: 0.55, wMult: 0.45 },
       { start: 0.18, end: 0.50, hMult: 1.00, wMult: 1.00 },
       { start: 0.50, end: 0.80, hMult: 0.45, wMult: 0.40 },
-      { start: 0.80, end: 1.00, hMult: 0.10, wMult: 0.08 },  // Very narrow
+      { start: 0.80, end: 1.00, hMult: 0.10, wMult: 0.08 },
     ],
     
+    // Bill connects to head (starts at 0, extends forward)
     bill: {
-      length: 0.35,
+      length: 0.30,
       height: 0.02,
       width: 0.015,
     },
     
+    // Sail starts at 0.20 (where thick body begins)
     fins: [
-      { name: 'sail',      deg: 0,    pos: 0.15, size: [0.60, 0.55, 0.01], sail: true },
-      { name: 'pectoralR', deg: 110,  pos: 0.22, size: [0.20, 0.01, 0.04] },
-      { name: 'pectoralL', deg: -110, pos: 0.22, size: [0.20, 0.01, 0.04] },
+      { name: 'sail',      deg: 0,    pos: 0.20, size: [0.55, 0.55, 0.01], sail: true },
+      { name: 'pectoralR', deg: 110,  pos: 0.20, size: [0.18, 0.01, 0.04] },
+      { name: 'pectoralL', deg: -110, pos: 0.20, size: [0.18, 0.01, 0.04] },
     ],
     
     tail: {
@@ -476,8 +475,8 @@ const CLASS_DEFINITIONS = {
     length: { min: 0.25, max: 1.5 },
     
     bodyRatios: {
-      height: { min: 0.04, max: 0.08 },  // Extremely flat
-      width: { min: 0.50, max: 0.65 },   // Wide oval
+      height: { min: 0.04, max: 0.08 },
+      width: { min: 0.50, max: 0.65 },
     },
     
     palettes: [
@@ -492,15 +491,15 @@ const CLASS_DEFINITIONS = {
       { start: 0.85, end: 1.00, hMult: 0.55, wMult: 0.45 },
     ],
     
-    // For flatfish, fins run along edges (90° and -90°)
+    // Edge fins start where main body starts
     fins: [
-      { name: 'dorsalEdge', deg: 90,  pos: 0.10, size: [0.75, 0.10, 0.01], ribbon: true },
-      { name: 'analEdge',   deg: -90, pos: 0.20, size: [0.60, 0.10, 0.01], ribbon: true },
+      { name: 'dorsalEdge', deg: 90,  pos: 0.25, size: [0.55, 0.10, 0.01], ribbon: true },
+      { name: 'analEdge',   deg: -90, pos: 0.25, size: [0.55, 0.10, 0.01], ribbon: true },
     ],
     
     tail: {
       type: 'rounded',
-      size: [0.12, 0.06, 0.20],  // Wide flat tail
+      size: [0.12, 0.06, 0.20],
     },
     
     flatfish: true,
@@ -538,16 +537,19 @@ export function generateFish(seed, fishClass = null) {
     roughness: range(rng, 0.5, 0.8),
   }
   
-  const { mesh, parts } = buildFishMesh(rng, classDef, traits)
+  const { mesh, parts } = buildFishMesh(rng, classDef, traits, fishClass)
   
   return { mesh, parts, seed, fishClass, traits }
 }
 
-function buildFishMesh(rng, classDef, traits) {
+function buildFishMesh(rng, classDef, traits, fishClass) {
   const fishGroup = new THREE.Group()
   const parts = {}
   
   const { length, height, width, palette, colorIndex } = traits
+  
+  // Shark uses original simpler positioning logic
+  const isShark = fishClass === FishClass.SHARK
   
   const bodyColor = palette.body[colorIndex]
   const finColor = palette.fin[colorIndex]
@@ -564,9 +566,12 @@ function buildFishMesh(rng, classDef, traits) {
     roughness: traits.roughness + 0.1,
   })
   
+  // Small overlap to ensure meshes connect (not used for shark)
+  const overlap = isShark ? 0 : length * 0.005
+  
   // === BUILD BODY SEGMENTS ===
   for (const seg of classDef.body) {
-    const segLength = length * (seg.end - seg.start)
+    const segLength = length * (seg.end - seg.start) + (isShark ? 0 : overlap)
     const segHeight = height * seg.hMult
     const segWidth = width * seg.wMult
     
@@ -575,12 +580,11 @@ function buildFishMesh(rng, classDef, traits) {
       bodyMaterial
     )
     
-    // Position along Z axis (nose at -length/2, tail at +length/2)
-    const centerPos = (seg.start + seg.end) / 2
-    segMesh.position.z = length * (centerPos - 0.5)
+    const segCenter = (seg.start + seg.end) / 2
+    segMesh.position.z = length * (segCenter - 0.5)
     
     fishGroup.add(segMesh)
-    parts[`body_${seg.start}`] = segMesh
+    parts[`body_${seg.start.toFixed(2)}`] = segMesh
   }
   
   // === BUILD BILL (marlin) ===
@@ -594,58 +598,116 @@ function buildFishMesh(rng, classDef, traits) {
       ),
       bodyMaterial
     )
-    billMesh.position.z = -length * 0.5 - billLen * 0.5
+    billMesh.position.z = -length * 0.5 - billLen * 0.5 + overlap
     fishGroup.add(billMesh)
     parts.bill = billMesh
   }
   
   // === BUILD FINS ===
   for (const fin of classDef.fins || []) {
-    const [finLen, finH, finW] = fin.size
-    const finLength = length * finLen
-    const finHeight = length * finH
-    const finWidth = length * finW
+    const [finLenRatio, finHRatio, finWRatio] = fin.size
+    const finLen = length * finLenRatio
+    const finH = length * finHRatio
+    const finW = length * finWRatio
     
     const finMesh = new THREE.Mesh(
-      new THREE.BoxGeometry(finWidth, finHeight, finLength),
+      new THREE.BoxGeometry(finW, finH, finLen),
       finMaterial
     )
     
-    // Position along body
-    const zPos = length * (fin.pos - 0.5)
+    // Shark uses simple center positioning, others use front-edge positioning
+    let finCenterZ
+    if (isShark) {
+      finCenterZ = length * (fin.pos - 0.5)
+    } else {
+      const frontEdgeZ = length * (fin.pos - 0.5)
+      finCenterZ = frontEdgeZ + finLen * 0.5
+    }
     
-    // Position around body using degrees
-    const offset = degToOffset(fin.deg, width * 0.5, height * 0.5)
+    // Shark uses global dimensions, others find local segment dimensions
+    let localHeight = height
+    let localWidth = width
+    if (!isShark) {
+      for (const seg of classDef.body) {
+        if (fin.pos >= seg.start && fin.pos < seg.end) {
+          localHeight = height * seg.hMult
+          localWidth = width * seg.wMult
+          break
+        }
+      }
+    }
     
-    // Handle different fin types
+    // Position around body based on degree
     if (fin.isWing) {
-      // Wings (rays) - extend horizontally from sides
-      finMesh.position.set(offset.x + (fin.deg > 0 ? finWidth * 0.5 : -finWidth * 0.5), 0, zPos)
+      // Wings (rays)
+      const sign = fin.deg > 0 ? 1 : -1
+      if (isShark) {
+        const offset = degToOffset(fin.deg, width * 0.5, height * 0.5)
+        finMesh.position.set(offset.x + sign * finW * 0.5, 0, finCenterZ)
+      } else {
+        finMesh.position.set(
+          sign * (localWidth * 0.5 + finW * 0.5 - overlap),
+          0,
+          finCenterZ
+        )
+      }
     } else if (fin.ribbon) {
-      // Ribbon fins - run along body
-      finMesh.position.set(offset.x, offset.y, zPos)
+      // Ribbon fins
+      const sign = fin.deg > 0 ? 1 : -1
       if (Math.abs(fin.deg) === 90) {
-        // Edge fins (flounder)
-        finMesh.position.x += (fin.deg > 0 ? finHeight * 0.5 : -finHeight * 0.5)
+        // Side ribbon (flounder)
+        if (isShark) {
+          const offset = degToOffset(fin.deg, width * 0.5, height * 0.5)
+          finMesh.position.set(offset.x + sign * finH * 0.5, offset.y, finCenterZ)
+        } else {
+          finMesh.position.set(
+            sign * (localWidth * 0.5 + finH * 0.5 - overlap),
+            0,
+            finCenterZ
+          )
+        }
+      } else {
+        // Top/bottom ribbon (eel)
+        if (isShark) {
+          finMesh.position.set(0, height * 0.5 + finH * 0.5, finCenterZ)
+        } else {
+          finMesh.position.set(0, localHeight * 0.5 + finH * 0.5 - overlap, finCenterZ)
+        }
       }
     } else if (fin.deg === 0) {
       // Dorsal fins - on top
-      finMesh.position.set(0, height * 0.5 + finHeight * 0.5, zPos)
+      if (isShark) {
+        finMesh.position.set(0, height * 0.5 + finH * 0.5, finCenterZ)
+      } else {
+        finMesh.position.set(0, localHeight * 0.5 + finH * 0.5 - overlap, finCenterZ)
+      }
     } else if (fin.deg === 180) {
       // Ventral/anal fins - on bottom
-      finMesh.position.set(0, -height * 0.5 - finHeight * 0.5, zPos)
+      if (isShark) {
+        finMesh.position.set(0, -height * 0.5 - finH * 0.5, finCenterZ)
+      } else {
+        finMesh.position.set(0, -localHeight * 0.5 - finH * 0.5 + overlap, finCenterZ)
+      }
     } else {
-      // Angled fins (pectorals, pelvics)
-      // Rotate fin to extend outward from body
+      // Pectorals/pelvics - angled around body
       const angleRad = (fin.deg * Math.PI) / 180
       finMesh.rotation.z = angleRad
       
-      // Position at body surface, extending outward
-      finMesh.position.set(
-        offset.x + Math.sin(angleRad) * finHeight * 0.5,
-        offset.y + Math.cos(angleRad) * finHeight * 0.5,
-        zPos
-      )
+      if (isShark) {
+        const offset = degToOffset(fin.deg, width * 0.5, height * 0.5)
+        finMesh.position.set(
+          offset.x + Math.sin(angleRad) * finH * 0.5,
+          offset.y + Math.cos(angleRad) * finH * 0.5,
+          finCenterZ
+        )
+      } else {
+        const offset = degToOffset(fin.deg, localWidth * 0.5, localHeight * 0.5)
+        finMesh.position.set(
+          offset.x + Math.sin(angleRad) * (finH * 0.5 - overlap),
+          offset.y + Math.cos(angleRad) * (finH * 0.5 - overlap),
+          finCenterZ
+        )
+      }
     }
     
     fishGroup.add(finMesh)
@@ -659,31 +721,39 @@ function buildFishMesh(rng, classDef, traits) {
     
     if (tailDef.type === 'heterocercal' || tailDef.type === 'forked') {
       // Two-lobed tail
-      const upper = tailDef.upper || tailDef
-      const lower = tailDef.lower || tailDef
+      const upper = tailDef.upper
+      const lower = tailDef.lower
+      
+      const upperLen = length * upper.size[0]
+      const upperH = length * upper.size[1]
+      const upperW = length * upper.size[2]
       
       const upperMesh = new THREE.Mesh(
-        new THREE.BoxGeometry(
-          length * upper.size[2],
-          length * upper.size[1],
-          length * upper.size[0]
-        ),
+        new THREE.BoxGeometry(upperW, upperH, upperLen),
         finMaterial
       )
-      upperMesh.position.set(0, length * upper.size[1] * 0.3, tailZ)
+      if (isShark) {
+        upperMesh.position.set(0, upperH * 0.3, tailZ)
+      } else {
+        upperMesh.position.set(0, upperH * 0.3, tailZ + upperLen * 0.5 - overlap)
+      }
       upperMesh.rotation.x = (upper.angle * Math.PI) / 180
       fishGroup.add(upperMesh)
       parts.tailUpper = upperMesh
       
+      const lowerLen = length * lower.size[0]
+      const lowerH = length * lower.size[1]
+      const lowerW = length * lower.size[2]
+      
       const lowerMesh = new THREE.Mesh(
-        new THREE.BoxGeometry(
-          length * lower.size[2],
-          length * lower.size[1],
-          length * lower.size[0]
-        ),
+        new THREE.BoxGeometry(lowerW, lowerH, lowerLen),
         finMaterial
       )
-      lowerMesh.position.set(0, -length * lower.size[1] * 0.2, tailZ)
+      if (isShark) {
+        lowerMesh.position.set(0, -lowerH * 0.2, tailZ)
+      } else {
+        lowerMesh.position.set(0, -lowerH * 0.2, tailZ + lowerLen * 0.5 - overlap)
+      }
       lowerMesh.rotation.x = (lower.angle * Math.PI) / 180
       fishGroup.add(lowerMesh)
       parts.tailLower = lowerMesh
@@ -699,18 +769,30 @@ function buildFishMesh(rng, classDef, traits) {
         ),
         finMaterial
       )
-      whipMesh.position.set(0, 0, tailZ + whipLen * 0.5)
+      if (isShark) {
+        whipMesh.position.set(0, 0, tailZ + whipLen * 0.5)
+      } else {
+        whipMesh.position.set(0, 0, tailZ + whipLen * 0.5 - overlap)
+      }
       fishGroup.add(whipMesh)
       parts.tail = whipMesh
       
     } else {
       // Single tail (lunate, rounded, pointed)
-      const [tLen, tH, tW] = tailDef.size
+      const [tLenR, tHR, tWR] = tailDef.size
+      const tLen = length * tLenR
+      const tH = length * tHR
+      const tW = length * tWR
+      
       const tailMesh = new THREE.Mesh(
-        new THREE.BoxGeometry(length * tW, length * tH, length * tLen),
+        new THREE.BoxGeometry(tW, tH, tLen),
         finMaterial
       )
-      tailMesh.position.set(0, 0, tailZ + length * tLen * 0.3)
+      if (isShark) {
+        tailMesh.position.set(0, 0, tailZ + tLen * 0.3)
+      } else {
+        tailMesh.position.set(0, 0, tailZ + tLen * 0.5 - overlap)
+      }
       fishGroup.add(tailMesh)
       parts.tail = tailMesh
     }
@@ -740,29 +822,32 @@ export function generateStarterFish() {
     roughness: 0.8
   })
   
+  // All parts connected with slight overlap
+  const o = 0.02  // overlap
+  
   const body = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.5, 1.5), bodyMaterial)
   fishGroup.add(body)
   
-  const head = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.4, 0.5), bodyMaterial)
-  head.position.set(0, 0, -0.9)
+  const head = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.4, 0.5 + o), bodyMaterial)
+  head.position.set(0, 0, -0.75 - 0.25 + o/2)
   fishGroup.add(head)
   
-  const tail = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.6, 0.5), finMaterial)
-  tail.position.set(0, 0, 1.0)
+  const tail = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.6, 0.5 + o), finMaterial)
+  tail.position.set(0, 0, 0.75 + 0.25 - o/2)
   tail.rotation.x = Math.PI / 6
   fishGroup.add(tail)
   
-  const dorsalFin = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.4, 0.6), finMaterial)
-  dorsalFin.position.set(0, 0.4, 0)
+  const dorsalFin = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.4 + o, 0.6), finMaterial)
+  dorsalFin.position.set(0, 0.25 + 0.2 - o/2, 0)
   fishGroup.add(dorsalFin)
   
-  const leftFin = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.08, 0.3), finMaterial)
-  leftFin.position.set(-0.5, -0.1, -0.2)
+  const leftFin = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.08 + o, 0.3), finMaterial)
+  leftFin.position.set(-0.4 - 0.15, -0.1, -0.2)
   leftFin.rotation.z = -Math.PI / 6
   fishGroup.add(leftFin)
   
-  const rightFin = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.08, 0.3), finMaterial)
-  rightFin.position.set(0.5, -0.1, -0.2)
+  const rightFin = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.08 + o, 0.3), finMaterial)
+  rightFin.position.set(0.4 + 0.15, -0.1, -0.2)
   rightFin.rotation.z = Math.PI / 6
   fishGroup.add(rightFin)
   
