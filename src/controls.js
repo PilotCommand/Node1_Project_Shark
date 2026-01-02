@@ -3,17 +3,15 @@ import { getPlayer } from './player.js'
 import { getYaw, getPitch, getCameraMode } from './camera.js'
 import { 
   regeneratePlayerCreature, 
-  getCurrentSeed, 
-  getCurrentType,
-  getCurrentClass, 
   cyclePlayerClass,
   cyclePreviousClass,
   getCurrentIndex,
   getCreatureCatalog,
+  toggleWireframe,
 } from './player.js'
 import { 
   seedToString, 
-  getCreatureDisplayName, 
+  getCreatureDisplayName,
   getCreatureShortName,
 } from './Encyclopedia.js'
 
@@ -74,19 +72,13 @@ export function initControls() {
         }
         break
       
-      // P = Print current info to console
+      // P = Toggle Physics/Collider wireframe
       case 'KeyP':
-        const currentSeed = getCurrentSeed()
-        const currentType = getCurrentType()
-        const currentClass = getCurrentClass()
-        if (currentSeed !== null) {
-          const displayName = getCreatureDisplayName(currentType, currentClass)
-          const index = getCurrentIndex()
-          const total = getCreatureCatalog().length
-          const info = `${displayName} [${index + 1}/${total}] | Seed: ${seedToString(currentSeed)}`
-          console.log(info)
-          showNotification(info, '#88aaff')
-        }
+        const wireframeOn = toggleWireframe()
+        showNotification(
+          `Collider wireframe: ${wireframeOn ? 'ON' : 'OFF'}`,
+          wireframeOn ? '#00ff00' : '#ff6600'
+        )
         break
     }
   })

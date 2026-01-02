@@ -9,6 +9,16 @@ import {
   seedToString,
 } from './Encyclopedia.js'
 import { MeshRegistry, Category, Tag } from './MeshRegistry.js'
+import { 
+  attachCapsuleWireframe, 
+  computeCapsuleParams,
+  setWireframeVisible,
+  setWireframeColor,
+  logCapsuleStats,
+} from './ScaleMesh.js'
+
+// Capsule wireframe state
+let wireframeVisible = true
 
 let currentCreature = null
 let creatureParts = null
@@ -34,6 +44,12 @@ export function initPlayer(scene) {
   currentCreature.mesh.position.set(0, 0, 0)
   scene.add(currentCreature.mesh)
   
+  // Attach capsule wireframe for collision visualization
+  // Pass full creature object - ScaleMesh handles both traits object and direct properties
+  const capsuleParams = computeCapsuleParams(currentCreature.mesh, currentCreature)
+  attachCapsuleWireframe(currentCreature.mesh, currentCreature, { color: 0x00ff00 })
+  logCapsuleStats(capsuleParams, currentClass)
+  
   MeshRegistry.register('player', {
     mesh: currentCreature.mesh,
     body: null,
@@ -46,7 +62,8 @@ export function initPlayer(scene) {
       creatureType: currentType,
       creatureClass: currentClass,
       traits: currentCreature.traits,
-      parts: creatureParts
+      parts: creatureParts,
+      capsuleParams: capsuleParams,  // Store for physics
     }
   }, true)
   
@@ -67,7 +84,7 @@ function swapCreature(newCreatureData, newType, newClass) {
   
   sceneRef.remove(currentCreature.mesh)
   
-  // Dispose old mesh
+  // Dispose old mesh (including wireframe)
   currentCreature.mesh.traverse(child => {
     if (child.geometry) child.geometry.dispose()
     if (child.material) {
@@ -92,6 +109,13 @@ function swapCreature(newCreatureData, newType, newClass) {
   
   sceneRef.add(currentCreature.mesh)
   
+  // Attach capsule wireframe to new creature
+  // Pass full creature object - ScaleMesh handles both traits object and direct properties
+  const capsuleParams = computeCapsuleParams(currentCreature.mesh, currentCreature)
+  attachCapsuleWireframe(currentCreature.mesh, currentCreature, { color: 0x00ff00 })
+  setWireframeVisible(currentCreature.mesh, wireframeVisible)
+  logCapsuleStats(capsuleParams, currentClass)
+  
   MeshRegistry.register('player', {
     mesh: currentCreature.mesh,
     body: null,
@@ -104,7 +128,8 @@ function swapCreature(newCreatureData, newType, newClass) {
       creatureType: currentType,
       creatureClass: currentClass,
       traits: currentCreature.traits,
-      parts: creatureParts
+      parts: creatureParts,
+      capsuleParams: capsuleParams,  // Store for physics
     }
   }, true)
   
@@ -112,7 +137,8 @@ function swapCreature(newCreatureData, newType, newClass) {
     seed: currentCreature.seed,
     creatureType: currentType,
     creatureClass: currentClass,
-    traits: currentCreature.traits
+    traits: currentCreature.traits,
+    capsuleParams: capsuleParams,
   }
 }
 
@@ -277,6 +303,61 @@ export function getCurrentIndex() {
 export const getFishParts = getCreatureParts
 export const getCurrentFish = getCurrentCreature
 export const regeneratePlayerFish = regeneratePlayerCreature
+
+// ============================================================================
+// CAPSULE / WIREFRAME CONTROLS
+// ============================================================================
+
+/**
+ * Toggle capsule wireframe visibility
+ * @returns {boolean} - New visibility state
+ */
+export function toggleWireframe() {
+  wireframeVisible = !wireframeVisible
+  if (currentCreature?.mesh) {
+    setWireframeVisible(currentCreature.mesh, wireframeVisible)
+  }
+  console.log(`Capsule wireframe: ${wireframeVisible ? 'ON' : 'OFF'}`)
+  return wireframeVisible
+}
+
+/**
+ * Set wireframe visibility explicitly
+ * @param {boolean} visible
+ */
+export function setPlayerWireframeVisible(visible) {
+  wireframeVisible = visible
+  if (currentCreature?.mesh) {
+    setWireframeVisible(currentCreature.mesh, wireframeVisible)
+  }
+}
+
+/**
+ * Set wireframe color (useful for state indication)
+ * @param {number} color - Hex color (e.g., 0xff0000 for red)
+ */
+export function setPlayerWireframeColor(color) {
+  if (currentCreature?.mesh) {
+    setWireframeColor(currentCreature.mesh, color)
+  }
+}
+
+/**
+ * Get current capsule params for physics
+ * @returns {{ radius: number, halfHeight: number, center: THREE.Vector3 } | null}
+ */
+export function getPlayerCapsuleParams() {
+  if (!currentCreature?.mesh) return null
+  return computeCapsuleParams(currentCreature.mesh, currentCreature)
+}
+
+/**
+ * Check if wireframe is currently visible
+ * @returns {boolean}
+ */
+export function isWireframeVisible() {
+  return wireframeVisible
+}
 
 export let player = null
 export { creatureParts as fishParts }

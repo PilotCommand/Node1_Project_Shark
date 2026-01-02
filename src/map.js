@@ -1,12 +1,17 @@
 import * as THREE from 'three'
-import { MeshFactory } from './MeshFactory.js'
+import { 
+  createSkyDome,
+  createSandFloor,
+  createBoulder,
+  createWaterSurface,
+} from './TerrainMaker.js'
 import { MeshRegistry, Category, Tag } from './MeshRegistry.js'
 
-export function createMap() {
+export function createMap(seed = null) {
   const group = new THREE.Group()
 
   // Sky dome
-  const sky = MeshFactory.createSkyDome({
+  const sky = createSkyDome({
     radius: 500,
     waterLevel: 30
   })
@@ -19,11 +24,12 @@ export function createMap() {
     metadata: { type: 'skybox' }
   }, true)
 
-  // Ocean floor
-  const floor = MeshFactory.createFloor({
+  // Ocean floor (sand)
+  const floor = createSandFloor({
     size: 1000,
     segments: 100,
-    bumpiness: 2
+    bumpiness: 2,
+    seed: seed,
   })
   floor.position.y = -50
   group.add(floor)
@@ -39,51 +45,11 @@ export function createMap() {
     }
   }, true)
 
-  // Coral formations
-  for (let i = 0; i < 30; i++) {
-    const coral = MeshFactory.createCoral()
-    coral.position.set(
-      Math.random() * 400 - 200,
-      -50 + Math.random() * 4,
-      Math.random() * 400 - 200
-    )
-    group.add(coral)
-
-    MeshRegistry.register('coral', {
-      mesh: coral,
-      category: Category.MAP,
-      tags: [Tag.STATIC, Tag.COLLIDABLE, Tag.DESTRUCTIBLE],
-      metadata: {
-        type: 'decoration',
-        height: coral.geometry.parameters.height
-      }
-    })
-  }
-
-  // Seaweed patches
-  for (let i = 0; i < 20; i++) {
-    const seaweed = MeshFactory.createSeaweed({
-      height: Math.random() * 4 + 3
-    })
-    seaweed.position.set(
-      Math.random() * 400 - 200,
-      -50,
-      Math.random() * 400 - 200
-    )
-    group.add(seaweed)
-
-    MeshRegistry.register('seaweed', {
-      mesh: seaweed,
-      category: Category.MAP,
-      tags: [Tag.STATIC, Tag.INTANGIBLE, Tag.ANIMATED],
-      metadata: { type: 'decoration' }
-    })
-  }
-
-  // Rocks
+  // Rocks/Boulders
   for (let i = 0; i < 15; i++) {
-    const rock = MeshFactory.createRock({
-      size: Math.random() * 3 + 1
+    const rock = createBoulder({
+      size: Math.random() * 3 + 1,
+      seed: seed ? seed + i * 3000 : null,
     })
     rock.position.set(
       Math.random() * 400 - 200,
@@ -101,7 +67,7 @@ export function createMap() {
   }
 
   // Water surface
-  const surface = MeshFactory.createWaterSurface({
+  const surface = createWaterSurface({
     size: 1000,
     opacity: 0.5
   })
