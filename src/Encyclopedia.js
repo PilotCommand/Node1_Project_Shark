@@ -8,6 +8,8 @@
  *   
  *   const fish = generateCreature(seed, CreatureType.FISH, FishClass.SHARK)
  *   const mammal = generateCreature(seed, CreatureType.MAMMAL, MammalClass.DOLPHIN)
+ *   const cephalopod = generateCreature(seed, CreatureType.CEPHALOPOD, CephalopodClass.OCTOPUS)
+ *   const jelly = generateCreature(seed, CreatureType.JELLY, JellyClass.MOON_JELLY)
  *   
  *   // Get every creature class for cycling
  *   const allClasses = getAllCreatureClasses()
@@ -17,6 +19,9 @@
 export * from './Fishes.js'
 export * from './Mammals.js'
 export * from './Crustaceans.js'
+export * from './Cephalopods.js'
+export * from './Jellies.js'
+export * from './SeaCucumbers.js'
 
 // Import for internal use
 import { 
@@ -44,6 +49,30 @@ import {
   getClassShortName as getCrustaceanShortName,
 } from './Crustaceans.js'
 
+import { 
+  CephalopodClass, 
+  generateCephalopod,
+  getOrderedClasses as getCephalopodOrderedClasses,
+  getClassDisplayName as getCephalopodDisplayName,
+  getClassShortName as getCephalopodShortName,
+} from './Cephalopods.js'
+
+import { 
+  JellyClass, 
+  generateJelly,
+  getOrderedClasses as getJellyOrderedClasses,
+  getClassDisplayName as getJellyDisplayName,
+  getClassShortName as getJellyShortName,
+} from './Jellies.js'
+
+import { 
+  SeaCucumberClass, 
+  generateSeaCucumber,
+  getOrderedClasses as getSeaCucumberOrderedClasses,
+  getClassDisplayName as getSeaCucumberDisplayName,
+  getClassShortName as getSeaCucumberShortName,
+} from './SeaCucumbers.js'
+
 // ============================================================================
 // CREATURE TYPES
 // ============================================================================
@@ -52,8 +81,9 @@ export const CreatureType = {
   FISH: 'fish',
   MAMMAL: 'mammal',
   CRUSTACEAN: 'crustacean',
-  // Future:
-  // CEPHALOPOD: 'cephalopod',
+  CEPHALOPOD: 'cephalopod',
+  JELLY: 'jelly',
+  SEA_CUCUMBER: 'sea_cucumber',
 }
 
 /**
@@ -78,7 +108,7 @@ const CREATURE_TYPE_META = {
     order: 20,
     classes: MammalClass,
     generator: generateMammal,
-    starterGenerator: null,  // No starter for mammals
+    starterGenerator: null,
     starterClass: null,
     getOrderedClasses: getMammalOrderedClasses,
     getDisplayName: getMammalDisplayName,
@@ -90,11 +120,47 @@ const CREATURE_TYPE_META = {
     order: 30,
     classes: CrustaceanClass,
     generator: generateCrustacean,
-    starterGenerator: null,  // No starter for crustaceans
+    starterGenerator: null,
     starterClass: null,
     getOrderedClasses: getCrustaceanOrderedClasses,
     getDisplayName: getCrustaceanDisplayName,
     getShortName: getCrustaceanShortName,
+  },
+  [CreatureType.CEPHALOPOD]: {
+    name: 'Cephalopod',
+    emoji: '🐙',
+    order: 40,
+    classes: CephalopodClass,
+    generator: generateCephalopod,
+    starterGenerator: null,
+    starterClass: null,
+    getOrderedClasses: getCephalopodOrderedClasses,
+    getDisplayName: getCephalopodDisplayName,
+    getShortName: getCephalopodShortName,
+  },
+  [CreatureType.JELLY]: {
+    name: 'Jellyfish',
+    emoji: '🪼',
+    order: 50,
+    classes: JellyClass,
+    generator: generateJelly,
+    starterGenerator: null,
+    starterClass: null,
+    getOrderedClasses: getJellyOrderedClasses,
+    getDisplayName: getJellyDisplayName,
+    getShortName: getJellyShortName,
+  },
+  [CreatureType.SEA_CUCUMBER]: {
+    name: 'Sea Cucumber',
+    emoji: '🥒',
+    order: 60,
+    classes: SeaCucumberClass,
+    generator: generateSeaCucumber,
+    starterGenerator: null,
+    starterClass: null,
+    getOrderedClasses: getSeaCucumberOrderedClasses,
+    getDisplayName: getSeaCucumberDisplayName,
+    getShortName: getSeaCucumberShortName,
   },
 }
 
@@ -229,6 +295,15 @@ export function getTypeFromClass(creatureClass) {
   if (Object.values(CrustaceanClass).includes(creatureClass)) {
     return CreatureType.CRUSTACEAN
   }
+  if (Object.values(CephalopodClass).includes(creatureClass)) {
+    return CreatureType.CEPHALOPOD
+  }
+  if (Object.values(JellyClass).includes(creatureClass)) {
+    return CreatureType.JELLY
+  }
+  if (Object.values(SeaCucumberClass).includes(creatureClass)) {
+    return CreatureType.SEA_CUCUMBER
+  }
   return null
 }
 
@@ -254,6 +329,9 @@ export default {
   FishClass,
   MammalClass,
   CrustaceanClass,
+  CephalopodClass,
+  JellyClass,
+  SeaCucumberClass,
   
   // Generation
   generateCreature,
