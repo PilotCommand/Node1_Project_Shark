@@ -14,6 +14,7 @@ import {
   getCreatureDisplayName,
   getCreatureShortName,
 } from './Encyclopedia.js'
+import { regenerateMap } from './map.js'
 
 const keys = {
   w: false,
@@ -37,8 +38,19 @@ export function initControls() {
       case 'ShiftLeft': 
       case 'ShiftRight': keys.shift = true; break
       
-      // M = Mutate creature (new random of same type/class)
+      // M = regenerate Map/terrain
       case 'KeyM':
+        const newSeed = regenerateMap()
+        if (newSeed !== null) {
+          showNotification(
+            `New terrain | Seed: ${newSeed.toString(16).toUpperCase().padStart(8, '0')}`,
+            '#00ffff'
+          )
+        }
+        break
+      
+      // R = Regenerate creature (mutate - new random of same type/class)
+      case 'KeyR':
         const result = regeneratePlayerCreature()
         if (result) {
           const size = result.traits?.length?.toFixed(1) || '?'

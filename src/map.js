@@ -11,7 +11,14 @@ import { MeshRegistry, Category, Tag } from './MeshRegistry.js'
 // Default map seed (can be overridden for multiplayer sync)
 const DEFAULT_SEED = 12345
 
-export function createMap(seed = DEFAULT_SEED) {
+let currentMapGroup = null
+let currentScene = null
+let currentSeed = DEFAULT_SEED
+
+export function createMap(scene, seed = DEFAULT_SEED) {
+  currentScene = scene
+  currentSeed = seed
+  
   const group = new THREE.Group()
   
   const mapSize = 1000
@@ -119,7 +126,66 @@ export function createMap(seed = DEFAULT_SEED) {
     }
   }, true)
 
+  currentMapGroup = group
   return group
+}
+
+/**
+ * Regenerate terrain with a new random seed
+ * @returns {number} The new seed used
+ */
+export function regenerateMap() {
+  if (!currentScene || !currentMapGroup) {
+    console.warn('Map not initialized')
+    return null
+  }
+  
+  // Remove old map from scene
+  currentScene.remove(currentMapGroup)
+  
+  // Dispose old geometries and materials
+  currentMapGroup.traverse(child => {
+    if (child.geometry) child.geometry.dispose()
+    if (child.material) {
+      if (Array.isArray(child.material)) {
+        child.material.forEach(m => m.dispose())
+      } else {
+        child.material.dispose()
+      }
+    }
+  })
+  
+  // Unregister old map meshes
+  MeshRegistry.unregister('sky')
+  MeshRegistry.unregister('floor')
+  MeshRegistry.unregister('waterSurface')
+  MeshRegistry.unregister('mapGroup')
+  
+  // Unregister all rocks
+  const rocks = MeshRegistry.getByCategory(Category.MAP)
+  rocks.forEach(entity => {
+    if (entity.metadata?.type === 'obstacle') {
+      MeshRegistry.unregister(entity.id)
+    }
+  })
+  
+  // Generate new seed
+  const newSeed = Math.floor(Math.random() * 0xFFFFFFFF)
+  
+  // Create new map
+  const newMap = createMap(currentScene, newSeed)
+  currentScene.add(newMap)
+  
+  console.log(`Terrain regenerated | Seed: ${newSeed.toString(16).toUpperCase().padStart(8, '0')}`)
+  
+  return newSeed
+}
+
+/**
+ * Get current map seed
+ */
+export function getCurrentSeed() {
+  return currentSeed
 }
 
 // Simple seeded RNG for boulder placement

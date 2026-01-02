@@ -35,7 +35,7 @@ sandLight.position.set(0, 50, 0)
 scene.add(sandLight)
 
 // Initialize game
-const map = createMap()
+const map = createMap(scene)
 scene.add(map)
 
 initPlayer(scene)
@@ -69,8 +69,8 @@ animate()
 
 // Controls documentation
 console.log(`
-🌊 OCEAN CREATURE SIMULATOR
-═══════════════════════════════════════════════════════════════
+ðŸŒŠ OCEAN CREATURE SIMULATOR
+â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   CONTROLS:
     WASD / Space / Shift  - Swim
@@ -82,63 +82,63 @@ console.log(`
     P                     - Print creature info
 
   ENCYCLOPEDIA (47 creatures, 1 unit = 1 meter):
-  ───────────────────────────────────────────────────────────────
+  â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   
-  🐟 FISH (23 species):
+  ðŸŸ FISH (23 species):
   
     Cartilaginous:
-      🦈 Shark, 🔨 Hammerhead, 🦅 Ray, 🦅 Manta
+      ðŸ¦ˆ Shark, ðŸ”¨ Hammerhead, ðŸ¦… Ray, ðŸ¦… Manta
     
     Elongated:
-      🐍 Eel, 🐍 Moray, 🐟 Barracuda
+      ðŸ Eel, ðŸ Moray, ðŸŸ Barracuda
     
     Pelagic:
-      🐟 Tuna, 🗡️ Marlin, ✈️ Flying Fish
+      ðŸŸ Tuna, ðŸ—¡ï¸ Marlin, âœˆï¸ Flying Fish
     
     Reef:
-      🐟 Grouper, 🐠 Tang, 🐠 Angelfish, 🦁 Lionfish,
-      👑 Betta, 🐡 Puffer, 😈 Piranha, 🐴 Seahorse
+      ðŸŸ Grouper, ðŸ  Tang, ðŸ  Angelfish, ðŸ¦ Lionfish,
+      ðŸ‘‘ Betta, ðŸ¡ Puffer, ðŸ˜ˆ Piranha, ðŸ´ Seahorse
     
     Deep Sea:
-      🔦 Anglerfish
+      ðŸ”¦ Anglerfish
     
     Unusual:
-      🌞 Sunfish
+      ðŸŒž Sunfish
     
     Benthic:
-      🫓 Flounder, 🐱 Catfish
+      ðŸ«“ Flounder, ðŸ± Catfish
 
-  🐬 MARINE MAMMALS (13 species):
+  ðŸ¬ MARINE MAMMALS (13 species):
   
     Large Whales:
-      🐋 Blue Whale, 🐋 Humpback, 🐋 Sperm Whale
+      ðŸ‹ Blue Whale, ðŸ‹ Humpback, ðŸ‹ Sperm Whale
     
     Small Whales:
-      🐳 Beluga, 🦄 Narwhal, 🐋 Pilot Whale
+      ðŸ³ Beluga, ðŸ¦„ Narwhal, ðŸ‹ Pilot Whale
     
     Dolphins:
-      🐬 Dolphin, 🐬 Orca
+      ðŸ¬ Dolphin, ðŸ¬ Orca
     
     Pinnipeds:
-      🦭 Seal, 🦭 Sea Lion, 🦭 Walrus
+      ðŸ¦­ Seal, ðŸ¦­ Sea Lion, ðŸ¦­ Walrus
     
     Other:
-      🦦 Sea Otter, 🐘 Manatee
+      ðŸ¦¦ Sea Otter, ðŸ˜ Manatee
 
-  🦀 CRUSTACEANS (11 species):
+  ðŸ¦€ CRUSTACEANS (11 species):
   
     Crabs:
-      🦀 Crab, 🦀 King Crab, 🦀 Spider Crab,
-      🥥 Coconut Crab, 🦀 Fiddler Crab
+      ðŸ¦€ Crab, ðŸ¦€ King Crab, ðŸ¦€ Spider Crab,
+      ðŸ¥¥ Coconut Crab, ðŸ¦€ Fiddler Crab
     
     Lobsters:
-      🦞 Lobster, 🦞 Crayfish
+      ðŸ¦ž Lobster, ðŸ¦ž Crayfish
     
     Shrimp:
-      🦐 Shrimp, 🦐 Mantis Shrimp, 🦐 Pistol Shrimp
+      ðŸ¦ Shrimp, ðŸ¦ Mantis Shrimp, ðŸ¦ Pistol Shrimp
     
     Other:
-      🧲 Horseshoe Crab
+      ðŸ§² Horseshoe Crab
 
-═══════════════════════════════════════════════════════════════
+â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 `)
