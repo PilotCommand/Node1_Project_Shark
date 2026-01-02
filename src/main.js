@@ -81,7 +81,7 @@ console.log(`
     B                     - Back (previous species)
     P                     - Print creature info
 
-  ENCYCLOPEDIA (36 creatures, 1 unit = 1 meter):
+  ENCYCLOPEDIA (47 creatures, 1 unit = 1 meter):
   ───────────────────────────────────────────────────────────────
   
   🐟 FISH (23 species):
@@ -111,7 +111,7 @@ console.log(`
   🐬 MARINE MAMMALS (13 species):
   
     Large Whales:
-      🐋 Blue Whale (20-30m), 🐋 Humpback (12-16m), 🐋 Sperm Whale
+      🐋 Blue Whale, 🐋 Humpback, 🐋 Sperm Whale
     
     Small Whales:
       🐳 Beluga, 🦄 Narwhal, 🐋 Pilot Whale
@@ -124,6 +124,21 @@ console.log(`
     
     Other:
       🦦 Sea Otter, 🐘 Manatee
+
+  🦀 CRUSTACEANS (11 species):
+  
+    Crabs:
+      🦀 Crab, 🦀 King Crab, 🦀 Spider Crab,
+      🥥 Coconut Crab, 🦀 Fiddler Crab
+    
+    Lobsters:
+      🦞 Lobster, 🦞 Crayfish
+    
+    Shrimp:
+      🦐 Shrimp, 🦐 Mantis Shrimp, 🦐 Pistol Shrimp
+    
+    Other:
+      🧲 Horseshoe Crab
 
 ═══════════════════════════════════════════════════════════════
 `)

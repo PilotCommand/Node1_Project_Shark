@@ -16,6 +16,7 @@
 // Re-export everything from individual modules
 export * from './Fishes.js'
 export * from './Mammals.js'
+export * from './Crustaceans.js'
 
 // Import for internal use
 import { 
@@ -35,6 +36,14 @@ import {
   getClassShortName as getMammalShortName,
 } from './Mammals.js'
 
+import { 
+  CrustaceanClass, 
+  generateCrustacean,
+  getOrderedClasses as getCrustaceanOrderedClasses,
+  getClassDisplayName as getCrustaceanDisplayName,
+  getClassShortName as getCrustaceanShortName,
+} from './Crustaceans.js'
+
 // ============================================================================
 // CREATURE TYPES
 // ============================================================================
@@ -42,8 +51,8 @@ import {
 export const CreatureType = {
   FISH: 'fish',
   MAMMAL: 'mammal',
+  CRUSTACEAN: 'crustacean',
   // Future:
-  // CRUSTACEAN: 'crustacean',
   // CEPHALOPOD: 'cephalopod',
 }
 
@@ -74,6 +83,18 @@ const CREATURE_TYPE_META = {
     getOrderedClasses: getMammalOrderedClasses,
     getDisplayName: getMammalDisplayName,
     getShortName: getMammalShortName,
+  },
+  [CreatureType.CRUSTACEAN]: {
+    name: 'Crustacean',
+    emoji: '🦀',
+    order: 30,
+    classes: CrustaceanClass,
+    generator: generateCrustacean,
+    starterGenerator: null,  // No starter for crustaceans
+    starterClass: null,
+    getOrderedClasses: getCrustaceanOrderedClasses,
+    getDisplayName: getCrustaceanDisplayName,
+    getShortName: getCrustaceanShortName,
   },
 }
 
@@ -205,6 +226,9 @@ export function getTypeFromClass(creatureClass) {
   if (Object.values(MammalClass).includes(creatureClass)) {
     return CreatureType.MAMMAL
   }
+  if (Object.values(CrustaceanClass).includes(creatureClass)) {
+    return CreatureType.CRUSTACEAN
+  }
   return null
 }
 
@@ -229,6 +253,7 @@ export default {
   CreatureType,
   FishClass,
   MammalClass,
+  CrustaceanClass,
   
   // Generation
   generateCreature,
