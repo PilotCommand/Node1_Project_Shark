@@ -6,6 +6,7 @@ import { camera, initCameraControls, updateCamera } from './camera.js'
 import { initControls, updateMovement } from './controls.js'
 import { initHUD, updateHUD } from './hud.js'
 import { MeshRegistry } from './MeshRegistry.js'
+import { buildTerrainMesh, debugTerrainMesh } from './TerrainMesher.js'
 
 // Scene setup
 const scene = new THREE.Scene()
@@ -43,6 +44,12 @@ initCameraControls(renderer.domElement)
 initControls()
 initHUD()
 
+// Build unified terrain collision mesh (after map is created)
+const terrainMeshData = buildTerrainMesh(scene)
+if (terrainMeshData) {
+  debugTerrainMesh()
+}
+
 MeshRegistry.debug()
 
 // Resize handler
@@ -69,8 +76,8 @@ animate()
 
 // Controls documentation
 console.log(`
-ðŸŒŠ OCEAN CREATURE SIMULATOR
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+🌊 OCEAN CREATURE SIMULATOR
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   CONTROLS:
     WASD / Space / Shift  - Swim
@@ -79,66 +86,66 @@ console.log(`
     M                     - Mutate (new creature, same species)
     N                     - Next species
     B                     - Back (previous species)
-    P                     - Print creature info
+    P                     - Toggle collision wireframes (player + terrain)
 
   ENCYCLOPEDIA (47 creatures, 1 unit = 1 meter):
-  â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  ──────────────────────────────────────────────────────────────
   
-  ðŸŸ FISH (23 species):
+  🐟 FISH (23 species):
   
     Cartilaginous:
-      ðŸ¦ˆ Shark, ðŸ”¨ Hammerhead, ðŸ¦… Ray, ðŸ¦… Manta
+      🦈 Shark, 🔨 Hammerhead, 🦅 Ray, 🦅 Manta
     
     Elongated:
-      ðŸ Eel, ðŸ Moray, ðŸŸ Barracuda
+      🐍 Eel, 🐍 Moray, 🐟 Barracuda
     
     Pelagic:
-      ðŸŸ Tuna, ðŸ—¡ï¸ Marlin, âœˆï¸ Flying Fish
+      🐟 Tuna, 🗡️ Marlin, ✈️ Flying Fish
     
     Reef:
-      ðŸŸ Grouper, ðŸ  Tang, ðŸ  Angelfish, ðŸ¦ Lionfish,
-      ðŸ‘‘ Betta, ðŸ¡ Puffer, ðŸ˜ˆ Piranha, ðŸ´ Seahorse
+      🐟 Grouper, 🐠 Tang, 🐠 Angelfish, 🦁 Lionfish,
+      👑 Betta, 🐡 Puffer, 😈 Piranha, 🐴 Seahorse
     
     Deep Sea:
-      ðŸ”¦ Anglerfish
+      🔦 Anglerfish
     
     Unusual:
-      ðŸŒž Sunfish
+      🌞 Sunfish
     
     Benthic:
-      ðŸ«“ Flounder, ðŸ± Catfish
+      🫓 Flounder, 🐱 Catfish
 
-  ðŸ¬ MARINE MAMMALS (13 species):
+  🐬 MARINE MAMMALS (13 species):
   
     Large Whales:
-      ðŸ‹ Blue Whale, ðŸ‹ Humpback, ðŸ‹ Sperm Whale
+      🐋 Blue Whale, 🐋 Humpback, 🐋 Sperm Whale
     
     Small Whales:
-      ðŸ³ Beluga, ðŸ¦„ Narwhal, ðŸ‹ Pilot Whale
+      🐳 Beluga, 🦄 Narwhal, 🐋 Pilot Whale
     
     Dolphins:
-      ðŸ¬ Dolphin, ðŸ¬ Orca
+      🐬 Dolphin, 🐬 Orca
     
     Pinnipeds:
-      ðŸ¦­ Seal, ðŸ¦­ Sea Lion, ðŸ¦­ Walrus
+      🦭 Seal, 🦭 Sea Lion, 🦭 Walrus
     
     Other:
-      ðŸ¦¦ Sea Otter, ðŸ˜ Manatee
+      🦦 Sea Otter, 🐘 Manatee
 
-  ðŸ¦€ CRUSTACEANS (11 species):
+  🦀 CRUSTACEANS (11 species):
   
     Crabs:
-      ðŸ¦€ Crab, ðŸ¦€ King Crab, ðŸ¦€ Spider Crab,
-      ðŸ¥¥ Coconut Crab, ðŸ¦€ Fiddler Crab
+      🦀 Crab, 🦀 King Crab, 🦀 Spider Crab,
+      🥥 Coconut Crab, 🦀 Fiddler Crab
     
     Lobsters:
-      ðŸ¦ž Lobster, ðŸ¦ž Crayfish
+      🦞 Lobster, 🦞 Crayfish
     
     Shrimp:
-      ðŸ¦ Shrimp, ðŸ¦ Mantis Shrimp, ðŸ¦ Pistol Shrimp
+      🦐 Shrimp, 🦐 Mantis Shrimp, 🦐 Pistol Shrimp
     
     Other:
-      ðŸ§² Horseshoe Crab
+      🧲 Horseshoe Crab
 
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 `)

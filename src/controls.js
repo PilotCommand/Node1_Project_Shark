@@ -15,6 +15,10 @@ import {
   getCreatureShortName,
 } from './Encyclopedia.js'
 import { regenerateMap } from './map.js'
+import { 
+  toggleTerrainWireframe,
+  isTerrainWireframeVisible,
+} from './TerrainMesher.js'
 
 const keys = {
   w: false,
@@ -84,12 +88,17 @@ export function initControls() {
         }
         break
       
-      // P = Toggle Physics/Collider wireframe
+      // P = Toggle Physics/Collider wireframes (BOTH player AND terrain)
       case 'KeyP':
-        const wireframeOn = toggleWireframe()
+        // Toggle player wireframe
+        const playerWireframeOn = toggleWireframe()
+        
+        // Toggle terrain wireframe (sync with player wireframe state)
+        toggleTerrainWireframe()
+        
         showNotification(
-          `Collider wireframe: ${wireframeOn ? 'ON' : 'OFF'}`,
-          wireframeOn ? '#00ff00' : '#ff6600'
+          `Collision wireframes: ${playerWireframeOn ? 'ON' : 'OFF'}`,
+          playerWireframeOn ? '#00ff00' : '#ff6600'
         )
         break
     }
