@@ -10,7 +10,7 @@
 import * as THREE from 'three'
 import { createBoulder, BoulderType } from './Boulders.js'
 import { createCoral } from './Corals.js'
-import { createKelpCluster, ClusterPreset, cullKelpInBoulders } from './Kelp.js'
+import { createKelpCluster, ScalePreset, cullKelpInBoulders, previewScale } from './Kelp.js'
 
 // ============================================================================
 // SEEDED RANDOM HELPERS
@@ -109,22 +109,22 @@ const SPAWN_SETTINGS = {
     boulder: { count: 12, minSize: 5, maxSize: 20 },
   },
   [RegionType.KELP_FOREST]: {
-    kelpClusters: [
-      { preset: 'SEAGRASS_SMALL', weight: 2 },
-      { preset: 'KELP_SMALL', weight: 2 },
-      { preset: 'KELP_MEDIUM', weight: 3 },
-      { preset: 'KELP_LARGE', weight: 2 },
-      { preset: 'KELP_HUGE', weight: 1 },
+    kelpScales: [
+      { scale: 0.5, weight: 2 },   // Small seagrass
+      { scale: 1.0, weight: 2 },   // Small kelp
+      { scale: 1.5, weight: 3 },   // Medium kelp
+      { scale: 2.5, weight: 2 },   // Large kelp
+      { scale: 4.0, weight: 1 },   // Huge kelp
     ],
     totalClusters: 6,
     coral: { count: 2, minSize: 3, maxSize: 10 },
     boulder: { count: 3, minSize: 2, maxSize: 8 },
   },
   [RegionType.SEAGRASS_MEADOW]: {
-    kelpClusters: [
-      { preset: 'SEAGRASS_TINY', weight: 3 },
-      { preset: 'SEAGRASS_SMALL', weight: 4 },
-      { preset: 'SEAGRASS_MEDIUM', weight: 2 },
+    kelpScales: [
+      { scale: 0.3, weight: 3 },   // Tiny seagrass
+      { scale: 0.5, weight: 4 },   // Small seagrass
+      { scale: 0.8, weight: 2 },   // Medium seagrass
     ],
     totalClusters: 10,
     coral: { count: 1, minSize: 2, maxSize: 6 },
@@ -217,7 +217,7 @@ function spawnRegionContent(region, options = {}) {
   // Scale counts by density (handle optional spawn types)
   const coralCount = settings.coral ? Math.floor(settings.coral.count * region.density) : 0
   const boulderCount = settings.boulder ? Math.floor(settings.boulder.count * region.density) : 0
-  const kelpClusterTotal = settings.kelpClusters ? Math.floor(settings.totalClusters * region.density) : 0
+  const kelpClusterTotal = settings.kelpScales ? Math.floor(settings.totalClusters * region.density) : 0
   
   // =========================================================================
   // SPAWN BOULDERS FIRST (so we can cull corals/kelp against them)
@@ -425,92 +425,85 @@ function spawnRegionContent(region, options = {}) {
   // =========================================================================
   // SPAWN KELP CLUSTERS (if this region has kelp)
   // =========================================================================
-  if (kelpClusterTotal > 0 && settings.kelpClusters) {
-    // Build weighted preset list
-    const weightedPresets = []
-    for (const { preset, weight } of settings.kelpClusters) {
-      const presetObj = ClusterPreset[preset]
-      if (presetObj) {
-        for (let w = 0; w < weight; w++) {
-          weightedPresets.push(presetObj)
-        }
+  if (kelpClusterTotal > 0 && settings.kelpScales) {
+    // Build weighted scale list
+    const weightedScales = []
+    for (const { scale, weight } of settings.kelpScales) {
+      for (let w = 0; w < weight; w++) {
+        weightedScales.push(scale)
       }
     }
     
-    if (weightedPresets.length === 0) {
-      console.warn(`No valid kelp presets for region ${region.type}`)
-    } else {
-      const clusterPositions = []
+    const clusterPositions = []
+    
+    for (let i = 0; i < kelpClusterTotal; i++) {
+      // Pick random scale from weighted list
+      const scale = weightedScales[Math.floor(rng() * weightedScales.length)]
+      const scaled = previewScale(scale)
+      const minSpacing = scaled.radius * 2 + 2
       
-      for (let i = 0; i < kelpClusterTotal; i++) {
-        // Pick random preset from weighted list
-        const preset = weightedPresets[Math.floor(rng() * weightedPresets.length)]
-        const avgRadius = (preset.radius.min + preset.radius.max) / 2
-        const minSpacing = avgRadius * 2 + 3
+      // Find position
+      let x, z
+      let attempts = 0
+      const maxAttempts = 20
+      
+      do {
+        const angle = rng() * Math.PI * 2
+        const dist = Math.pow(rng(), 0.5) * region.radius * 0.85
+        x = region.x + Math.cos(angle) * dist
+        z = region.z + Math.sin(angle) * dist
+        attempts++
         
-        // Find position
-        let x, z
-        let attempts = 0
-        const maxAttempts = 20
+        // Check spacing from other clusters
+        let tooClose = false
+        for (const pos of clusterPositions) {
+          const dx = x - pos.x
+          const dz = z - pos.z
+          if (Math.sqrt(dx * dx + dz * dz) < minSpacing + pos.radius) {
+            tooClose = true
+            break
+          }
+        }
         
-        do {
-          const angle = rng() * Math.PI * 2
-          const dist = Math.pow(rng(), 0.5) * region.radius * 0.85
-          x = region.x + Math.cos(angle) * dist
-          z = region.z + Math.sin(angle) * dist
-          attempts++
-          
-          // Check spacing from other clusters
-          let tooClose = false
-          for (const pos of clusterPositions) {
-            const dx = x - pos.x
-            const dz = z - pos.z
-            if (Math.sqrt(dx * dx + dz * dz) < minSpacing + pos.radius) {
+        // Check if inside a boulder
+        if (!tooClose) {
+          for (const boulder of allBoulders) {
+            const bx = boulder.x ?? 0
+            const bz = boulder.z ?? 0
+            const bSize = boulder.size ?? 1
+            
+            const dx = x - bx
+            const dz = z - bz
+            if (Math.sqrt(dx * dx + dz * dz) < bSize + scaled.radius + 2) {
               tooClose = true
               break
             }
           }
-          
-          // Check if inside a boulder
-          if (!tooClose) {
-            for (const boulder of allBoulders) {
-              const bx = boulder.x ?? 0
-              const bz = boulder.z ?? 0
-              const bSize = boulder.size ?? 1
-              
-              const dx = x - bx
-              const dz = z - bz
-              if (Math.sqrt(dx * dx + dz * dz) < bSize + avgRadius + 2) {
-                tooClose = true
-                break
-              }
-            }
-          }
-          
-          if (!tooClose) break
-        } while (attempts < maxAttempts)
+        }
         
-        if (attempts >= maxAttempts) continue
-        
-        const cluster = createKelpCluster({
-          preset,
-          seed: seed + i * 5555 + region.x,
-          getTerrainHeight: (lx, lz) => getTerrainHeight ? getTerrainHeight(x + lx, z + lz) : 0,
-        })
-        
-        cluster.position.set(x, 0, z)
-        cluster.userData.regionType = region.type
-        
-        clusterPositions.push({ x, z, radius: avgRadius })
-        group.add(cluster)
-      }
+        if (!tooClose) break
+      } while (attempts < maxAttempts)
       
-      if (clusterPositions.length > 0) {
-        const totalPlants = group.children
-          .filter(c => c.userData?.terrainType === 'kelpCluster')
-          .reduce((sum, c) => sum + (c.userData?.plantCount || 0), 0)
-        console.log(`Region ${region.type}: spawned ${clusterPositions.length} kelp clusters (${totalPlants} plants)`)
-      }
+      if (attempts >= maxAttempts) continue
+      
+      const cluster = createKelpCluster({
+        scale,
+        seed: seed + i * 5555 + region.x,
+        getTerrainHeight: (lx, lz) => getTerrainHeight ? getTerrainHeight(x + lx, z + lz) : 0,
+      })
+      
+      cluster.position.set(x, 0, z)
+      cluster.userData.regionType = region.type
+      
+      clusterPositions.push({ x, z, radius: scaled.radius })
+      group.add(cluster)
+    }
+    
+    if (clusterPositions.length > 0) {
+      const totalPlants = group.children
+        .filter(c => c.userData?.terrainType === 'kelpCluster')
+        .reduce((sum, c) => sum + (c.userData?.plantCount || 0), 0)
+      console.log(`Region ${region.type}: spawned ${clusterPositions.length} kelp clusters (${totalPlants} plants)`)
     }
   }
   

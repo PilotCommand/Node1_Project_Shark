@@ -2,7 +2,7 @@
  * Kelp.js - Kelp and seagrass generation
  * 
  * Each kelp is a single continuous ribbon.
- * Multiple size presets from tiny seagrass to colossal kelp forests.
+ * Scale factor controls all parameters together.
  */
 
 import * as THREE from 'three'
@@ -15,7 +15,7 @@ export const KelpConfig = {
   
   // === RIBBON SHAPE ===
   ribbon: {
-    width: 0.35,           // Base width
+    baseWidth: 0.25,       // Width at scale 1
     taperAmount: 0.75,     // 0 = no taper, 1 = point at top
     segments: 14,          // Geometry detail
   },
@@ -43,93 +43,69 @@ export const KelpConfig = {
     0x5a7a4a,  // Medium green
     0x3a5c32,  // Deep green
   ],
+  
+  // === BASE VALUES (at scale = 1) ===
+  base: {
+    count: 10,             // Plants per cluster at scale 1
+    radius: 3,             // Cluster radius at scale 1
+    height: 15,            // Kelp height at scale 1
+    spacing: 0.5,          // Min spacing at scale 1
+  },
+  
+  // === SCALING EXPONENTS (how fast each grows with scale) ===
+  // Value of 1.0 = linear scaling
+  // Value of 0.5 = square root scaling (slower)
+  // Value of 2.0 = quadratic scaling (faster)
+  scaling: {
+    count: 1.8,            // Count grows fast with scale
+    radius: 0.7,           // Radius grows slower (keeps density)
+    height: 0.5,           // Height grows slowest
+    spacing: 0.3,          // Spacing grows very slow
+    width: 0.4,            // Ribbon width grows slow
+  },
+  
+  // === VARIATION ===
+  variation: {
+    height: 0.3,           // Height randomness within cluster
+    countRange: 0.2,       // Count varies ±20%
+  },
 }
 
 // ============================================================================
-// CLUSTER PRESETS - EDIT THESE FOR DIFFERENT SIZES
+// SCALE PRESETS - EDIT THESE
 // ============================================================================
 
-export const ClusterPreset = {
+export const ScalePreset = {
+  // Tiny seagrass
+  SEAGRASS_TINY:    0.3,
+  SEAGRASS_SMALL:   0.5,
+  SEAGRASS_MEDIUM:  0.8,
   
-  // Tiny seagrass patch
-  SEAGRASS_TINY: {
-    name: 'seagrass_tiny',
-    count: { min: 3, max: 6 },
-    radius: { min: 1, max: 2 },
-    height: { min: 2, max: 5 },
-    spacing: 0.3,
-    heightVariation: 0.3,
-  },
+  // Kelp sizes
+  KELP_SMALL:       1.0,
+  KELP_MEDIUM:      1.5,
+  KELP_LARGE:       2.5,
+  KELP_HUGE:        4.0,
+  KELP_COLOSSAL:    6.0,
+  KELP_MEGA:        8.0,
+}
+
+// ============================================================================
+// HELPER: Calculate scaled values
+// ============================================================================
+
+function getScaledValues(scale) {
+  const cfg = KelpConfig
+  const base = cfg.base
+  const exp = cfg.scaling
   
-  // Small seagrass cluster
-  SEAGRASS_SMALL: {
-    name: 'seagrass_small',
-    count: { min: 5, max: 10 },
-    radius: { min: 1.5, max: 3 },
-    height: { min: 3, max: 8 },
-    spacing: 0.35,
-    heightVariation: 0.35,
-  },
-  
-  // Medium seagrass patch
-  SEAGRASS_MEDIUM: {
-    name: 'seagrass_medium',
-    count: { min: 10, max: 20 },
-    radius: { min: 2, max: 4 },
-    height: { min: 4, max: 10 },
-    spacing: 0.4,
-    heightVariation: 0.3,
-  },
-  
-  // Small kelp cluster
-  KELP_SMALL: {
-    name: 'kelp_small',
-    count: { min: 8, max: 15 },
-    radius: { min: 2, max: 4 },
-    height: { min: 12, max: 25 },
-    spacing: 0.5,
-    heightVariation: 0.3,
-  },
-  
-  // Medium kelp cluster
-  KELP_MEDIUM: {
-    name: 'kelp_medium',
-    count: { min: 15, max: 30 },
-    radius: { min: 4, max: 7 },
-    height: { min: 20, max: 40 },
-    spacing: 0.6,
-    heightVariation: 0.35,
-  },
-  
-  // Large kelp forest
-  KELP_LARGE: {
-    name: 'kelp_large',
-    count: { min: 35, max: 55 },
-    radius: { min: 6, max: 10 },
-    height: { min: 25, max: 50 },
-    spacing: 0.7,
-    heightVariation: 0.3,
-  },
-  
-  // Huge kelp forest
-  KELP_HUGE: {
-    name: 'kelp_huge',
-    count: { min: 55, max: 80 },
-    radius: { min: 10, max: 15 },
-    height: { min: 30, max: 55 },
-    spacing: 0.8,
-    heightVariation: 0.35,
-  },
-  
-  // Colossal kelp forest
-  KELP_COLOSSAL: {
-    name: 'kelp_colossal',
-    count: { min: 80, max: 120 },
-    radius: { min: 12, max: 20 },
-    height: { min: 35, max: 60 },
-    spacing: 0.9,
-    heightVariation: 0.4,
-  },
+  return {
+    count: Math.round(base.count * Math.pow(scale, exp.count)),
+    radius: base.radius * Math.pow(scale, exp.radius),
+    height: base.height * Math.pow(scale, exp.height),
+    spacing: base.spacing * Math.pow(scale, exp.spacing),
+    width: cfg.ribbon.baseWidth * Math.pow(scale, exp.width),
+  }
 }
 
 // ============================================================================
@@ -149,10 +125,6 @@ function range(rng, min, max) {
   return min + rng() * (max - min)
 }
 
-function rangeInt(rng, min, max) {
-  return Math.floor(range(rng, min, max + 1))
-}
-
 function pick(rng, arr) {
   return arr[Math.floor(rng() * arr.length)]
 }
@@ -161,7 +133,7 @@ function pick(rng, arr) {
 // RIBBON GEOMETRY
 // ============================================================================
 
-function createRibbonGeometry(height, rng) {
+function createRibbonGeometry(height, width, rng) {
   const cfg = KelpConfig
   const segments = cfg.ribbon.segments
   
@@ -174,18 +146,18 @@ function createRibbonGeometry(height, rng) {
   const waveDir = rng() * Math.PI * 2
   const twistDir = (rng() - 0.5) * 2
   
-  // Scale wave amount with height (taller = more wave)
-  const heightFactor = Math.min(height / 30, 1.5)
+  // Scale wave with height
+  const heightFactor = Math.min(height / 20, 1.5)
   const waveAmount = cfg.wave.amount * heightFactor
   
   for (let i = 0; i <= segments; i++) {
     const t = i / segments
     const y = t * height
     
-    // Width (tapers toward top)
-    const width = cfg.ribbon.width * (1 - t * cfg.ribbon.taperAmount)
+    // Taper width
+    const w = width * (1 - t * cfg.ribbon.taperAmount)
     
-    // Wave (increases toward top)
+    // Wave
     const waveStrength = t * t * waveAmount
     const wave = Math.sin(t * Math.PI * cfg.wave.frequency + wavePhase) * waveStrength
     const waveX = Math.cos(waveDir) * wave
@@ -195,11 +167,9 @@ function createRibbonGeometry(height, rng) {
     const twist = t * cfg.wave.twist * twistDir
     const cosT = Math.cos(twist)
     const sinT = Math.sin(twist)
-    const halfW = width / 2
+    const halfW = w / 2
     
-    // Left vertex
     vertices.push(-halfW * cosT + waveX, y, -halfW * sinT + waveZ)
-    // Right vertex
     vertices.push(halfW * cosT + waveX, y, halfW * sinT + waveZ)
     
     normals.push(0, 0, 1, 0, 0, 1)
@@ -230,12 +200,14 @@ function createRibbonGeometry(height, rng) {
  * Create a single kelp ribbon
  * @param {object} options
  * @param {number} [options.height] - Kelp height
+ * @param {number} [options.width] - Ribbon width
  * @param {number} [options.seed] - Random seed
  * @param {number} [options.color] - Override color (hex)
  */
 export function createKelp(options = {}) {
   const {
-    height = 20,
+    height = 15,
+    width = KelpConfig.ribbon.baseWidth,
     seed = null,
     color = null,
   } = options
@@ -254,8 +226,7 @@ export function createKelp(options = {}) {
     hsl.l * (0.85 + rng() * 0.3)
   )
   
-  // Geometry & Material
-  const geometry = createRibbonGeometry(height, rng)
+  const geometry = createRibbonGeometry(height, width, rng)
   const material = new THREE.MeshStandardMaterial({
     color: kelpColor,
     roughness: cfg.material.roughness,
@@ -275,48 +246,43 @@ export function createKelp(options = {}) {
 }
 
 /**
- * Create a kelp cluster using a preset
+ * Create a kelp cluster with scale factor
  * @param {object} options
- * @param {object} [options.preset] - ClusterPreset (default: KELP_MEDIUM)
- * @param {number} [options.count] - Override count
- * @param {number} [options.radius] - Override radius
- * @param {number} [options.height] - Override base height
+ * @param {number} [options.scale] - Scale factor (0.3 = tiny seagrass, 6.0 = colossal)
  * @param {number} [options.seed] - Random seed
  * @param {function} [options.getTerrainHeight] - Height function (x, z) => y
  * @param {number} [options.baseY] - Base Y if no height function
  */
 export function createKelpCluster(options = {}) {
   const {
-    preset = ClusterPreset.KELP_MEDIUM,
-    count = null,
-    radius = null,
-    height = null,
+    scale = 1.0,
     seed = null,
     getTerrainHeight = null,
     baseY = 0,
   } = options
   
   const rng = seed !== null ? createRNG(seed) : Math.random
+  const cfg = KelpConfig
   
-  // Resolve values from preset or overrides
-  const clusterCount = count ?? rangeInt(rng, preset.count.min, preset.count.max)
-  const clusterRadius = radius ?? range(rng, preset.radius.min, preset.radius.max)
-  const baseHeight = height ?? range(rng, preset.height.min, preset.height.max)
-  const spacing = preset.spacing
-  const heightVar = preset.heightVariation
+  // Get scaled values
+  const scaled = getScaledValues(scale)
+  
+  // Apply count variation
+  const countVar = cfg.variation.countRange
+  const count = Math.round(scaled.count * (1 + (rng() - 0.5) * countVar * 2))
   
   const group = new THREE.Group()
   const placed = []
   
   // Cluster color
-  const clusterColor = pick(rng, KelpConfig.colors)
+  const clusterColor = pick(rng, cfg.colors)
   
-  for (let i = 0; i < clusterCount; i++) {
+  for (let i = 0; i < count; i++) {
     let x, z, attempts = 0
     
     do {
       const angle = rng() * Math.PI * 2
-      const dist = Math.pow(rng(), 0.7) * clusterRadius
+      const dist = Math.pow(rng(), 0.7) * scaled.radius
       x = Math.cos(angle) * dist
       z = Math.sin(angle) * dist
       attempts++
@@ -324,7 +290,7 @@ export function createKelpCluster(options = {}) {
       let ok = true
       for (const p of placed) {
         const dx = x - p.x, dz = z - p.z
-        if (Math.sqrt(dx*dx + dz*dz) < spacing) {
+        if (Math.sqrt(dx*dx + dz*dz) < scaled.spacing) {
           ok = false
           break
         }
@@ -333,7 +299,11 @@ export function createKelpCluster(options = {}) {
     } while (attempts < 30)
     
     // Height variation
-    const h = baseHeight * (1 + (rng() - 0.5) * heightVar * 2)
+    const heightVar = cfg.variation.height
+    const h = scaled.height * (1 + (rng() - 0.5) * heightVar * 2)
+    
+    // Width matches scale
+    const w = scaled.width * (0.8 + rng() * 0.4)
     
     // Color variation
     const colorVar = new THREE.Color(clusterColor)
@@ -343,6 +313,7 @@ export function createKelpCluster(options = {}) {
     
     const kelp = createKelp({
       height: h,
+      width: w,
       seed: seed ? seed + i * 777 : null,
       color: colorVar.getHex(),
     })
@@ -355,30 +326,31 @@ export function createKelpCluster(options = {}) {
   }
   
   group.userData.terrainType = 'kelpCluster'
-  group.userData.presetName = preset.name
+  group.userData.scale = scale
   group.userData.plantCount = group.children.length
+  group.userData.radius = scaled.radius
   
   return group
 }
 
 /**
- * Create a kelp forest with multiple clusters of varying sizes
+ * Create a kelp forest with multiple clusters
  * @param {object} options
  * @param {number} [options.forestRadius] - Forest spread
- * @param {Array} [options.presets] - Array of { preset, weight } to spawn
- * @param {number} [options.totalClusters] - Total clusters to spawn
+ * @param {Array} [options.scales] - Array of { scale, weight } to spawn
+ * @param {number} [options.totalClusters] - Total clusters
  * @param {number} [options.seed] - Random seed
  * @param {function} [options.getTerrainHeight] - Height function
  * @param {number} [options.baseY] - Base Y
  */
 export function createKelpForest(options = {}) {
   const {
-    forestRadius = 40,
-    presets = [
-      { preset: ClusterPreset.SEAGRASS_SMALL, weight: 3 },
-      { preset: ClusterPreset.KELP_SMALL, weight: 2 },
-      { preset: ClusterPreset.KELP_MEDIUM, weight: 2 },
-      { preset: ClusterPreset.KELP_LARGE, weight: 1 },
+    forestRadius = 50,
+    scales = [
+      { scale: ScalePreset.SEAGRASS_SMALL, weight: 2 },
+      { scale: ScalePreset.KELP_SMALL, weight: 3 },
+      { scale: ScalePreset.KELP_MEDIUM, weight: 2 },
+      { scale: ScalePreset.KELP_LARGE, weight: 1 },
     ],
     totalClusters = 8,
     seed = null,
@@ -390,21 +362,18 @@ export function createKelpForest(options = {}) {
   const group = new THREE.Group()
   
   // Build weighted list
-  const weightedPresets = []
-  for (const { preset, weight } of presets) {
-    for (let i = 0; i < weight; i++) {
-      weightedPresets.push(preset)
-    }
+  const weighted = []
+  for (const { scale, weight } of scales) {
+    for (let i = 0; i < weight; i++) weighted.push(scale)
   }
   
   const positions = []
   
   for (let i = 0; i < totalClusters; i++) {
-    // Pick random preset
-    const preset = pick(rng, weightedPresets)
-    const minSpacing = (preset.radius.max + preset.radius.min) / 2 + 2
+    const scale = pick(rng, weighted)
+    const scaled = getScaledValues(scale)
+    const minSpacing = scaled.radius * 2 + 2
     
-    // Find position
     let x, z, attempts = 0
     do {
       const angle = rng() * Math.PI * 2
@@ -425,7 +394,7 @@ export function createKelpForest(options = {}) {
     } while (attempts < 25)
     
     const cluster = createKelpCluster({
-      preset,
+      scale,
       seed: seed ? seed + i * 999 : null,
       getTerrainHeight: getTerrainHeight
         ? (lx, lz) => getTerrainHeight(x + lx, z + lz)
@@ -434,7 +403,7 @@ export function createKelpForest(options = {}) {
     })
     
     cluster.position.set(x, 0, z)
-    positions.push({ x, z, radius: cluster.userData.plantCount * 0.3 })
+    positions.push({ x, z, radius: scaled.radius })
     group.add(cluster)
   }
   
@@ -448,53 +417,43 @@ export function createKelpForest(options = {}) {
 // SHORTHAND CREATORS
 // ============================================================================
 
-/** Create tiny seagrass patch (3-6 plants) */
-export function createSeagrassTiny(options = {}) {
-  return createKelpCluster({ ...options, preset: ClusterPreset.SEAGRASS_TINY })
-}
+export const createSeagrassTiny = (opts = {}) => 
+  createKelpCluster({ ...opts, scale: ScalePreset.SEAGRASS_TINY })
 
-/** Create small seagrass cluster (5-10 plants) */
-export function createSeagrassSmall(options = {}) {
-  return createKelpCluster({ ...options, preset: ClusterPreset.SEAGRASS_SMALL })
-}
+export const createSeagrassSmall = (opts = {}) => 
+  createKelpCluster({ ...opts, scale: ScalePreset.SEAGRASS_SMALL })
 
-/** Create medium seagrass patch (10-20 plants) */
-export function createSeagrassMedium(options = {}) {
-  return createKelpCluster({ ...options, preset: ClusterPreset.SEAGRASS_MEDIUM })
-}
+export const createSeagrassMedium = (opts = {}) => 
+  createKelpCluster({ ...opts, scale: ScalePreset.SEAGRASS_MEDIUM })
 
-/** Create small kelp cluster (8-15 plants) */
-export function createKelpSmall(options = {}) {
-  return createKelpCluster({ ...options, preset: ClusterPreset.KELP_SMALL })
-}
+export const createKelpSmall = (opts = {}) => 
+  createKelpCluster({ ...opts, scale: ScalePreset.KELP_SMALL })
 
-/** Create medium kelp cluster (15-30 plants) */
-export function createKelpMedium(options = {}) {
-  return createKelpCluster({ ...options, preset: ClusterPreset.KELP_MEDIUM })
-}
+export const createKelpMedium = (opts = {}) => 
+  createKelpCluster({ ...opts, scale: ScalePreset.KELP_MEDIUM })
 
-/** Create large kelp forest (35-55 plants) */
-export function createKelpLarge(options = {}) {
-  return createKelpCluster({ ...options, preset: ClusterPreset.KELP_LARGE })
-}
+export const createKelpLarge = (opts = {}) => 
+  createKelpCluster({ ...opts, scale: ScalePreset.KELP_LARGE })
 
-/** Create huge kelp forest (55-80 plants) */
-export function createKelpHuge(options = {}) {
-  return createKelpCluster({ ...options, preset: ClusterPreset.KELP_HUGE })
-}
+export const createKelpHuge = (opts = {}) => 
+  createKelpCluster({ ...opts, scale: ScalePreset.KELP_HUGE })
 
-/** Create colossal kelp forest (80-120 plants) */
-export function createKelpColossal(options = {}) {
-  return createKelpCluster({ ...options, preset: ClusterPreset.KELP_COLOSSAL })
-}
+export const createKelpColossal = (opts = {}) => 
+  createKelpCluster({ ...opts, scale: ScalePreset.KELP_COLOSSAL })
+
+export const createKelpMega = (opts = {}) => 
+  createKelpCluster({ ...opts, scale: ScalePreset.KELP_MEGA })
 
 // ============================================================================
 // UTILITIES
 // ============================================================================
 
-/**
- * Cull kelp inside boulders
- */
+/** Get what values a scale produces (for debugging/tuning) */
+export function previewScale(scale) {
+  return getScaledValues(scale)
+}
+
+/** Cull kelp inside boulders */
 export function cullKelpInBoulders(kelpGroup, boulders) {
   if (!boulders?.length) return 0
   
@@ -540,7 +499,8 @@ export function cullKelpInBoulders(kelpGroup, boulders) {
 
 export default {
   KelpConfig,
-  ClusterPreset,
+  ScalePreset,
+  previewScale,
   createKelp,
   createKelpCluster,
   createKelpForest,
@@ -552,5 +512,6 @@ export default {
   createKelpLarge,
   createKelpHuge,
   createKelpColossal,
+  createKelpMega,
   cullKelpInBoulders,
 }

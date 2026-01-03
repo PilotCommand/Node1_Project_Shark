@@ -5,7 +5,8 @@ import {
   createWaterSurface,
 } from './TerrainMaker.js'
 import { createBoulder, BoulderType } from './Boulders.js'
-import { spawnAllRegions } from './Regions.js'
+import { createCoral } from './Corals.js'
+import { createKelpCluster, previewScale } from './Kelp.js'
 import { MeshRegistry, Category, Tag } from './MeshRegistry.js'
 
 // Default map seed (can be overridden for multiplayer sync)
@@ -16,22 +17,106 @@ let currentScene = null
 let currentSeed = DEFAULT_SEED
 
 // =============================================================================
-// BOULDER SCALE CONFIG - EDIT HERE
+// POLAR COORDINATE MAP LAYOUT
 // =============================================================================
+// The map uses concentric rings emanating from center (0,0)
+// 
 // Player = 2 units tall
 //
 // SIZE GUIDE:    1 = basketball    |  5 = car        |  70 = skyscraper
 //                2 = person        |  15 = house     |  100 = mountain
 //                4 = large rock    |  35 = building  |
+//
+// RING LAYOUT:
+//   CENTER (r < 150)      → Titan & Colossal boulders (rocky core)
+//   MIDDLE (150 < r < 350) → Large & Medium boulders (transition)
+//   OUTER  (r > 350)       → Small boulders + Kelp + Coral (living reef)
 // =============================================================================
 
-const BOULDER_CONFIG = {
-//  Category     count   minSize   maxSize   spreadRadius   buriedFactor
-    titan:     { count: 2,   minSize: 70,  maxSize: 100, spreadRadius: 350, buriedFactor: 0.50 },
-    colossal:  { count: 4,   minSize: 35,  maxSize: 60,  spreadRadius: 400, buriedFactor: 0.45 },
-    large:     { count: 12,  minSize: 15,  maxSize: 30,  spreadRadius: 420, buriedFactor: 0.40 },
-    medium:    { count: 30,  minSize: 5,   maxSize: 12,  spreadRadius: 450, buriedFactor: 0.35 },
-    small:     { count: 50,  minSize: 1.5, maxSize: 4,   spreadRadius: 480, buriedFactor: 0.30 },
+const BOULDER_RINGS = [
+  // Inner ring - massive boulders dominate the center
+  {
+    name: 'titan',
+    innerRadius: 0,
+    outerRadius: 120,
+    count: 3,
+    minSize: 70,
+    maxSize: 100,
+    buriedFactor: 0.50,
+    scaleVariation: 0.5,
+  },
+  {
+    name: 'colossal',
+    innerRadius: 50,
+    outerRadius: 180,
+    count: 6,
+    minSize: 35,
+    maxSize: 60,
+    buriedFactor: 0.45,
+    scaleVariation: 0.4,
+  },
+  // Middle ring - transitional rocky area
+  {
+    name: 'large',
+    innerRadius: 120,
+    outerRadius: 320,
+    count: 15,
+    minSize: 15,
+    maxSize: 30,
+    buriedFactor: 0.40,
+    scaleVariation: 0.35,
+  },
+  {
+    name: 'medium',
+    innerRadius: 200,
+    outerRadius: 400,
+    count: 35,
+    minSize: 5,
+    maxSize: 12,
+    buriedFactor: 0.35,
+    scaleVariation: 0.3,
+  },
+  // Outer ring - scattered small rocks among life
+  {
+    name: 'small',
+    innerRadius: 320,
+    outerRadius: 480,
+    count: 50,
+    minSize: 1.5,
+    maxSize: 4,
+    buriedFactor: 0.30,
+    scaleVariation: 0.25,
+  },
+]
+
+// =============================================================================
+// OUTER RING LIFE CONFIG - Kelp & Coral in the outer zone
+// =============================================================================
+
+const LIFE_RING = {
+  innerRadius: 200,
+  outerRadius: 480,
+  
+  // Kelp forest clusters
+  kelp: {
+    clusterCount: 20,
+    scales: [
+      { scale: 0.5, weight: 2 },   // Small seagrass
+      { scale: 1.0, weight: 3 },   // Small kelp
+      { scale: 1.5, weight: 4 },   // Medium kelp (most common)
+      { scale: 2.5, weight: 3 },   // Large kelp
+      { scale: 4.0, weight: 2 },   // Huge kelp
+    ],
+    minSpacing: 15,  // Minimum distance between clusters
+  },
+  
+  // Coral reef clusters
+  coral: {
+    clusterCount: 25,
+    minSize: 8,
+    maxSize: 40,
+    minSpacing: 12,
+  },
 }
 
 // =============================================================================
@@ -62,7 +147,7 @@ export function createMap(scene, seed = DEFAULT_SEED) {
   // Ocean floor (sand) with Perlin terrain
   const floor = createSandFloor({
     size: mapSize,
-    segments: 200,  // Higher detail for exaggerated terrain
+    segments: 200,
     seed: seed,
   })
   floor.position.y = floorY
@@ -80,120 +165,85 @@ export function createMap(scene, seed = DEFAULT_SEED) {
     }
   }, true)
 
-  // Spawn boulders of all sizes
-  const rng = createSeededRNG(seed + 9999)
+  // Get terrain data for height lookups
   const terrainData = floor.userData.terrainData
+  const getHeight = (x, z) => {
+    const terrainY = terrainData.getHeightAtWorld(x, z) ?? 0
+    return floorY + terrainY
+  }
+
+  // ==========================================================================
+  // SPAWN BOULDERS IN POLAR RINGS (center = largest, outer = smallest)
+  // ==========================================================================
+  const rng = createSeededRNG(seed + 9999)
   let boulderIndex = 0
-  
-  // Store all boulders for containment check
   const allBoulders = []
   
-  // Helper to spawn a category of boulders
-  const spawnBoulderCategory = (config, categoryName) => {
-    for (let i = 0; i < config.count; i++) {
+  for (const ring of BOULDER_RINGS) {
+    for (let i = 0; i < ring.count; i++) {
       // Weighted size - bias toward smaller within range
-      const sizeT = Math.pow(rng(), 1.5)  // Skew toward smaller
-      const size = config.minSize + sizeT * (config.maxSize - config.minSize)
+      const sizeT = Math.pow(rng(), 1.5)
+      const size = ring.minSize + sizeT * (ring.maxSize - ring.minSize)
       
       const rock = createBoulder({
         size: size,
         type: BoulderType.RANDOM,
         seed: seed + boulderIndex * 3000,
-        scaleVariation: categoryName === 'titan' ? 0.5 : 
-                        categoryName === 'colossal' ? 0.4 : 0.3,
+        scaleVariation: ring.scaleVariation,
       })
       
-      // Random XZ position within spread radius
+      // POLAR COORDINATES: random angle, random radius within ring
       const angle = rng() * Math.PI * 2
-      const distance = rng() * config.spreadRadius
-      const x = Math.cos(angle) * distance
-      const z = Math.sin(angle) * distance
+      const radiusRange = ring.outerRadius - ring.innerRadius
+      // Use sqrt for uniform distribution in circular area
+      const radius = ring.innerRadius + Math.sqrt(rng()) * radiusRange
       
-      // Get terrain height at this position from stored mesh data
+      const x = Math.cos(angle) * radius
+      const z = Math.sin(angle) * radius
+      
+      // Get terrain height at this position
       const terrainY = terrainData.getHeightAtWorld(x, z) ?? 0
       
       rock.position.set(
         x,
-        floorY + terrainY + size * (1 - config.buriedFactor),
+        floorY + terrainY + size * (1 - ring.buriedFactor),
         z
       )
       
-      const registryId = `rock_${categoryName}_${i}`
+      const registryId = `rock_${ring.name}_${i}`
       
-      // Store for containment check
       allBoulders.push({
         mesh: rock,
         size: size,
         registryId: registryId,
-        category: categoryName,
+        category: ring.name,
+        x: x,
+        y: rock.position.y,
+        z: z,
       })
       
       boulderIndex++
     }
   }
   
-  // Spawn all boulder categories
-  spawnBoulderCategory(BOULDER_CONFIG.titan, 'titan')
-  spawnBoulderCategory(BOULDER_CONFIG.colossal, 'colossal')
-  spawnBoulderCategory(BOULDER_CONFIG.large, 'large')
-  spawnBoulderCategory(BOULDER_CONFIG.medium, 'medium')
-  spawnBoulderCategory(BOULDER_CONFIG.small, 'small')
-  
   // Cull boulders completely contained by other boulders
-  const cullContainedBoulders = (boulders) => {
-    const toRemove = new Set()
-    
-    for (let i = 0; i < boulders.length; i++) {
-      if (toRemove.has(i)) continue
-      
-      const a = boulders[i]
-      
-      for (let j = 0; j < boulders.length; j++) {
-        if (i === j || toRemove.has(j)) continue
-        
-        const b = boulders[j]
-        
-        // Check if smaller boulder is contained by larger
-        // Boulder is contained if: distance + smallerRadius < largerRadius
-        const dist = a.mesh.position.distanceTo(b.mesh.position)
-        
-        if (a.size < b.size) {
-          // Check if A is inside B
-          if (dist + a.size < b.size) {
-            toRemove.add(i)
-            break
-          }
-        } else if (b.size < a.size) {
-          // Check if B is inside A
-          if (dist + b.size < a.size) {
-            toRemove.add(j)
-          }
-        }
-      }
-    }
-    
-    return toRemove
-  }
-  
   const containedIndices = cullContainedBoulders(allBoulders)
   let culledCount = 0
   
   // Add surviving boulders to scene and registry
+  const survivingBoulders = []
   for (let i = 0; i < allBoulders.length; i++) {
     const boulder = allBoulders[i]
     
     if (containedIndices.has(i)) {
-      // Dispose of contained boulder
       boulder.mesh.geometry.dispose()
       boulder.mesh.material.dispose()
       culledCount++
       continue
     }
     
-    // Add to scene
     group.add(boulder.mesh)
     
-    // Register
     MeshRegistry.register(boulder.registryId, {
       mesh: boulder.mesh,
       category: Category.MAP,
@@ -204,39 +254,30 @@ export function createMap(scene, seed = DEFAULT_SEED) {
         size: boulder.size,
       }
     })
+    
+    survivingBoulders.push(boulder)
   }
   
   if (culledCount > 0) {
     console.log(`Culled ${culledCount} contained boulders`)
   }
-  
-  // Collect surviving boulders for region coral culling
-  const survivingBoulders = allBoulders
-    .filter((_, i) => !containedIndices.has(i))
-    .map(b => ({
-      mesh: b.mesh,
-      size: b.size,
-      x: b.mesh.position.x,
-      y: b.mesh.position.y,
-      z: b.mesh.position.z,
-    }))
 
-  // Spawn region content (coral reefs, boulder fields, etc.)
-  const regions = spawnAllRegions({
-    getTerrainHeight: (x, z) => terrainData.getHeightAtWorld(x, z) ?? 0,
-    floorY: floorY,
-    seed: seed,
-    globalBoulders: survivingBoulders,
+  // ==========================================================================
+  // SPAWN LIFE RING (Kelp & Coral in outer zone)
+  // ==========================================================================
+  const lifeGroup = spawnLifeRing({
+    rng: createSeededRNG(seed + 7777),
+    getHeight,
+    survivingBoulders,
+    seed,
   })
-  group.add(regions)
+  group.add(lifeGroup)
   
-  MeshRegistry.register('regions', {
-    mesh: regions,
+  MeshRegistry.register('lifeRing', {
+    mesh: lifeGroup,
     category: Category.MAP,
     tags: [Tag.STATIC],
-    metadata: {
-      type: 'regions',
-    }
+    metadata: { type: 'lifeRing' }
   }, true)
 
   // Water surface
@@ -278,10 +319,172 @@ export function createMap(scene, seed = DEFAULT_SEED) {
   return group
 }
 
-/**
- * Regenerate terrain with a new random seed
- * @returns {number} The new seed used
- */
+// =============================================================================
+// LIFE RING SPAWNING - Kelp & Coral in outer zone
+// =============================================================================
+
+function spawnLifeRing({ rng, getHeight, survivingBoulders, seed }) {
+  const group = new THREE.Group()
+  const config = LIFE_RING
+  
+  // Track placed items to avoid overlap
+  const placedItems = []
+  
+  // Helper: check if position conflicts with boulders or other items
+  const isValidPosition = (x, z, radius) => {
+    // Check against boulders
+    for (const boulder of survivingBoulders) {
+      const dx = x - boulder.x
+      const dz = z - boulder.z
+      const dist = Math.sqrt(dx * dx + dz * dz)
+      if (dist < boulder.size + radius + 3) {
+        return false
+      }
+    }
+    
+    // Check against already placed items
+    for (const item of placedItems) {
+      const dx = x - item.x
+      const dz = z - item.z
+      const dist = Math.sqrt(dx * dx + dz * dz)
+      if (dist < item.radius + radius + 2) {
+        return false
+      }
+    }
+    
+    return true
+  }
+  
+  // Helper: find valid position in ring
+  const findPosition = (minSpacing, itemRadius) => {
+    const maxAttempts = 30
+    
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      const angle = rng() * Math.PI * 2
+      const radiusRange = config.outerRadius - config.innerRadius
+      const radius = config.innerRadius + Math.sqrt(rng()) * radiusRange
+      
+      const x = Math.cos(angle) * radius
+      const z = Math.sin(angle) * radius
+      
+      if (isValidPosition(x, z, itemRadius)) {
+        return { x, z }
+      }
+    }
+    
+    return null
+  }
+  
+  // -------------------------------------------------------------------------
+  // SPAWN KELP CLUSTERS
+  // -------------------------------------------------------------------------
+  const kelpConfig = config.kelp
+  
+  // Build weighted scale list
+  const weightedScales = []
+  for (const { scale, weight } of kelpConfig.scales) {
+    for (let w = 0; w < weight; w++) {
+      weightedScales.push(scale)
+    }
+  }
+  
+  let kelpCount = 0
+  for (let i = 0; i < kelpConfig.clusterCount; i++) {
+    // Pick random scale
+    const scale = weightedScales[Math.floor(rng() * weightedScales.length)]
+    const scaled = previewScale(scale)
+    const clusterRadius = scaled.radius + 2
+    
+    const pos = findPosition(kelpConfig.minSpacing, clusterRadius)
+    if (!pos) continue
+    
+    const cluster = createKelpCluster({
+      scale,
+      seed: seed + i * 5555,
+      getTerrainHeight: (lx, lz) => getHeight(pos.x + lx, pos.z + lz),
+    })
+    
+    cluster.position.set(pos.x, 0, pos.z)
+    cluster.userData.ringType = 'kelp'
+    
+    placedItems.push({ x: pos.x, z: pos.z, radius: clusterRadius })
+    group.add(cluster)
+    kelpCount++
+  }
+  
+  // -------------------------------------------------------------------------
+  // SPAWN CORAL CLUSTERS
+  // -------------------------------------------------------------------------
+  const coralConfig = config.coral
+  
+  let coralCount = 0
+  for (let i = 0; i < coralConfig.clusterCount; i++) {
+    const size = coralConfig.minSize + rng() * (coralConfig.maxSize - coralConfig.minSize)
+    const coralRadius = size * 0.6
+    
+    const pos = findPosition(coralConfig.minSpacing, coralRadius)
+    if (!pos) continue
+    
+    const y = getHeight(pos.x, pos.z)
+    
+    const coral = createCoral({
+      size,
+      seed: seed + i * 4444,
+    })
+    
+    coral.position.set(pos.x, y, pos.z)
+    coral.userData.ringType = 'coral'
+    
+    placedItems.push({ x: pos.x, z: pos.z, radius: coralRadius })
+    group.add(coral)
+    coralCount++
+  }
+  
+  console.log(`Life ring: ${kelpCount} kelp clusters, ${coralCount} coral clusters`)
+  
+  group.userData.terrainType = 'lifeRing'
+  return group
+}
+
+// =============================================================================
+// BOULDER CULLING - Remove boulders fully inside others
+// =============================================================================
+
+function cullContainedBoulders(boulders) {
+  const toRemove = new Set()
+  
+  for (let i = 0; i < boulders.length; i++) {
+    if (toRemove.has(i)) continue
+    
+    const a = boulders[i]
+    
+    for (let j = 0; j < boulders.length; j++) {
+      if (i === j || toRemove.has(j)) continue
+      
+      const b = boulders[j]
+      
+      const dist = a.mesh.position.distanceTo(b.mesh.position)
+      
+      if (a.size < b.size) {
+        if (dist + a.size < b.size) {
+          toRemove.add(i)
+          break
+        }
+      } else if (b.size < a.size) {
+        if (dist + b.size < a.size) {
+          toRemove.add(j)
+        }
+      }
+    }
+  }
+  
+  return toRemove
+}
+
+// =============================================================================
+// MAP REGENERATION
+// =============================================================================
+
 export function regenerateMap() {
   if (!currentScene || !currentMapGroup) {
     console.warn('Map not initialized')
@@ -307,7 +510,7 @@ export function regenerateMap() {
   MeshRegistry.unregister('sky')
   MeshRegistry.unregister('floor')
   MeshRegistry.unregister('waterSurface')
-  MeshRegistry.unregister('regions')
+  MeshRegistry.unregister('lifeRing')
   MeshRegistry.unregister('mapGroup')
   
   // Unregister all rocks
@@ -337,7 +540,7 @@ export function getCurrentSeed() {
   return currentSeed
 }
 
-// Simple seeded RNG for boulder placement
+// Simple seeded RNG for deterministic placement
 function createSeededRNG(seed) {
   return function() {
     let t = seed += 0x6D2B79F5

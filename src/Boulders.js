@@ -40,18 +40,16 @@ export const BoulderConfig = {
 
 /**
  * Boulder geometry types
+ * 
+ * Platonic solids limited to dodecahedron (12 faces) as max smoothness.
+ * More organic shapes use convex hull generation.
  */
 export const BoulderType = {
-  // Platonic solids (5 total - all regular convex polyhedra)
+  // Platonic solids (4 types - dodecahedron is the smoothest)
   TETRAHEDRON: 'tetrahedron',     // 4 faces - sharp pyramid
   CUBE: 'cube',                   // 6 faces - blocky
   OCTAHEDRON: 'octahedron',       // 8 faces - diamond shape
-  DODECAHEDRON: 'dodecahedron',   // 12 faces - pentagon faces
-  ICOSAHEDRON: 'icosahedron',     // 20 faces - triangle faces, rounder
-  
-  // Subdivided platonic solids (smoother versions)
-  SMOOTH_ICOSAHEDRON: 'smooth_icosahedron',  // Subdivided - almost spherical
-  SMOOTH_OCTAHEDRON: 'smooth_octahedron',    // Subdivided - rounded diamond
+  DODECAHEDRON: 'dodecahedron',   // 12 faces - pentagon faces (max regular)
   
   // Convex hull shapes (organic irregular)
   BOULDER: 'boulder',             // Irregular rocky shape
@@ -250,53 +248,49 @@ function computeConvexHull(points) {
     for (let f = 0; f < hullFaces.length; f++) {
       const face = hullFaces[f]
       const [a, b, c] = face
+      
+      // Calculate face normal
       const ab = new THREE.Vector3().subVectors(b, a)
       const ac = new THREE.Vector3().subVectors(c, a)
       const normal = new THREE.Vector3().crossVectors(ab, ac)
-      const toPoint = new THREE.Vector3().subVectors(pt, a)
       
-      if (toPoint.dot(normal) > eps) {
+      // Check if point is in front of face
+      const toPoint = new THREE.Vector3().subVectors(pt, a)
+      if (normal.dot(toPoint) > eps) {
         visibleFaces.push(f)
       }
     }
     
-    if (visibleFaces.length === 0) continue  // Point is inside hull
+    if (visibleFaces.length === 0) continue
     
-    // Find boundary edges of visible region
+    // Find boundary edges (edges shared by exactly one visible face)
     const edgeCount = new Map()
     const edgeKey = (a, b) => {
-      const key1 = `${a.x.toFixed(6)},${a.y.toFixed(6)},${a.z.toFixed(6)}-${b.x.toFixed(6)},${b.y.toFixed(6)},${b.z.toFixed(6)}`
-      const key2 = `${b.x.toFixed(6)},${b.y.toFixed(6)},${b.z.toFixed(6)}-${a.x.toFixed(6)},${a.y.toFixed(6)},${a.z.toFixed(6)}`
-      return [key1, key2]
+      const ka = `${a.x.toFixed(6)},${a.y.toFixed(6)},${a.z.toFixed(6)}`
+      const kb = `${b.x.toFixed(6)},${b.y.toFixed(6)},${b.z.toFixed(6)}`
+      return ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`
     }
     
     for (const f of visibleFaces) {
       const [a, b, c] = hullFaces[f]
       const edges = [[a, b], [b, c], [c, a]]
       for (const [ea, eb] of edges) {
-        const [k1, k2] = edgeKey(ea, eb)
-        edgeCount.set(k1, (edgeCount.get(k1) || 0) + 1)
-        edgeCount.set(k2, (edgeCount.get(k2) || 0) + 1)
-      }
-    }
-    
-    // Boundary edges appear only once
-    for (const f of visibleFaces) {
-      const [a, b, c] = hullFaces[f]
-      const edges = [[a, b], [b, c], [c, a]]
-      for (const [ea, eb] of edges) {
-        const [k1] = edgeKey(ea, eb)
-        if (edgeCount.get(k1) === 1) {
-          boundaryEdges.push([ea, eb])
+        const key = edgeKey(ea, eb)
+        if (!edgeCount.has(key)) {
+          edgeCount.set(key, { count: 0, edge: [ea, eb] })
         }
+        edgeCount.get(key).count++
       }
     }
     
-    // Remove visible faces (in reverse order to preserve indices)
-    visibleFaces.sort((a, b) => b - a)
-    for (const f of visibleFaces) {
-      hullFaces.splice(f, 1)
+    for (const { count, edge } of edgeCount.values()) {
+      if (count === 1) {
+        boundaryEdges.push(edge)
+      }
     }
+    
+    // Remove visible faces
+    hullFaces = hullFaces.filter((_, idx) => !visibleFaces.includes(idx))
     
     // Add new faces connecting boundary to point
     for (const [ea, eb] of boundaryEdges) {
@@ -323,19 +317,17 @@ function createBoulderGeometry(type, size, rng) {
   // If random, pick a type with weights
   if (type === BoulderType.RANDOM) {
     const types = [
-      // Platonic solids
+      // Platonic solids (dodecahedron is max)
       BoulderType.TETRAHEDRON,
       BoulderType.CUBE,
       BoulderType.OCTAHEDRON,
       BoulderType.DODECAHEDRON,
       BoulderType.DODECAHEDRON,    // Weighted - classic look
-      BoulderType.ICOSAHEDRON,
-      // Smooth variants
-      BoulderType.SMOOTH_ICOSAHEDRON,
-      BoulderType.SMOOTH_OCTAHEDRON,
+      BoulderType.DODECAHEDRON,    // Weighted - most common regular solid
       // Convex hull organic shapes
       BoulderType.BOULDER,
       BoulderType.BOULDER,         // Weighted - natural look
+      BoulderType.BOULDER,
       BoulderType.BOULDER,
       BoulderType.SLAB,
       BoulderType.COLUMN,
@@ -353,7 +345,7 @@ function createBoulderGeometry(type, size, rng) {
   }
   
   switch (type) {
-    // === PLATONIC SOLIDS (5 regular convex polyhedra) ===
+    // === PLATONIC SOLIDS (dodecahedron is max smoothness) ===
     case BoulderType.TETRAHEDRON:
       // 4 triangular faces - sharp pyramid shape
       return new THREE.TetrahedronGeometry(size, 0)
@@ -367,21 +359,8 @@ function createBoulderGeometry(type, size, rng) {
       return new THREE.OctahedronGeometry(size, 0)
     
     case BoulderType.DODECAHEDRON:
-      // 12 pentagonal faces - classic boulder
+      // 12 pentagonal faces - classic boulder (max regular solid)
       return new THREE.DodecahedronGeometry(size, 0)
-    
-    case BoulderType.ICOSAHEDRON:
-      // 20 triangular faces - near-spherical
-      return new THREE.IcosahedronGeometry(size, 0)
-    
-    // === SUBDIVIDED SOLIDS (smoother versions) ===
-    case BoulderType.SMOOTH_ICOSAHEDRON:
-      // Subdivided icosahedron - very smooth, almost spherical
-      return new THREE.IcosahedronGeometry(size, 1)
-    
-    case BoulderType.SMOOTH_OCTAHEDRON:
-      // Subdivided octahedron - rounded diamond
-      return new THREE.OctahedronGeometry(size, 1)
     
     // === CONVEX HULL SHAPES (organic irregular) ===
     case BoulderType.SLAB:
