@@ -1,14 +1,13 @@
 /**
- * TerrainMaker.js - Visual terrain generation
+ * TerrainMaker.js - Terrain generation
  * 
- * Creates all terrain visual meshes. Map.js orchestrates placement,
- * this file handles the mesh creation.
+ * Creates terrain visual meshes (sand floor, water surface, sky dome).
+ * Map.js orchestrates placement.
  * 
- * Future: TerrainCollider.js will scan these for physics.
+ * Boulder/rock generation is in Boulders.js
  * 
  * Preserved from original:
  * - Sand color: 0xffe4b5
- * - Boulder geometry: DodecahedronGeometry
  */
 
 import * as THREE from 'three'
@@ -163,18 +162,11 @@ export const TerrainConfig = {
       { height: -50, color: new THREE.Color(0x1a6b6b) },  // Trench - deep teal
       { height: -25, color: new THREE.Color(0x3d9d94) },  // Deep - teal
       { height: -10, color: new THREE.Color(0x7dbdaf) },  // Mid-deep - turquoise tint
-      { height: 0,   color: new THREE.Color(0xfff5e0) },  // Mid - pale white sand ← PRIORITY
+      { height: 0,   color: new THREE.Color(0xfff5e0) },  // Mid - pale white sand â† PRIORITY
       { height: 15,  color: new THREE.Color(0xfff9ed) },  // Mid-high - lighter sand
       { height: 30,  color: new THREE.Color(0xfffdf7) },  // High - bright sand
       { height: 50,  color: new THREE.Color(0xffffff) },  // Peak - pure white
     ],
-  },
-  
-  // Boulders/Rocks
-  boulder: {
-    color: 0x888888,      // Gray (PRESERVED)
-    roughness: 0.9,
-    metalness: 0.1,
   },
   
   // Water
@@ -377,6 +369,106 @@ export function createSandFloor(options = {}) {
   floor.userData.collidable = true
   floor.userData.seed = seed
   
+  // Store terrain data for later use (collision, spawning, etc.)
+  floor.userData.terrainData = {
+    size,
+    segments,
+    halfSize,
+    heights: heights,  // 1D array of heights at each vertex
+    gridSize: segments + 1,  // Number of vertices per row/column
+    
+    /**
+     * Get height at grid coordinates (integer indices)
+     * @param {number} ix - Grid X index (0 to segments)
+     * @param {number} iz - Grid Z index (0 to segments)
+     * @returns {number|null} Height or null if out of bounds
+     */
+    getHeightAtGrid(ix, iz) {
+      const gs = this.gridSize
+      if (ix < 0 || ix >= gs || iz < 0 || iz >= gs) return null
+      return this.heights[iz * gs + ix]
+    },
+    
+    /**
+     * Get interpolated height at world position
+     * @param {number} worldX - World X coordinate
+     * @param {number} worldZ - World Z coordinate
+     * @returns {number|null} Interpolated height or null if out of bounds
+     */
+    getHeightAtWorld(worldX, worldZ) {
+      // Convert world coords to grid coords
+      // Note: floor mesh is rotated -90 degrees on X, so original X->X, original Y->Z
+      const gx = ((worldX + this.halfSize) / this.size) * (this.gridSize - 1)
+      const gz = ((worldZ + this.halfSize) / this.size) * (this.gridSize - 1)
+      
+      // Get integer grid positions
+      const ix = Math.floor(gx)
+      const iz = Math.floor(gz)
+      
+      // Get fractional part for interpolation
+      const fx = gx - ix
+      const fz = gz - iz
+      
+      // Get heights at four corners (bilinear interpolation)
+      const h00 = this.getHeightAtGrid(ix, iz)
+      const h10 = this.getHeightAtGrid(ix + 1, iz)
+      const h01 = this.getHeightAtGrid(ix, iz + 1)
+      const h11 = this.getHeightAtGrid(ix + 1, iz + 1)
+      
+      if (h00 === null || h10 === null || h01 === null || h11 === null) {
+        return null  // Out of bounds
+      }
+      
+      // Bilinear interpolation
+      const h0 = h00 + (h10 - h00) * fx
+      const h1 = h01 + (h11 - h01) * fx
+      return h0 + (h1 - h0) * fz
+    },
+    
+    /**
+     * Get all terrain points as an array of {x, y, z} objects
+     * Note: Y is the height (up), matching Three.js world space after rotation
+     * @returns {Array<{x: number, y: number, z: number}>}
+     */
+    getAllPoints() {
+      const points = []
+      const gs = this.gridSize
+      const step = this.size / (gs - 1)
+      
+      for (let iz = 0; iz < gs; iz++) {
+        for (let ix = 0; ix < gs; ix++) {
+          points.push({
+            x: ix * step - this.halfSize,
+            y: this.heights[iz * gs + ix],
+            z: iz * step - this.halfSize
+          })
+        }
+      }
+      return points
+    },
+    
+    /**
+     * Get terrain vertices as a flat Float32Array (x, y, z, x, y, z, ...)
+     * Ready for use in physics, instancing, etc.
+     * @returns {Float32Array}
+     */
+    getVerticesArray() {
+      const gs = this.gridSize
+      const step = this.size / (gs - 1)
+      const arr = new Float32Array(gs * gs * 3)
+      
+      for (let iz = 0; iz < gs; iz++) {
+        for (let ix = 0; ix < gs; ix++) {
+          const idx = (iz * gs + ix) * 3
+          arr[idx] = ix * step - this.halfSize
+          arr[idx + 1] = this.heights[iz * gs + ix]
+          arr[idx + 2] = iz * step - this.halfSize
+        }
+      }
+      return arr
+    }
+  }
+  
   return floor
 }
 
@@ -420,94 +512,6 @@ export function getTerrainHeight(x, z, size = 1000, seed = 0, terrain = {}) {
   height += detailNoise * t.detailHeight
   
   return height
-}
-
-// ============================================================================
-// BOULDERS / ROCKS
-// ============================================================================
-
-/**
- * Create a single boulder (Dodecahedron geometry - PRESERVED)
- * @param {object} options
- * @param {number} [options.size=1] - Boulder size
- * @param {number} [options.color] - Override color
- * @param {number} [options.seed] - Random seed for rotation
- * @returns {THREE.Mesh}
- */
-export function createBoulder(options = {}) {
-  const {
-    size = 1,
-    color = TerrainConfig.boulder.color,
-    seed = null,
-  } = options
-  
-  const rng = seed !== null ? createRNG(seed) : Math.random
-  
-  // Dodecahedron gives nice boulder shape (PRESERVED)
-  const geometry = new THREE.DodecahedronGeometry(size, 0)
-  
-  const material = new THREE.MeshStandardMaterial({
-    color,
-    roughness: TerrainConfig.boulder.roughness,
-    metalness: TerrainConfig.boulder.metalness,
-  })
-  
-  const boulder = new THREE.Mesh(geometry, material)
-  
-  // Random rotation for variety
-  boulder.rotation.set(
-    rng() * Math.PI,
-    rng() * Math.PI,
-    rng() * Math.PI
-  )
-  
-  // Mark for terrain identification
-  boulder.userData.terrainType = 'boulder'
-  boulder.userData.collidable = true
-  
-  return boulder
-}
-
-/**
- * Create a cluster of boulders
- * @param {object} options
- * @param {number} [options.count=5] - Number of boulders
- * @param {number} [options.spread=5] - Spread radius
- * @param {number} [options.minSize=0.5] - Minimum boulder size
- * @param {number} [options.maxSize=2] - Maximum boulder size
- * @param {number} [options.seed] - Random seed
- * @returns {THREE.Group}
- */
-export function createBoulderCluster(options = {}) {
-  const {
-    count = 5,
-    spread = 5,
-    minSize = 0.5,
-    maxSize = 2,
-    seed = null,
-  } = options
-  
-  const rng = seed !== null ? createRNG(seed) : Math.random
-  const group = new THREE.Group()
-  
-  for (let i = 0; i < count; i++) {
-    const size = range(rng, minSize, maxSize)
-    const boulder = createBoulder({ size, seed: seed ? seed + i : null })
-    
-    // Random position within spread
-    boulder.position.set(
-      range(rng, -spread, spread),
-      size * 0.3,  // Partially buried
-      range(rng, -spread, spread)
-    )
-    
-    group.add(boulder)
-  }
-  
-  group.userData.terrainType = 'boulderCluster'
-  group.userData.collidable = true
-  
-  return group
 }
 
 // ============================================================================
@@ -633,10 +637,6 @@ export default {
   // Floor
   createSandFloor,
   getTerrainHeight,
-  
-  // Rocks
-  createBoulder,
-  createBoulderCluster,
   
   // Environment
   createWaterSurface,

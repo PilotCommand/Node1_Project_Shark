@@ -2,10 +2,9 @@ import * as THREE from 'three'
 import { 
   createSkyDome,
   createSandFloor,
-  createBoulder,
   createWaterSurface,
-  getTerrainHeight,
 } from './TerrainMaker.js'
+import { createBoulder, BoulderType } from './Boulders.js'
 import { MeshRegistry, Category, Tag } from './MeshRegistry.js'
 
 // Default map seed (can be overridden for multiplayer sync)
@@ -14,6 +13,27 @@ const DEFAULT_SEED = 12345
 let currentMapGroup = null
 let currentScene = null
 let currentSeed = DEFAULT_SEED
+
+// =============================================================================
+// BOULDER SCALE CONFIG - EDIT HERE
+// =============================================================================
+// Player = 2 units tall
+//
+// SIZE GUIDE:    1 = basketball    |  5 = car        |  70 = skyscraper
+//                2 = person        |  15 = house     |  100 = mountain
+//                4 = large rock    |  35 = building  |
+// =============================================================================
+
+const BOULDER_CONFIG = {
+//  Category     count   minSize   maxSize   spreadRadius   buriedFactor
+    titan:     { count: 2,   minSize: 70,  maxSize: 100, spreadRadius: 350, buriedFactor: 0.50 },
+    colossal:  { count: 4,   minSize: 35,  maxSize: 60,  spreadRadius: 400, buriedFactor: 0.45 },
+    large:     { count: 12,  minSize: 15,  maxSize: 30,  spreadRadius: 420, buriedFactor: 0.40 },
+    medium:    { count: 30,  minSize: 5,   maxSize: 12,  spreadRadius: 450, buriedFactor: 0.35 },
+    small:     { count: 50,  minSize: 1.5, maxSize: 4,   spreadRadius: 480, buriedFactor: 0.30 },
+}
+
+// =============================================================================
 
 export function createMap(scene, seed = DEFAULT_SEED) {
   currentScene = scene
@@ -59,36 +79,134 @@ export function createMap(scene, seed = DEFAULT_SEED) {
     }
   }, true)
 
-  // Rocks/Boulders - placed on terrain
-  const rng = createSeededRNG(seed + 9999)  // Offset seed for boulder placement
+  // Spawn boulders of all sizes
+  const rng = createSeededRNG(seed + 9999)
+  const terrainData = floor.userData.terrainData
+  let boulderIndex = 0
   
-  for (let i = 0; i < 15; i++) {
-    const size = rng() * 3 + 1
-    const rock = createBoulder({
-      size: size,
-      seed: seed + i * 3000,
-    })
+  // Store all boulders for containment check
+  const allBoulders = []
+  
+  // Helper to spawn a category of boulders
+  const spawnBoulderCategory = (config, categoryName) => {
+    for (let i = 0; i < config.count; i++) {
+      // Weighted size - bias toward smaller within range
+      const sizeT = Math.pow(rng(), 1.5)  // Skew toward smaller
+      const size = config.minSize + sizeT * (config.maxSize - config.minSize)
+      
+      const rock = createBoulder({
+        size: size,
+        type: BoulderType.RANDOM,
+        seed: seed + boulderIndex * 3000,
+        scaleVariation: categoryName === 'titan' ? 0.5 : 
+                        categoryName === 'colossal' ? 0.4 : 0.3,
+      })
+      
+      // Random XZ position within spread radius
+      const angle = rng() * Math.PI * 2
+      const distance = rng() * config.spreadRadius
+      const x = Math.cos(angle) * distance
+      const z = Math.sin(angle) * distance
+      
+      // Get terrain height at this position from stored mesh data
+      const terrainY = terrainData.getHeightAtWorld(x, z) ?? 0
+      
+      rock.position.set(
+        x,
+        floorY + terrainY + size * (1 - config.buriedFactor),
+        z
+      )
+      
+      const registryId = `rock_${categoryName}_${i}`
+      
+      // Store for containment check
+      allBoulders.push({
+        mesh: rock,
+        size: size,
+        registryId: registryId,
+        category: categoryName,
+      })
+      
+      boulderIndex++
+    }
+  }
+  
+  // Spawn all boulder categories
+  spawnBoulderCategory(BOULDER_CONFIG.titan, 'titan')
+  spawnBoulderCategory(BOULDER_CONFIG.colossal, 'colossal')
+  spawnBoulderCategory(BOULDER_CONFIG.large, 'large')
+  spawnBoulderCategory(BOULDER_CONFIG.medium, 'medium')
+  spawnBoulderCategory(BOULDER_CONFIG.small, 'small')
+  
+  // Cull boulders completely contained by other boulders
+  const cullContainedBoulders = (boulders) => {
+    const toRemove = new Set()
     
-    // Random XZ position
-    const x = rng() * 400 - 200
-    const z = rng() * 400 - 200
+    for (let i = 0; i < boulders.length; i++) {
+      if (toRemove.has(i)) continue
+      
+      const a = boulders[i]
+      
+      for (let j = 0; j < boulders.length; j++) {
+        if (i === j || toRemove.has(j)) continue
+        
+        const b = boulders[j]
+        
+        // Check if smaller boulder is contained by larger
+        // Boulder is contained if: distance + smallerRadius < largerRadius
+        const dist = a.mesh.position.distanceTo(b.mesh.position)
+        
+        if (a.size < b.size) {
+          // Check if A is inside B
+          if (dist + a.size < b.size) {
+            toRemove.add(i)
+            break
+          }
+        } else if (b.size < a.size) {
+          // Check if B is inside A
+          if (dist + b.size < a.size) {
+            toRemove.add(j)
+          }
+        }
+      }
+    }
     
-    // Get terrain height at this position and place boulder on it
-    const terrainY = getTerrainHeight(x, z, mapSize, seed)
+    return toRemove
+  }
+  
+  const containedIndices = cullContainedBoulders(allBoulders)
+  let culledCount = 0
+  
+  // Add surviving boulders to scene and registry
+  for (let i = 0; i < allBoulders.length; i++) {
+    const boulder = allBoulders[i]
     
-    rock.position.set(
-      x,
-      floorY + terrainY + size * 0.3,  // Partially buried
-      z
-    )
-    group.add(rock)
-
-    MeshRegistry.register('rock', {
-      mesh: rock,
+    if (containedIndices.has(i)) {
+      // Dispose of contained boulder
+      boulder.mesh.geometry.dispose()
+      boulder.mesh.material.dispose()
+      culledCount++
+      continue
+    }
+    
+    // Add to scene
+    group.add(boulder.mesh)
+    
+    // Register
+    MeshRegistry.register(boulder.registryId, {
+      mesh: boulder.mesh,
       category: Category.MAP,
       tags: [Tag.STATIC, Tag.COLLIDABLE],
-      metadata: { type: 'obstacle' }
+      metadata: { 
+        type: 'obstacle',
+        boulderCategory: boulder.category,
+        size: boulder.size,
+      }
     })
+  }
+  
+  if (culledCount > 0) {
+    console.log(`Culled ${culledCount} contained boulders`)
   }
 
   // Water surface
