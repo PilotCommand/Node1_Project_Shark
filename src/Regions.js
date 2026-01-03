@@ -165,10 +165,11 @@ export function getDominantRegion(x, z) {
  * @param {object} options
  * @param {function} options.getTerrainHeight - Function to get Y at (x,z)
  * @param {number} options.seed - Base seed
+ * @param {THREE.Mesh[]} options.globalBoulders - Boulders from map.js to check against
  * @returns {THREE.Group}
  */
 function spawnRegionContent(region, options = {}) {
-  const { getTerrainHeight, seed = 12345 } = options
+  const { getTerrainHeight, seed = 12345, globalBoulders = [] } = options
   
   const group = new THREE.Group()
   const rng = createRNG(seed + region.x * 1000 + region.z)
@@ -183,7 +184,50 @@ function spawnRegionContent(region, options = {}) {
   const coralCount = Math.floor(settings.coral.count * region.density)
   const boulderCount = Math.floor(settings.boulder.count * region.density)
   
-  // Collect corals for overlap culling
+  // =========================================================================
+  // SPAWN BOULDERS FIRST (so we can cull corals against them)
+  // =========================================================================
+  const regionBoulders = []
+  
+  for (let i = 0; i < boulderCount; i++) {
+    const size = range(rng, settings.boulder.minSize, settings.boulder.maxSize)
+    
+    const angle = rng() * Math.PI * 2
+    const dist = Math.pow(rng(), 0.5) * region.radius
+    const x = region.x + Math.cos(angle) * dist
+    const z = region.z + Math.sin(angle) * dist
+    
+    const boulder = createBoulder({
+      size,
+      type: BoulderType.RANDOM,
+      seed: seed + i * 3333 + region.z,
+    })
+    
+    const y = getTerrainHeight ? getTerrainHeight(x, z) : 0
+    boulder.position.set(x, y + size * 0.3, z)  // Partially buried
+    
+    boulder.userData.regionType = region.type
+    boulder.userData.baseSize = size
+    
+    regionBoulders.push({ mesh: boulder, size, x, y: y + size * 0.3, z })
+    group.add(boulder)
+  }
+  
+  // Combine global boulders with region boulders for culling
+  const allBoulders = [
+    ...globalBoulders.map(b => ({
+      mesh: b.mesh || b,
+      size: b.size || b.userData?.baseSize || 1,
+      x: b.x ?? b.mesh?.position?.x ?? b.position?.x ?? 0,
+      y: b.y ?? b.mesh?.position?.y ?? b.position?.y ?? 0,
+      z: b.z ?? b.mesh?.position?.z ?? b.position?.z ?? 0,
+    })),
+    ...regionBoulders,
+  ]
+  
+  // =========================================================================
+  // SPAWN CORALS AND CULL PIECES INSIDE BOULDERS
+  // =========================================================================
   const corals = []
   
   for (let i = 0; i < coralCount; i++) {
@@ -205,10 +249,86 @@ function spawnRegionContent(region, options = {}) {
     coral.userData.regionType = region.type
     coral.userData.coralSize = size
     
-    corals.push({ mesh: coral, size, x, y, z })
+    // -----------------------------------------------------------------------
+    // CULL INDIVIDUAL CORAL PIECES INSIDE BOULDERS
+    // -----------------------------------------------------------------------
+    const piecesToRemove = []
+    
+    // Get the coral group's rotation
+    const groupRotationY = coral.rotation.y
+    const cosR = Math.cos(groupRotationY)
+    const sinR = Math.sin(groupRotationY)
+    
+    for (const piece of coral.children) {
+      // Get piece LOCAL position
+      const localX = piece.position.x
+      const localY = piece.position.y
+      const localZ = piece.position.z
+      
+      // Apply Y-axis rotation to get rotated local position
+      const rotatedX = localX * cosR - localZ * sinR
+      const rotatedZ = localX * sinR + localZ * cosR
+      
+      // Get piece WORLD position
+      const pieceWorldX = x + rotatedX
+      const pieceWorldY = y + localY  // Y rotation doesn't affect Y position
+      const pieceWorldZ = z + rotatedZ
+      
+      // Check against all boulders
+      for (const boulder of allBoulders) {
+        const bx = boulder.x ?? boulder.mesh?.position?.x ?? 0
+        const by = boulder.y ?? boulder.mesh?.position?.y ?? 0
+        const bz = boulder.z ?? boulder.mesh?.position?.z ?? 0
+        
+        // Get boulder size accounting for scale
+        let boulderSize = boulder.size
+        if (boulder.mesh && boulder.mesh.scale) {
+          const maxScale = Math.max(boulder.mesh.scale.x, boulder.mesh.scale.y, boulder.mesh.scale.z)
+          boulderSize = boulder.size * maxScale
+        }
+        
+        // Distance between piece center and boulder center
+        const dx = pieceWorldX - bx
+        const dy = pieceWorldY - by
+        const dz = pieceWorldZ - bz
+        const distance = Math.sqrt(dx*dx + dy*dy + dz*dz)
+        
+        // Piece is culled if its CENTER is inside the boulder
+        // (more aggressive than requiring entire piece to be inside)
+        const isContained = distance < boulderSize
+        
+        if (isContained) {
+          piecesToRemove.push(piece)
+          break  // No need to check other boulders
+        }
+      }
+    }
+    
+    // Remove contained pieces
+    for (const piece of piecesToRemove) {
+      coral.remove(piece)
+      if (piece.geometry) piece.geometry.dispose()
+      if (piece.material) piece.material.dispose()
+    }
+    
+    // Update piece count
+    coral.userData.pieceCount = coral.children.length
+    
+    // Only add coral if it has pieces left
+    if (coral.children.length > 0) {
+      corals.push({ mesh: coral, size, x, y, z })
+    } else {
+      // Dispose empty coral group
+      coral.traverse(child => {
+        if (child.geometry) child.geometry.dispose()
+        if (child.material) child.material.dispose()
+      })
+    }
   }
   
-  // Cull corals with 60%+ volume overlap (delete smaller)
+  // =========================================================================
+  // CULL CORAL CLUSTERS WITH 60%+ OVERLAP (delete smaller)
+  // =========================================================================
   const cullOverlappingCorals = (coralList) => {
     const toRemove = new Set()
     
@@ -234,7 +354,6 @@ function spawnRegionContent(region, options = {}) {
           : [b, a, j]
         
         // Approximate overlap fraction of smaller sphere
-        // overlap_fraction ≈ (r_large + r_small - d) / (2 * r_small)
         const overlapFraction = (larger.size + smaller.size - dist) / (2 * smaller.size)
         
         // If 60%+ overlap, remove smaller
@@ -268,28 +387,6 @@ function spawnRegionContent(region, options = {}) {
     console.log(`Region ${region.type}: culled ${culledCount} overlapping corals`)
   }
   
-  // Spawn boulders
-  for (let i = 0; i < boulderCount; i++) {
-    const size = range(rng, settings.boulder.minSize, settings.boulder.maxSize)
-    
-    const angle = rng() * Math.PI * 2
-    const dist = Math.pow(rng(), 0.5) * region.radius
-    const x = region.x + Math.cos(angle) * dist
-    const z = region.z + Math.sin(angle) * dist
-    
-    const boulder = createBoulder({
-      size,
-      type: BoulderType.RANDOM,
-      seed: seed + i * 3333 + region.z,
-    })
-    
-    const y = getTerrainHeight ? getTerrainHeight(x, z) : 0
-    boulder.position.set(x, y + size * 0.3, z)  // Partially buried
-    
-    boulder.userData.regionType = region.type
-    group.add(boulder)
-  }
-  
   return group
 }
 
@@ -299,10 +396,11 @@ function spawnRegionContent(region, options = {}) {
  * @param {function} options.getTerrainHeight - Function to get Y at (x,z)
  * @param {number} options.floorY - Base floor Y level
  * @param {number} options.seed - Base seed
+ * @param {Array} options.globalBoulders - Boulders from map.js to cull corals against
  * @returns {THREE.Group}
  */
 export function spawnAllRegions(options = {}) {
-  const { getTerrainHeight, floorY = -50, seed = 12345 } = options
+  const { getTerrainHeight, floorY = -50, seed = 12345, globalBoulders = [] } = options
   
   const group = new THREE.Group()
   
@@ -316,6 +414,7 @@ export function spawnAllRegions(options = {}) {
     const regionGroup = spawnRegionContent(region, {
       getTerrainHeight: getHeight,
       seed,
+      globalBoulders,
     })
     
     regionGroup.userData.regionType = region.type

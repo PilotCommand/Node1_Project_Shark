@@ -209,12 +209,24 @@ export function createMap(scene, seed = DEFAULT_SEED) {
   if (culledCount > 0) {
     console.log(`Culled ${culledCount} contained boulders`)
   }
+  
+  // Collect surviving boulders for region coral culling
+  const survivingBoulders = allBoulders
+    .filter((_, i) => !containedIndices.has(i))
+    .map(b => ({
+      mesh: b.mesh,
+      size: b.size,
+      x: b.mesh.position.x,
+      y: b.mesh.position.y,
+      z: b.mesh.position.z,
+    }))
 
   // Spawn region content (coral reefs, boulder fields, etc.)
   const regions = spawnAllRegions({
     getTerrainHeight: (x, z) => terrainData.getHeightAtWorld(x, z) ?? 0,
     floorY: floorY,
     seed: seed,
+    globalBoulders: survivingBoulders,
   })
   group.add(regions)
   

@@ -37,9 +37,12 @@ export const CoralConfig = {
   metalness: 0.05,
   
   // Dodecahedron cluster settings
-  dodecahedronScale: 0.35,    // How spread out the vertices are (lower = tighter cluster)
+  dodecahedronScale: 0.25,    // How spread out the vertices are (lower = tighter cluster)
   pieceScale: 0.35,           // Size of each coral piece relative to formation size
   skipChance: 0.1,            // Chance for each vertex to not spawn a coral (0-1)
+  
+  // Boulder culling settings
+  boulderCullThreshold: 0.9,  // How much of coral must be inside boulder to cull (0-1, 1 = fully inside)
   
   // Tropical coral colors
   colors: [
@@ -349,6 +352,8 @@ function getHigherDodecahedronVertices() {
  * @param {number} [options.size=1] - Base size of the formation
  * @param {number} [options.seed] - Random seed
  * @param {boolean} [options.multiColor=true] - Use multiple colors or single color
+ * @param {THREE.Mesh[]} [options.boulders] - Boulders to check against (skips creating corals inside them)
+ * @param {THREE.Vector3} [options.position] - World position of the coral group (needed if boulders provided)
  * @returns {THREE.Group}
  */
 export function createCoral(options = {}) {
@@ -356,10 +361,17 @@ export function createCoral(options = {}) {
     size = 1,
     seed = null,
     multiColor = true,
+    boulders = null,
+    position = null,
   } = options
   
   const rng = seed !== null ? createRNG(seed) : Math.random
   const group = new THREE.Group()
+  
+  // If position provided, set it now so world position checks work
+  if (position) {
+    group.position.copy(position)
+  }
   
   // Get the higher 10 vertices of a dodecahedron
   const vertices = getHigherDodecahedronVertices()
@@ -375,15 +387,55 @@ export function createCoral(options = {}) {
     // Skip chance for this vertex
     if (rng() < CoralConfig.skipChance) continue
     
+    // Calculate world position for this piece
+    const scale = CoralConfig.dodecahedronScale
+    const localX = vertex.x * size * scale
+    const localY = vertex.y * size * scale
+    const localZ = vertex.z * size * scale
+    
+    // If boulders provided, check if this coral would be inside one
+    if (boulders && boulders.length > 0) {
+      const worldPos = new THREE.Vector3(
+        (position?.x || 0) + localX,
+        (position?.y || 0) + localY,
+        (position?.z || 0) + localZ
+      )
+      
+      // Check against each boulder
+      let insideBoulder = false
+      for (const boulder of boulders) {
+        boulder.updateWorldMatrix(true, false)
+        const boulderWorldPos = new THREE.Vector3()
+        boulder.getWorldPosition(boulderWorldPos)
+        
+        let boulderRadius
+        if (boulder.userData.baseSize) {
+          boulderRadius = boulder.userData.baseSize * 
+            Math.max(boulder.scale.x, boulder.scale.y, boulder.scale.z)
+        } else {
+          if (!boulder.geometry.boundingSphere) {
+            boulder.geometry.computeBoundingSphere()
+          }
+          boulderRadius = boulder.geometry.boundingSphere.radius *
+            Math.max(boulder.scale.x, boulder.scale.y, boulder.scale.z)
+        }
+        
+        const dist = worldPos.distanceTo(boulderWorldPos)
+        const coralRadius = pieceSize * 0.5 // Approximate
+        
+        if (dist + coralRadius * CoralConfig.boulderCullThreshold <= boulderRadius) {
+          insideBoulder = true
+          break
+        }
+      }
+      
+      if (insideBoulder) continue // Skip this coral piece entirely
+    }
+    
     const piece = createCoralPiece(rng, pieceSize, baseColor)
     
     // Position at the dodecahedron vertex, scaled by formation size
-    const scale = CoralConfig.dodecahedronScale
-    piece.position.set(
-      vertex.x * size * scale,
-      vertex.y * size * scale,
-      vertex.z * size * scale
-    )
+    piece.position.set(localX, localY, localZ)
     
     group.add(piece)
   }
@@ -451,6 +503,113 @@ export function createCoralReef(options = {}) {
 }
 
 // ============================================================================
+// BOULDER COLLISION CULLING
+// ============================================================================
+
+/**
+ * Check if a single coral mesh is completely contained inside any boulder
+ * @param {THREE.Mesh} coralMesh - A single coral piece mesh
+ * @param {THREE.Mesh[]} boulders - Array of boulder meshes
+ * @param {number} [threshold] - Containment threshold (0-1)
+ * @returns {boolean} True if coral is inside a boulder and should be culled
+ */
+export function isCoralInsideBoulder(coralMesh, boulders, threshold = CoralConfig.boulderCullThreshold) {
+  if (!boulders || boulders.length === 0) return false
+  
+  // Ensure world matrices are up to date
+  coralMesh.updateWorldMatrix(true, false)
+  
+  // Get coral world position
+  const coralWorldPos = new THREE.Vector3()
+  coralMesh.getWorldPosition(coralWorldPos)
+  
+  // Get coral radius
+  if (!coralMesh.geometry.boundingSphere) {
+    coralMesh.geometry.computeBoundingSphere()
+  }
+  const coralRadius = coralMesh.geometry.boundingSphere.radius * 
+    Math.max(coralMesh.scale.x, coralMesh.scale.y, coralMesh.scale.z)
+  
+  // Check against each boulder
+  for (const boulder of boulders) {
+    boulder.updateWorldMatrix(true, false)
+    
+    const boulderWorldPos = new THREE.Vector3()
+    boulder.getWorldPosition(boulderWorldPos)
+    
+    // Get boulder radius
+    let boulderRadius
+    if (boulder.userData.baseSize) {
+      boulderRadius = boulder.userData.baseSize * 
+        Math.max(boulder.scale.x, boulder.scale.y, boulder.scale.z)
+    } else {
+      if (!boulder.geometry.boundingSphere) {
+        boulder.geometry.computeBoundingSphere()
+      }
+      boulderRadius = boulder.geometry.boundingSphere.radius *
+        Math.max(boulder.scale.x, boulder.scale.y, boulder.scale.z)
+    }
+    
+    // Distance between centers
+    const dist = coralWorldPos.distanceTo(boulderWorldPos)
+    
+    // Coral is inside if: dist + coralRadius <= boulderRadius
+    if (dist + coralRadius * threshold <= boulderRadius) {
+      return true
+    }
+  }
+  
+  return false
+}
+
+/**
+ * Remove coral pieces that are completely contained inside boulders.
+ * Call this after positioning coral groups and boulders in the scene.
+ * 
+ * @param {THREE.Group|THREE.Group[]} corals - Coral group(s) from createCoral
+ * @param {THREE.Mesh|THREE.Mesh[]} boulders - Boulder mesh(es) to check against
+ * @returns {number} Number of coral pieces removed
+ */
+export function cullCoralsInsideBoulders(corals, boulders) {
+  // Normalize inputs to arrays
+  const coralGroups = Array.isArray(corals) ? corals : [corals]
+  const boulderList = Array.isArray(boulders) ? boulders : [boulders]
+  
+  if (boulderList.length === 0) return 0
+  
+  let totalRemoved = 0
+  
+  for (const coralGroup of coralGroups) {
+    if (!coralGroup || !coralGroup.children) continue
+    
+    // Update group's world matrix first
+    coralGroup.updateWorldMatrix(true, true)
+    
+    const toRemove = []
+    
+    // Check each coral piece in this group
+    for (const piece of coralGroup.children) {
+      if (isCoralInsideBoulder(piece, boulderList)) {
+        toRemove.push(piece)
+      }
+    }
+    
+    // Remove and dispose
+    for (const piece of toRemove) {
+      coralGroup.remove(piece)
+      if (piece.geometry) piece.geometry.dispose()
+      if (piece.material) piece.material.dispose()
+    }
+    
+    // Update piece count
+    coralGroup.userData.pieceCount = coralGroup.children.length
+    totalRemoved += toRemove.length
+  }
+  
+  return totalRemoved
+}
+
+// ============================================================================
 // EXPORTS
 // ============================================================================
 
@@ -458,4 +617,6 @@ export default {
   CoralConfig,
   createCoral,
   createCoralReef,
+  isCoralInsideBoulder,
+  cullCoralsInsideBoulders,
 }
