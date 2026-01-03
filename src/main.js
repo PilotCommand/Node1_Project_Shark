@@ -15,9 +15,13 @@ import {
   debugPhysics,
   isPhysicsReady,
 } from './Physics.js'
+import { SpawnFactory } from './SpawnFactory.js'
 
 // Scene setup
 const scene = new THREE.Scene()
+
+// Export scene for other modules
+export { scene }
 
 // Renderer setup
 const renderer = new THREE.WebGLRenderer({ antialias: true })
@@ -51,6 +55,9 @@ initPlayer(scene)
 initCameraControls(renderer.domElement)
 initControls()
 initHUD()
+
+// Initialize SpawnFactory
+SpawnFactory.init(scene)
 
 // Build unified terrain collision mesh (after map is created)
 const terrainMeshData = buildTerrainMesh(scene)
@@ -107,7 +114,7 @@ animate()
 // Controls documentation
 console.log(`
 🌊 OCEAN CREATURE SIMULATOR
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   MOVEMENT:
     WASD              - Swim
@@ -121,7 +128,8 @@ console.log(`
     N / B             - Next / Previous species
     M                 - New map
     P                 - Toggle wireframes
+    V                 - Toggle spawn visualization
     F                 - Debug
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 `)

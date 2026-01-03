@@ -11,6 +11,7 @@
  *   N / B       - Next / Previous species
  *   M           - New map
  *   P           - Toggle wireframes
+ *   V           - Toggle spawn visualization
  *   F           - Debug
  */
 
@@ -57,6 +58,7 @@ import {
   getActiveExtra,
   debugExtra,
 } from './ExtraControls.js'
+import { SpawnFactory } from './SpawnFactory.js'
 
 // ============================================================================
 // STATE
@@ -71,6 +73,9 @@ const keys = {
   shift: false,
   q: false,
 }
+
+// Track shift state for V key combo
+let shiftHeld = false
 
 // ============================================================================
 // HELPERS
@@ -160,6 +165,7 @@ export function initControls() {
       case 'ShiftLeft': 
       case 'ShiftRight': 
         keys.shift = true
+        shiftHeld = true
         break
       
       // Q = Extra ability (hold)
@@ -173,9 +179,22 @@ export function initControls() {
       
       // M = New Map
       case 'KeyM':
+        // Check if visualization was on before map change
+        const wasVisualized = SpawnFactory.isVisualized
+        
         const newSeed = regenerateMap()
         if (newSeed !== null) {
           rebuildTerrainPhysics()
+          
+          // Reset SpawnFactory when map changes
+          SpawnFactory.reset()
+          
+          // If visualization was on, re-analyze and re-visualize the new map
+          if (wasVisualized) {
+            SpawnFactory.analyzePlayableSpace()
+            SpawnFactory.visualize()
+          }
+          
           showNotification(
             `New terrain | Seed: ${newSeed.toString(16).toUpperCase().padStart(8, '0')}`,
             '#00ffff'
@@ -231,11 +250,33 @@ export function initControls() {
         )
         break
       
+      // V = Toggle spawn visualization
+      // Shift+V = Show occupied points too (debug mode)
+      case 'KeyV':
+        const showOccupied = shiftHeld
+        const vizOn = SpawnFactory.toggleVisualization({ showOccupied })
+        
+        if (vizOn) {
+          const stats = SpawnFactory.stats
+          if (stats) {
+            showNotification(
+              `Spawn viz ON | ${stats.playable} points (${stats.playablePercent}%)${showOccupied ? ' +occupied' : ''}`,
+              '#ff88ff'
+            )
+          } else {
+            showNotification('Spawn visualization ON', '#ff88ff')
+          }
+        } else {
+          showNotification('Spawn visualization OFF', '#888888')
+        }
+        break
+      
       // F = Debug
       case 'KeyF':
         debugPhysics()
         debugSwimming()
         debugExtra()
+        SpawnFactory.debug()
         break
     }
   })
@@ -250,6 +291,7 @@ export function initControls() {
       case 'ShiftLeft':
       case 'ShiftRight': 
         keys.shift = false
+        shiftHeld = false
         break
       case 'KeyQ':
         keys.q = false
