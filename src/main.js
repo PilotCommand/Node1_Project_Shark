@@ -7,6 +7,14 @@ import { initControls, updateMovement } from './controls.js'
 import { initHUD, updateHUD } from './hud.js'
 import { MeshRegistry } from './MeshRegistry.js'
 import { buildTerrainMesh, debugTerrainMesh } from './TerrainMesher.js'
+import { 
+  initPhysics, 
+  buildTerrainCollider, 
+  createPlayerBody,
+  updatePhysics,
+  debugPhysics,
+  isPhysicsReady,
+} from './Physics.js'
 
 // Scene setup
 const scene = new THREE.Scene()
@@ -50,6 +58,23 @@ if (terrainMeshData) {
   debugTerrainMesh()
 }
 
+// Initialize physics (async)
+initPhysics().then((success) => {
+  if (success) {
+    // Build terrain physics collider from the wireframe mesh data
+    buildTerrainCollider()
+    
+    // Create player physics body from capsule wireframe data
+    createPlayerBody()
+    
+    debugPhysics()
+    console.log('[Main] Physics initialized and bodies created')
+  } else {
+    console.warn('[Main] Physics failed to initialize - running without physics')
+    console.log('[Main] Install Rapier: npm install @dimforge/rapier3d')
+  }
+})
+
 MeshRegistry.debug()
 
 // Resize handler
@@ -65,7 +90,12 @@ function animate() {
   
   const delta = clock.getDelta()
   
+  // Update physics simulation (syncs physics bodies with Three.js meshes)
+  updatePhysics(delta)
+  
+  // Update player movement (now applies forces instead of direct position)
   updateMovement(delta)
+  
   updateCamera()
   updateHUD()
   

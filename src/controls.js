@@ -19,6 +19,12 @@ import {
   toggleTerrainWireframe,
   isTerrainWireframeVisible,
 } from './TerrainMesher.js'
+import {
+  isPhysicsReady,
+  applyPlayerSwimForce,
+  setPhysicsEnabled,
+  debugPhysics,
+} from './Physics.js'
 
 const keys = {
   w: false,
@@ -29,7 +35,10 @@ const keys = {
   shift: false
 }
 
-const moveSpeed = 10
+// Movement config
+const MOVE_SPEED = 10           // Non-physics fallback speed
+const SWIM_FORCE = 500          // Physics swim force (Newtons)
+const PHYSICS_ENABLED = true    // Use physics when available
 
 export function initControls() {
   window.addEventListener('keydown', (e) => {
@@ -101,6 +110,15 @@ export function initControls() {
           playerWireframeOn ? '#00ff00' : '#ff6600'
         )
         break
+      
+      // F = Toggle physics on/off (for debugging)
+      case 'KeyF':
+        if (isPhysicsReady()) {
+          // Toggle physics and show notification
+          // Note: Would need to track state, simplified here
+          debugPhysics()
+        }
+        break
     }
   })
   
@@ -156,6 +174,7 @@ export function updateMovement(delta) {
   const yaw = getYaw()
   const pitch = getPitch()
   
+  // Calculate movement direction vectors
   const forward = new THREE.Vector3(
     -Math.sin(yaw) * Math.cos(pitch),
     Math.sin(pitch),
@@ -171,6 +190,7 @@ export function updateMovement(delta) {
   const up = new THREE.Vector3(0, 1, 0)
   const velocity = new THREE.Vector3()
   
+  // Build movement direction from input
   if (keys.w) velocity.add(forward)
   if (keys.s) velocity.sub(forward)
   if (keys.d) velocity.add(right)
@@ -181,6 +201,7 @@ export function updateMovement(delta) {
   if (velocity.length() > 0) {
     velocity.normalize()
     
+    // Update player mesh rotation in orbit mode
     if (getCameraMode() === 'orbit') {
       const targetYaw = Math.atan2(-velocity.x, -velocity.z)
       const targetPitch = Math.asin(velocity.y)
@@ -194,7 +215,14 @@ export function updateMovement(delta) {
       
       player.rotation.x += (targetPitch - player.rotation.x) * rotationSpeed
     }
+    
+    // Apply movement - physics or direct
+    if (PHYSICS_ENABLED && isPhysicsReady()) {
+      // Physics-based: apply force (position updated in Physics.js)
+      applyPlayerSwimForce(velocity, SWIM_FORCE, delta)
+    } else {
+      // Direct position update (no physics fallback)
+      player.position.add(velocity.multiplyScalar(MOVE_SPEED * delta))
+    }
   }
-  
-  player.position.add(velocity.multiplyScalar(moveSpeed * delta))
 }
