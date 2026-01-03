@@ -428,14 +428,50 @@ export function updatePhysics(delta) {
     // Get physics position
     const position = body.translation()
     
-    // Update mesh position
+    // Update mesh position from physics
     mesh.position.set(position.x, position.y, position.z)
     
-    // Note: Rotation is locked, so mesh rotation is controlled by game logic
+    // Sync physics rotation FROM mesh
+    // The mesh is rotated by Swimming.js, we need physics to match
+    syncBodyRotation(body, mesh, creature.isPlayer)
   }
   
   // Process collision events
   processCollisionEvents()
+}
+
+/**
+ * Sync rigid body rotation to match mesh rotation
+ * For player: combines mesh rotation with capsule's initial 90° X offset
+ */
+function syncBodyRotation(body, mesh, isPlayer) {
+  // Get mesh rotation as quaternion
+  const meshQuat = new THREE.Quaternion()
+  meshQuat.setFromEuler(mesh.rotation)
+  
+  if (isPlayer) {
+    // Player capsule has a 90° X rotation offset (capsule aligned to Z axis)
+    // We need to combine: meshRotation * capsuleOffset
+    const capsuleOffset = new THREE.Quaternion()
+    capsuleOffset.setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2)
+    
+    // Final rotation = mesh rotation (to face movement) 
+    // The capsule offset is baked into the collider, so we just apply mesh rotation to body
+    body.setRotation({ 
+      x: meshQuat.x, 
+      y: meshQuat.y, 
+      z: meshQuat.z, 
+      w: meshQuat.w 
+    }, true)
+  } else {
+    // Other creatures - direct rotation sync
+    body.setRotation({ 
+      x: meshQuat.x, 
+      y: meshQuat.y, 
+      z: meshQuat.z, 
+      w: meshQuat.w 
+    }, true)
+  }
 }
 
 /**
