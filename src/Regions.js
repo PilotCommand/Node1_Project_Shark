@@ -9,7 +9,7 @@
 
 import * as THREE from 'three'
 import { createBoulder, BoulderType } from './Boulders.js'
-import { createCoral, createCoralReef, CoralType } from './Corals.js'
+import { createCoral } from './Corals.js'
 
 // ============================================================================
 // SEEDED RANDOM HELPERS
@@ -76,23 +76,25 @@ export const REGIONS = [
 // ============================================================================
 // REGION SPAWN SETTINGS
 // ============================================================================
+// Coral sizes: medium (5-12), large (15-30), colossal (35-50)
+// Boulder reference: medium 5-12, large 15-30, colossal 35-60
 
 const SPAWN_SETTINGS = {
   [RegionType.CORAL_REEF]: {
-    coral: { count: 25, minSize: 1, maxSize: 4 },
-    boulder: { count: 5, minSize: 2, maxSize: 8 },
+    coral: { count: 15, minSize: 8, maxSize: 45 },
+    boulder: { count: 5, minSize: 5, maxSize: 15 },
   },
   [RegionType.BOULDER_FIELD]: {
-    coral: { count: 3, minSize: 0.5, maxSize: 1.5 },
-    boulder: { count: 20, minSize: 3, maxSize: 15 },
+    coral: { count: 3, minSize: 5, maxSize: 15 },
+    boulder: { count: 20, minSize: 8, maxSize: 25 },
   },
   [RegionType.CORAL_GARDEN]: {
-    coral: { count: 40, minSize: 0.3, maxSize: 1.5 },
-    boulder: { count: 2, minSize: 1, maxSize: 3 },
+    coral: { count: 20, minSize: 5, maxSize: 25 },
+    boulder: { count: 2, minSize: 3, maxSize: 8 },
   },
   [RegionType.ROCKY_OUTCROP]: {
-    coral: { count: 15, minSize: 0.5, maxSize: 2 },
-    boulder: { count: 12, minSize: 2, maxSize: 10 },
+    coral: { count: 10, minSize: 6, maxSize: 30 },
+    boulder: { count: 12, minSize: 5, maxSize: 20 },
   },
 }
 
@@ -181,28 +183,89 @@ function spawnRegionContent(region, options = {}) {
   const coralCount = Math.floor(settings.coral.count * region.density)
   const boulderCount = Math.floor(settings.boulder.count * region.density)
   
-  // Spawn corals
+  // Collect corals for overlap culling
+  const corals = []
+  
   for (let i = 0; i < coralCount; i++) {
     const size = range(rng, settings.coral.minSize, settings.coral.maxSize)
     
     // Random position within region radius
     const angle = rng() * Math.PI * 2
-    const dist = Math.pow(rng(), 0.5) * region.radius  // Square root for even distribution
+    const dist = Math.pow(rng(), 0.5) * region.radius
     const x = region.x + Math.cos(angle) * dist
     const z = region.z + Math.sin(angle) * dist
     
     const coral = createCoral({
       size,
-      type: CoralType.RANDOM,
       seed: seed + i * 7777 + region.x,
     })
     
-    // Get terrain height
     const y = getTerrainHeight ? getTerrainHeight(x, z) : 0
     coral.position.set(x, y, z)
-    
     coral.userData.regionType = region.type
-    group.add(coral)
+    coral.userData.coralSize = size
+    
+    corals.push({ mesh: coral, size, x, y, z })
+  }
+  
+  // Cull corals with 60%+ volume overlap (delete smaller)
+  const cullOverlappingCorals = (coralList) => {
+    const toRemove = new Set()
+    
+    for (let i = 0; i < coralList.length; i++) {
+      if (toRemove.has(i)) continue
+      
+      const a = coralList[i]
+      
+      for (let j = i + 1; j < coralList.length; j++) {
+        if (toRemove.has(j)) continue
+        
+        const b = coralList[j]
+        
+        // Distance between centers (3D)
+        const dx = a.x - b.x
+        const dy = a.y - b.y
+        const dz = a.z - b.z
+        const dist = Math.sqrt(dx*dx + dy*dy + dz*dz)
+        
+        // Determine smaller and larger
+        const [smaller, larger, smallerIdx] = a.size < b.size 
+          ? [a, b, i] 
+          : [b, a, j]
+        
+        // Approximate overlap fraction of smaller sphere
+        // overlap_fraction ≈ (r_large + r_small - d) / (2 * r_small)
+        const overlapFraction = (larger.size + smaller.size - dist) / (2 * smaller.size)
+        
+        // If 60%+ overlap, remove smaller
+        if (overlapFraction >= 0.6) {
+          toRemove.add(smallerIdx)
+        }
+      }
+    }
+    
+    return toRemove
+  }
+  
+  const culledIndices = cullOverlappingCorals(corals)
+  let culledCount = 0
+  
+  // Add surviving corals
+  for (let i = 0; i < corals.length; i++) {
+    if (culledIndices.has(i)) {
+      // Dispose culled coral
+      corals[i].mesh.traverse(child => {
+        if (child.geometry) child.geometry.dispose()
+        if (child.material) child.material.dispose()
+      })
+      culledCount++
+      continue
+    }
+    group.add(corals[i].mesh)
+  }
+  
+  if (culledCount > 0) {
+    console.log(`Region ${region.type}: culled ${culledCount} overlapping corals`)
   }
   
   // Spawn boulders

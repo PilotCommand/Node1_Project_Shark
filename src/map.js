@@ -5,6 +5,7 @@ import {
   createWaterSurface,
 } from './TerrainMaker.js'
 import { createBoulder, BoulderType } from './Boulders.js'
+import { spawnAllRegions } from './Regions.js'
 import { MeshRegistry, Category, Tag } from './MeshRegistry.js'
 
 // Default map seed (can be overridden for multiplayer sync)
@@ -209,6 +210,23 @@ export function createMap(scene, seed = DEFAULT_SEED) {
     console.log(`Culled ${culledCount} contained boulders`)
   }
 
+  // Spawn region content (coral reefs, boulder fields, etc.)
+  const regions = spawnAllRegions({
+    getTerrainHeight: (x, z) => terrainData.getHeightAtWorld(x, z) ?? 0,
+    floorY: floorY,
+    seed: seed,
+  })
+  group.add(regions)
+  
+  MeshRegistry.register('regions', {
+    mesh: regions,
+    category: Category.MAP,
+    tags: [Tag.STATIC],
+    metadata: {
+      type: 'regions',
+    }
+  }, true)
+
   // Water surface
   const surface = createWaterSurface({
     size: mapSize,
@@ -277,6 +295,7 @@ export function regenerateMap() {
   MeshRegistry.unregister('sky')
   MeshRegistry.unregister('floor')
   MeshRegistry.unregister('waterSurface')
+  MeshRegistry.unregister('regions')
   MeshRegistry.unregister('mapGroup')
   
   // Unregister all rocks

@@ -1,7 +1,8 @@
 /**
  * Corals.js - Coral reef generation
  * 
- * Creates coral reef clusters with unusual prisms and tropical colors.
+ * Creates coral reef clusters using convex hull meshes with tropical colors.
+ * Essentially colorful boulder amalgamations.
  */
 
 import * as THREE from 'three'
@@ -32,8 +33,8 @@ function pick(rng, array) {
 // ============================================================================
 
 export const CoralConfig = {
-  roughness: 0.8,
-  metalness: 0.1,
+  roughness: 0.85,
+  metalness: 0.05,
   
   // Tropical coral colors
   colors: [
@@ -49,130 +50,57 @@ export const CoralConfig = {
     0x20b2aa,  // Light sea green
     0xff7f50,  // Coral (the color!)
     0xdda0dd,  // Plum
+    0xe55b3c,  // Burnt orange
+    0x87ceeb,  // Sky blue
+    0xffc0cb,  // Pink
   ],
 }
 
 // ============================================================================
-// CORAL TYPES
-// ============================================================================
-
-export const CoralType = {
-  BRANCHING: 'branching',     // Tree-like branching coral
-  FAN: 'fan',                 // Flat fan/plate coral
-  TUBE: 'tube',               // Tall tube/pillar coral
-  BRAIN: 'brain',             // Bumpy spherical brain coral
-  STAGHORN: 'staghorn',       // Spiky antler-like coral
-  MUSHROOM: 'mushroom',       // Wide top, narrow base
-  RANDOM: 'random',
-}
-
-// ============================================================================
-// GEOMETRY HELPERS
+// CONVEX HULL GEOMETRY (same algorithm as Boulders.js)
 // ============================================================================
 
 /**
- * Create a tapered prism (narrower at top)
+ * Create a convex hull geometry from random 3D points
  */
-function createTaperedPrism(rng, baseRadius, topRadius, height, sides) {
-  const shape = new THREE.Shape()
+function createConvexGeometry(size, pointCount, rng, options = {}) {
+  const {
+    flatness = 1.0,
+    irregularity = 0.3,
+  } = options
   
-  // Create irregular polygon base
-  const basePoints = []
-  for (let i = 0; i < sides; i++) {
-    const angle = (i / sides) * Math.PI * 2
-    const variation = 0.7 + rng() * 0.6
-    const r = baseRadius * variation
-    basePoints.push({
-      x: Math.cos(angle) * r,
-      y: Math.sin(angle) * r
-    })
+  const points = []
+  
+  for (let i = 0; i < pointCount; i++) {
+    const theta = rng() * Math.PI * 2
+    const phi = Math.acos(2 * rng() - 1)
+    
+    const baseRadius = size * (0.7 + rng() * 0.6)
+    const bumpFreq = 2 + Math.floor(rng() * 4)
+    const bump = 1 + Math.sin(theta * bumpFreq) * Math.cos(phi * bumpFreq) * irregularity
+    const r = baseRadius * bump
+    
+    const x = r * Math.sin(phi) * Math.cos(theta)
+    const y = r * Math.cos(phi) * flatness
+    const z = r * Math.sin(phi) * Math.sin(theta)
+    
+    points.push(new THREE.Vector3(x, y, z))
   }
   
-  // Build shape
-  basePoints.forEach((p, i) => {
-    if (i === 0) shape.moveTo(p.x, p.y)
-    else shape.lineTo(p.x, p.y)
-  })
-  shape.closePath()
-  
-  // Custom extrude with taper
   const geometry = new THREE.BufferGeometry()
+  const hullFaces = computeConvexHull(points)
+  
   const vertices = []
   const normals = []
   
-  const segments = 3
-  for (let s = 0; s < segments; s++) {
-    const t0 = s / segments
-    const t1 = (s + 1) / segments
-    const r0 = baseRadius + (topRadius - baseRadius) * t0
-    const r1 = baseRadius + (topRadius - baseRadius) * t1
-    const y0 = height * t0
-    const y1 = height * t1
-    const scale0 = r0 / baseRadius
-    const scale1 = r1 / baseRadius
+  for (const face of hullFaces) {
+    const [a, b, c] = face
+    const ab = new THREE.Vector3().subVectors(b, a)
+    const ac = new THREE.Vector3().subVectors(c, a)
+    const normal = new THREE.Vector3().crossVectors(ab, ac).normalize()
     
-    for (let i = 0; i < sides; i++) {
-      const i2 = (i + 1) % sides
-      
-      // Get scaled points
-      const p0 = basePoints[i]
-      const p1 = basePoints[i2]
-      
-      // Bottom quad vertices
-      const v0 = { x: p0.x * scale0, y: y0, z: p0.y * scale0 }
-      const v1 = { x: p1.x * scale0, y: y0, z: p1.y * scale0 }
-      const v2 = { x: p1.x * scale1, y: y1, z: p1.y * scale1 }
-      const v3 = { x: p0.x * scale1, y: y1, z: p0.y * scale1 }
-      
-      // Two triangles for quad
-      vertices.push(v0.x, v0.y, v0.z, v1.x, v1.y, v1.z, v2.x, v2.y, v2.z)
-      vertices.push(v0.x, v0.y, v0.z, v2.x, v2.y, v2.z, v3.x, v3.y, v3.z)
-      
-      // Calculate normal
-      const edge1 = { x: v1.x - v0.x, y: v1.y - v0.y, z: v1.z - v0.z }
-      const edge2 = { x: v2.x - v0.x, y: v2.y - v0.y, z: v2.z - v0.z }
-      const nx = edge1.y * edge2.z - edge1.z * edge2.y
-      const ny = edge1.z * edge2.x - edge1.x * edge2.z
-      const nz = edge1.x * edge2.y - edge1.y * edge2.x
-      const len = Math.sqrt(nx*nx + ny*ny + nz*nz) || 1
-      
-      for (let n = 0; n < 6; n++) {
-        normals.push(nx/len, ny/len, nz/len)
-      }
-    }
-  }
-  
-  // Add top cap
-  const topY = height
-  const topScale = topRadius / baseRadius
-  const centerTop = { x: 0, y: topY, z: 0 }
-  
-  for (let i = 0; i < sides; i++) {
-    const i2 = (i + 1) % sides
-    const p0 = basePoints[i]
-    const p1 = basePoints[i2]
-    
-    vertices.push(
-      centerTop.x, centerTop.y, centerTop.z,
-      p1.x * topScale, topY, p1.y * topScale,
-      p0.x * topScale, topY, p0.y * topScale
-    )
-    normals.push(0, 1, 0, 0, 1, 0, 0, 1, 0)
-  }
-  
-  // Add bottom cap
-  const centerBot = { x: 0, y: 0, z: 0 }
-  for (let i = 0; i < sides; i++) {
-    const i2 = (i + 1) % sides
-    const p0 = basePoints[i]
-    const p1 = basePoints[i2]
-    
-    vertices.push(
-      centerBot.x, centerBot.y, centerBot.z,
-      p0.x, 0, p0.y,
-      p1.x, 0, p1.y
-    )
-    normals.push(0, -1, 0, 0, -1, 0, 0, -1, 0)
+    vertices.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z)
+    normals.push(normal.x, normal.y, normal.z, normal.x, normal.y, normal.z, normal.x, normal.y, normal.z)
   }
   
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3))
@@ -182,266 +110,167 @@ function createTaperedPrism(rng, baseRadius, topRadius, height, sides) {
 }
 
 /**
- * Create a branching coral structure
+ * Convex hull computation
  */
-function createBranchingCoral(rng, size) {
-  const group = new THREE.Group()
+function computeConvexHull(points) {
+  if (points.length < 4) return []
   
-  // Main trunk
-  const trunkHeight = size * (0.8 + rng() * 0.4)
-  const trunkRadius = size * 0.15
-  const trunkGeo = createTaperedPrism(rng, trunkRadius, trunkRadius * 0.6, trunkHeight, 5 + Math.floor(rng() * 3))
+  const eps = 1e-10
   
-  const color = pick(rng, CoralConfig.colors)
-  const material = new THREE.MeshStandardMaterial({
-    color,
-    roughness: CoralConfig.roughness,
-    metalness: CoralConfig.metalness,
-    flatShading: true,
-  })
+  let minX = 0, maxX = 0
+  for (let i = 1; i < points.length; i++) {
+    if (points[i].x < points[minX].x) minX = i
+    if (points[i].x > points[maxX].x) maxX = i
+  }
+  if (minX === maxX) maxX = minX === 0 ? 1 : 0
   
-  const trunk = new THREE.Mesh(trunkGeo, material)
-  group.add(trunk)
+  let maxDist = -1, furthest = -1
+  const lineDir = new THREE.Vector3().subVectors(points[maxX], points[minX]).normalize()
   
-  // Add branches
-  const branchCount = 3 + Math.floor(rng() * 4)
-  for (let i = 0; i < branchCount; i++) {
-    const branchHeight = size * (0.3 + rng() * 0.4)
-    const branchRadius = trunkRadius * (0.4 + rng() * 0.3)
-    const branchGeo = createTaperedPrism(rng, branchRadius, branchRadius * 0.3, branchHeight, 4 + Math.floor(rng() * 2))
+  for (let i = 0; i < points.length; i++) {
+    if (i === minX || i === maxX) continue
+    const toPoint = new THREE.Vector3().subVectors(points[i], points[minX])
+    const proj = toPoint.dot(lineDir)
+    const projVec = lineDir.clone().multiplyScalar(proj)
+    const dist = toPoint.sub(projVec).length()
+    if (dist > maxDist) { maxDist = dist; furthest = i }
+  }
+  if (furthest === -1) furthest = (minX + 1) % points.length
+  
+  const p0 = points[minX], p1 = points[maxX], p2 = points[furthest]
+  const v01 = new THREE.Vector3().subVectors(p1, p0)
+  const v02 = new THREE.Vector3().subVectors(p2, p0)
+  const planeNormal = new THREE.Vector3().crossVectors(v01, v02).normalize()
+  
+  maxDist = -1
+  let fourth = -1
+  for (let i = 0; i < points.length; i++) {
+    if (i === minX || i === maxX || i === furthest) continue
+    const dist = Math.abs(new THREE.Vector3().subVectors(points[i], p0).dot(planeNormal))
+    if (dist > maxDist) { maxDist = dist; fourth = i }
+  }
+  if (fourth === -1) return [[p0.clone(), p1.clone(), p2.clone()]]
+  
+  const p3 = points[fourth]
+  const center = new THREE.Vector3().add(p0).add(p1).add(p2).add(p3).multiplyScalar(0.25)
+  
+  const makeFace = (a, b, c) => {
+    const ab = new THREE.Vector3().subVectors(b, a)
+    const ac = new THREE.Vector3().subVectors(c, a)
+    const normal = new THREE.Vector3().crossVectors(ab, ac)
+    const toCenter = new THREE.Vector3().subVectors(center, a)
+    if (normal.dot(toCenter) > 0) return [a.clone(), c.clone(), b.clone()]
+    return [a.clone(), b.clone(), c.clone()]
+  }
+  
+  let hullFaces = [makeFace(p0, p1, p2), makeFace(p0, p1, p3), makeFace(p0, p2, p3), makeFace(p1, p2, p3)]
+  
+  for (let i = 0; i < points.length; i++) {
+    if (i === minX || i === maxX || i === furthest || i === fourth) continue
     
-    const branch = new THREE.Mesh(branchGeo, material)
+    const pt = points[i]
+    const visibleFaces = []
     
-    // Position along trunk
-    const heightOnTrunk = trunkHeight * (0.3 + rng() * 0.5)
-    const angle = rng() * Math.PI * 2
-    const tilt = Math.PI * 0.15 + rng() * Math.PI * 0.25
-    
-    branch.position.set(0, heightOnTrunk, 0)
-    branch.rotation.set(0, 0, tilt)
-    branch.rotation.y = angle
-    
-    group.add(branch)
-    
-    // Sub-branches
-    if (rng() > 0.5) {
-      const subBranchGeo = createTaperedPrism(rng, branchRadius * 0.5, branchRadius * 0.2, branchHeight * 0.5, 4)
-      const subBranch = new THREE.Mesh(subBranchGeo, material)
-      subBranch.position.set(0, heightOnTrunk + branchHeight * 0.3, 0)
-      subBranch.rotation.set(0, angle + Math.PI * 0.3, tilt * 1.3)
-      group.add(subBranch)
+    for (let f = 0; f < hullFaces.length; f++) {
+      const [a, b, c] = hullFaces[f]
+      const ab = new THREE.Vector3().subVectors(b, a)
+      const ac = new THREE.Vector3().subVectors(c, a)
+      const normal = new THREE.Vector3().crossVectors(ab, ac)
+      const toPoint = new THREE.Vector3().subVectors(pt, a)
+      if (toPoint.dot(normal) > eps) visibleFaces.push(f)
     }
+    
+    if (visibleFaces.length === 0) continue
+    
+    const edgeCount = new Map()
+    const edgeKey = (a, b) => {
+      const k1 = `${a.x.toFixed(6)},${a.y.toFixed(6)},${a.z.toFixed(6)}-${b.x.toFixed(6)},${b.y.toFixed(6)},${b.z.toFixed(6)}`
+      const k2 = `${b.x.toFixed(6)},${b.y.toFixed(6)},${b.z.toFixed(6)}-${a.x.toFixed(6)},${a.y.toFixed(6)},${a.z.toFixed(6)}`
+      return [k1, k2]
+    }
+    
+    for (const f of visibleFaces) {
+      const [a, b, c] = hullFaces[f]
+      for (const [ea, eb] of [[a,b],[b,c],[c,a]]) {
+        const [k1, k2] = edgeKey(ea, eb)
+        edgeCount.set(k1, (edgeCount.get(k1) || 0) + 1)
+        edgeCount.set(k2, (edgeCount.get(k2) || 0) + 1)
+      }
+    }
+    
+    const boundaryEdges = []
+    for (const f of visibleFaces) {
+      const [a, b, c] = hullFaces[f]
+      for (const [ea, eb] of [[a,b],[b,c],[c,a]]) {
+        const [k1] = edgeKey(ea, eb)
+        if (edgeCount.get(k1) === 1) boundaryEdges.push([ea, eb])
+      }
+    }
+    
+    visibleFaces.sort((a, b) => b - a)
+    for (const f of visibleFaces) hullFaces.splice(f, 1)
+    for (const [ea, eb] of boundaryEdges) hullFaces.push(makeFace(ea, eb, pt))
   }
   
-  return group
+  return hullFaces
 }
 
+// ============================================================================
+// CORAL PIECE CREATION
+// ============================================================================
+
 /**
- * Create a fan/plate coral
+ * Create a single coral piece (convex mesh with tropical color)
  */
-function createFanCoral(rng, size) {
-  const group = new THREE.Group()
+function createCoralPiece(rng, size, color = null) {
+  const pointCount = 8 + Math.floor(rng() * 8)  // 8-15 points
   
-  // Create flat fan shape using multiple thin prisms
-  const color = pick(rng, CoralConfig.colors)
-  const material = new THREE.MeshStandardMaterial({
-    color,
-    roughness: CoralConfig.roughness,
-    metalness: CoralConfig.metalness,
-    flatShading: true,
-    side: THREE.DoubleSide,
+  // Random shape variation
+  const flatness = 0.5 + rng() * 1.0  // 0.5 to 1.5
+  const irregularity = 0.2 + rng() * 0.4
+  
+  const geometry = createConvexGeometry(size, pointCount, rng, {
+    flatness,
+    irregularity,
   })
   
-  // Base/stem
-  const stemHeight = size * 0.3
-  const stemGeo = createTaperedPrism(rng, size * 0.1, size * 0.08, stemHeight, 5)
-  const stem = new THREE.Mesh(stemGeo, material)
-  group.add(stem)
+  const coralColor = color || pick(rng, CoralConfig.colors)
   
-  // Fan plates
-  const plateCount = 3 + Math.floor(rng() * 3)
-  for (let i = 0; i < plateCount; i++) {
-    const plateWidth = size * (0.6 + rng() * 0.4)
-    const plateHeight = size * (0.5 + rng() * 0.3)
-    const plateThickness = size * 0.03
-    
-    const plateGeo = new THREE.BoxGeometry(plateWidth, plateHeight, plateThickness)
-    const plate = new THREE.Mesh(plateGeo, material)
-    
-    plate.position.y = stemHeight + plateHeight * 0.4
-    plate.rotation.y = (i / plateCount) * Math.PI + rng() * 0.3
-    plate.rotation.x = -0.2 + rng() * 0.4
-    
-    group.add(plate)
-  }
+  // Slight color variation
+  const baseColor = new THREE.Color(coralColor)
+  const hsl = { h: 0, s: 0, l: 0 }
+  baseColor.getHSL(hsl)
+  const variedColor = new THREE.Color().setHSL(
+    hsl.h + (rng() - 0.5) * 0.05,
+    Math.min(1, hsl.s * (0.9 + rng() * 0.2)),
+    Math.min(1, hsl.l * (0.9 + rng() * 0.2))
+  )
   
-  return group
-}
-
-/**
- * Create a tube coral
- */
-function createTubeCoral(rng, size) {
-  const group = new THREE.Group()
-  
-  const color = pick(rng, CoralConfig.colors)
   const material = new THREE.MeshStandardMaterial({
-    color,
-    roughness: CoralConfig.roughness,
-    metalness: CoralConfig.metalness,
-    flatShading: true,
-  })
-  
-  // Create cluster of tubes
-  const tubeCount = 4 + Math.floor(rng() * 5)
-  
-  for (let i = 0; i < tubeCount; i++) {
-    const tubeHeight = size * (0.5 + rng() * 0.8)
-    const tubeRadius = size * (0.08 + rng() * 0.1)
-    const sides = 5 + Math.floor(rng() * 3)
-    
-    // Tube with slight flare at top
-    const tubeGeo = createTaperedPrism(rng, tubeRadius, tubeRadius * (1.1 + rng() * 0.3), tubeHeight, sides)
-    const tube = new THREE.Mesh(tubeGeo, material)
-    
-    // Cluster position
-    const angle = rng() * Math.PI * 2
-    const dist = rng() * size * 0.3
-    tube.position.set(
-      Math.cos(angle) * dist,
-      0,
-      Math.sin(angle) * dist
-    )
-    
-    // Slight random tilt
-    tube.rotation.x = (rng() - 0.5) * 0.2
-    tube.rotation.z = (rng() - 0.5) * 0.2
-    
-    group.add(tube)
-  }
-  
-  return group
-}
-
-/**
- * Create a brain coral (bumpy sphere)
- */
-function createBrainCoral(rng, size) {
-  // Start with icosahedron and displace vertices
-  const detail = 2
-  const geometry = new THREE.IcosahedronGeometry(size * 0.5, detail)
-  
-  const positions = geometry.attributes.position.array
-  for (let i = 0; i < positions.length; i += 3) {
-    const x = positions[i]
-    const y = positions[i + 1]
-    const z = positions[i + 2]
-    
-    // Add bumpy displacement
-    const dist = Math.sqrt(x*x + y*y + z*z)
-    const theta = Math.atan2(z, x)
-    const phi = Math.acos(y / dist)
-    
-    const bump = 1 + Math.sin(theta * 8) * Math.cos(phi * 6) * 0.15
-    const noise = 1 + (rng() - 0.5) * 0.1
-    
-    const scale = bump * noise
-    positions[i] *= scale
-    positions[i + 1] *= scale
-    positions[i + 2] *= scale
-  }
-  
-  geometry.attributes.position.needsUpdate = true
-  geometry.computeVertexNormals()
-  
-  const color = pick(rng, CoralConfig.colors)
-  const material = new THREE.MeshStandardMaterial({
-    color,
+    color: variedColor,
     roughness: CoralConfig.roughness,
     metalness: CoralConfig.metalness,
     flatShading: true,
   })
   
   const mesh = new THREE.Mesh(geometry, material)
-  mesh.position.y = size * 0.3  // Lift so it sits on ground
   
-  const group = new THREE.Group()
-  group.add(mesh)
-  return group
-}
-
-/**
- * Create staghorn coral (spiky antler-like)
- */
-function createStaghornCoral(rng, size) {
-  const group = new THREE.Group()
+  // Random rotation
+  mesh.rotation.set(
+    rng() * Math.PI * 2,
+    rng() * Math.PI * 2,
+    rng() * Math.PI * 2
+  )
   
-  const color = pick(rng, CoralConfig.colors)
-  const material = new THREE.MeshStandardMaterial({
-    color,
-    roughness: CoralConfig.roughness,
-    metalness: CoralConfig.metalness,
-    flatShading: true,
-  })
+  // Slight scale variation
+  const scaleVar = 0.2
+  mesh.scale.set(
+    1 + (rng() - 0.5) * scaleVar,
+    1 + (rng() - 0.5) * scaleVar,
+    1 + (rng() - 0.5) * scaleVar
+  )
   
-  // Create many spiky protrusions
-  const spikeCount = 8 + Math.floor(rng() * 8)
-  
-  for (let i = 0; i < spikeCount; i++) {
-    const spikeHeight = size * (0.4 + rng() * 0.6)
-    const spikeRadius = size * (0.04 + rng() * 0.06)
-    
-    const spikeGeo = createTaperedPrism(rng, spikeRadius, spikeRadius * 0.1, spikeHeight, 4)
-    const spike = new THREE.Mesh(spikeGeo, material)
-    
-    // Radiate outward from center
-    const angle = (i / spikeCount) * Math.PI * 2 + rng() * 0.5
-    const tilt = Math.PI * 0.1 + rng() * Math.PI * 0.3
-    const dist = rng() * size * 0.15
-    
-    spike.position.set(
-      Math.cos(angle) * dist,
-      rng() * size * 0.2,
-      Math.sin(angle) * dist
-    )
-    spike.rotation.set(tilt * Math.cos(angle), 0, tilt * Math.sin(angle))
-    
-    group.add(spike)
-  }
-  
-  return group
-}
-
-/**
- * Create mushroom coral (wide top, narrow base)
- */
-function createMushroomCoral(rng, size) {
-  const group = new THREE.Group()
-  
-  const color = pick(rng, CoralConfig.colors)
-  const material = new THREE.MeshStandardMaterial({
-    color,
-    roughness: CoralConfig.roughness,
-    metalness: CoralConfig.metalness,
-    flatShading: true,
-  })
-  
-  // Stem
-  const stemHeight = size * (0.3 + rng() * 0.2)
-  const stemRadius = size * 0.1
-  const stemGeo = createTaperedPrism(rng, stemRadius, stemRadius * 1.2, stemHeight, 6)
-  const stem = new THREE.Mesh(stemGeo, material)
-  group.add(stem)
-  
-  // Cap
-  const capRadius = size * (0.4 + rng() * 0.2)
-  const capHeight = size * (0.15 + rng() * 0.1)
-  const capGeo = createTaperedPrism(rng, capRadius * 0.3, capRadius, capHeight, 8 + Math.floor(rng() * 4))
-  const cap = new THREE.Mesh(capGeo, material)
-  cap.position.y = stemHeight
-  group.add(cap)
-  
-  return group
+  return mesh
 }
 
 // ============================================================================
@@ -449,79 +278,129 @@ function createMushroomCoral(rng, size) {
 // ============================================================================
 
 /**
- * Create a single coral
+ * Cull pieces with 60%+ volume overlap (delete smaller)
+ */
+function cullOverlappingPieces(pieces) {
+  const toRemove = new Set()
+  
+  for (let i = 0; i < pieces.length; i++) {
+    if (toRemove.has(i)) continue
+    
+    const a = pieces[i]
+    
+    for (let j = i + 1; j < pieces.length; j++) {
+      if (toRemove.has(j)) continue
+      
+      const b = pieces[j]
+      
+      // Distance between centers
+      const dx = a.x - b.x
+      const dy = a.y - b.y
+      const dz = a.z - b.z
+      const dist = Math.sqrt(dx*dx + dy*dy + dz*dz)
+      
+      // Determine smaller and larger
+      const [smaller, larger, smallerIdx] = a.size < b.size 
+        ? [a, b, i] 
+        : [b, a, j]
+      
+      // Approximate overlap fraction of smaller sphere
+      const overlapFraction = (larger.size + smaller.size - dist) / (2 * smaller.size)
+      
+      // If 60%+ overlap, remove smaller
+      if (overlapFraction >= 0.6) {
+        toRemove.add(smallerIdx)
+      }
+    }
+  }
+  
+  return toRemove
+}
+
+/**
+ * Create a coral formation (cluster of convex pieces)
  * @param {object} options
- * @param {number} [options.size=1] - Base coral size
- * @param {string} [options.type='random'] - Coral type
+ * @param {number} [options.size=1] - Base size of the formation
+ * @param {number} [options.pieceCount] - Number of pieces (auto-calculated if not set)
  * @param {number} [options.seed] - Random seed
+ * @param {boolean} [options.multiColor=true] - Use multiple colors or single color
  * @returns {THREE.Group}
  */
 export function createCoral(options = {}) {
   const {
     size = 1,
-    type = CoralType.RANDOM,
+    pieceCount = null,
     seed = null,
+    multiColor = true,
   } = options
   
   const rng = seed !== null ? createRNG(seed) : Math.random
+  const group = new THREE.Group()
   
-  let coralType = type
-  if (type === CoralType.RANDOM) {
-    const types = [
-      CoralType.BRANCHING,
-      CoralType.BRANCHING,  // Weighted
-      CoralType.FAN,
-      CoralType.TUBE,
-      CoralType.TUBE,       // Weighted
-      CoralType.BRAIN,
-      CoralType.STAGHORN,
-      CoralType.MUSHROOM,
-    ]
-    coralType = pick(rng, types)
+  // Calculate piece count based on size if not specified
+  // Logarithmic scaling so large corals don't have too many pieces
+  const count = pieceCount || Math.floor(8 + Math.sqrt(size) * 5 + rng() * 8)
+  
+  // Pick a base color for single-color mode
+  const baseColor = multiColor ? null : pick(rng, CoralConfig.colors)
+  
+  // Collect pieces for overlap culling
+  const pieces = []
+  
+  for (let i = 0; i < count; i++) {
+    // Piece size varies - mix of small and large relative to formation
+    const t = rng()
+    const pieceSize = size * (0.1 + t * t * 0.4)  // 10% to 50% of formation size
+    
+    const piece = createCoralPiece(rng, pieceSize, baseColor)
+    
+    // Position pieces in a clustered formation
+    const distFactor = Math.pow(rng(), 0.6)  // Cluster toward center
+    const dist = distFactor * size * 0.8
+    const angle = rng() * Math.PI * 2
+    const heightVar = rng() * rng()  // Bias toward ground level
+    
+    const x = Math.cos(angle) * dist
+    const y = pieceSize * 0.4 + heightVar * size * 0.5
+    const z = Math.sin(angle) * dist
+    
+    piece.position.set(x, y, z)
+    
+    pieces.push({ mesh: piece, size: pieceSize, x, y, z })
   }
   
-  let coral
-  switch (coralType) {
-    case CoralType.BRANCHING:
-      coral = createBranchingCoral(rng, size)
-      break
-    case CoralType.FAN:
-      coral = createFanCoral(rng, size)
-      break
-    case CoralType.TUBE:
-      coral = createTubeCoral(rng, size)
-      break
-    case CoralType.BRAIN:
-      coral = createBrainCoral(rng, size)
-      break
-    case CoralType.STAGHORN:
-      coral = createStaghornCoral(rng, size)
-      break
-    case CoralType.MUSHROOM:
-      coral = createMushroomCoral(rng, size)
-      break
-    default:
-      coral = createBranchingCoral(rng, size)
+  // Cull overlapping pieces
+  const culledIndices = cullOverlappingPieces(pieces)
+  
+  // Add surviving pieces
+  for (let i = 0; i < pieces.length; i++) {
+    if (culledIndices.has(i)) {
+      // Dispose culled piece
+      pieces[i].mesh.geometry.dispose()
+      pieces[i].mesh.material.dispose()
+      continue
+    }
+    group.add(pieces[i].mesh)
   }
   
-  // Random rotation
-  coral.rotation.y = rng() * Math.PI * 2
+  // Random rotation for the whole formation
+  group.rotation.y = rng() * Math.PI * 2
   
   // Mark for identification
-  coral.userData.terrainType = 'coral'
-  coral.userData.coralType = coralType
-  coral.userData.baseSize = size
+  group.userData.terrainType = 'coral'
+  group.userData.baseSize = size
+  group.userData.pieceCount = group.children.length
   
-  return coral
+  return group
 }
 
 /**
- * Create a coral reef cluster
+ * Create a coral reef (multiple coral formations)
  * @param {object} options
- * @param {number} [options.count=10] - Number of corals
+ * @param {number} [options.count=10] - Number of coral formations
  * @param {number} [options.spread=5] - Spread radius
- * @param {number} [options.minSize=0.5] - Minimum coral size
- * @param {number} [options.maxSize=2] - Maximum coral size
+ * @param {number} [options.minSize=0.5] - Minimum formation size
+ * @param {number} [options.maxSize=2] - Maximum formation size
  * @param {number} [options.seed] - Random seed
  * @returns {THREE.Group}
  */
@@ -539,15 +418,19 @@ export function createCoralReef(options = {}) {
   
   for (let i = 0; i < count; i++) {
     const size = range(rng, minSize, maxSize)
+    
+    // Randomly choose multi-color or single-color formations
+    const multiColor = rng() > 0.3  // 70% multi-color
+    
     const coral = createCoral({
       size,
-      type: CoralType.RANDOM,
       seed: seed ? seed + i * 7777 : null,
+      multiColor,
     })
     
     // Position within spread (clustered toward center)
     const angle = rng() * Math.PI * 2
-    const dist = Math.pow(rng(), 0.7) * spread  // Clustered distribution
+    const dist = Math.pow(rng(), 0.7) * spread
     coral.position.set(
       Math.cos(angle) * dist,
       0,
@@ -568,7 +451,6 @@ export function createCoralReef(options = {}) {
 
 export default {
   CoralConfig,
-  CoralType,
   createCoral,
   createCoralReef,
 }
