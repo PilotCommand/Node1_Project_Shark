@@ -125,11 +125,5 @@ console.log(`
     P                 - Toggle wireframes
     F                 - Debug
 
-  MOVEMENT MODE: Edit Swimming.js line ~47 to change
-    'direct'   - Instant, no physics (original)
-    'velocity' - Direct feel with collision
-    'force'    - Full physics, momentum
-    'hybrid'   - Smooth acceleration with collision
-
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 `)

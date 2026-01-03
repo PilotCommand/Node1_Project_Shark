@@ -1,13 +1,8 @@
 /**
- * Swimming.js - Movement System
+ * Swimming.js - Hybrid Movement System
  * 
- * ============================================================================
- * MOVEMENT MODES - Choose how the fish moves
- * ============================================================================
- * 
- * Change MOVEMENT_MODE below to switch between fundamentally different
- * movement systems. Each one feels completely different.
- * 
+ * Smooth acceleration/deceleration with physics collision.
+ * Edit PARAMS below to tune the feel.
  */
 
 import * as THREE from 'three'
@@ -15,7 +10,6 @@ import { getPlayer } from './player.js'
 import { getYaw, getPitch, getCameraMode } from './camera.js'
 import {
   isPhysicsReady,
-  applyPlayerSwimForce,
   applyPlayerMovement,
   getPlayerVelocity,
   setPlayerVelocity,
@@ -24,134 +18,58 @@ import {
 } from './Physics.js'
 
 // ============================================================================
-// 
-//  ███╗   ███╗ ██████╗ ██████╗ ███████╗    ███████╗███████╗██╗     ███████╗ ██████╗████████╗
-//  ████╗ ████║██╔═══██╗██╔══██╗██╔════╝    ██╔════╝██╔════╝██║     ██╔════╝██╔════╝╚══██╔══╝
-//  ██╔████╔██║██║   ██║██║  ██║█████╗      ███████╗█████╗  ██║     █████╗  ██║        ██║   
-//  ██║╚██╔╝██║██║   ██║██║  ██║██╔══╝      ╚════██║██╔══╝  ██║     ██╔══╝  ██║        ██║   
-//  ██║ ╚═╝ ██║╚██████╔╝██████╔╝███████╗    ███████║███████╗███████╗███████╗╚██████╗   ██║   
-//  ╚═╝     ╚═╝ ╚═════╝ ╚═════╝ ╚══════╝    ╚══════╝╚══════╝╚══════╝╚══════╝ ╚═════╝   ╚═╝   
-//
-// ============================================================================
-
-/**
- * ⭐ CHANGE THIS TO SWITCH MOVEMENT MODE ⭐
- * 
- * 'direct'   - Original instant movement. No physics. Position updates directly.
- *              Fish goes exactly where you point, stops instantly.
- * 
- * 'velocity' - We set velocity directly, Rapier handles collision.
- *              Responsive but still collides with terrain.
- * 
- * 'force'    - Full physics. We apply forces, Rapier simulates momentum/drag.
- *              Most realistic but can feel floaty/unresponsive.
- * 
- * 'hybrid'   - Mix: Direct-feeling control but with collision.
- *              We set velocity each frame based on input.
- */
-const MOVEMENT_MODE = 'velocity'
-
-
-// ============================================================================
-// 
-//  ██████╗  █████╗ ██████╗  █████╗ ███╗   ███╗███████╗████████╗███████╗██████╗ ███████╗
-//  ██╔══██╗██╔══██╗██╔══██╗██╔══██╗████╗ ████║██╔════╝╚══██╔══╝██╔════╝██╔══██╗██╔════╝
-//  ██████╔╝███████║██████╔╝███████║██╔████╔██║█████╗     ██║   █████╗  ██████╔╝███████╗
-//  ██╔═══╝ ██╔══██║██╔══██╗██╔══██║██║╚██╔╝██║██╔══╝     ██║   ██╔══╝  ██╔══██╗╚════██║
-//  ██║     ██║  ██║██║  ██║██║  ██║██║ ╚═╝ ██║███████╗   ██║   ███████╗██║  ██║███████║
-//  ╚═╝     ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝     ╚═╝╚══════╝   ╚═╝   ╚══════╝╚═╝  ╚═╝╚══════╝
-//
-// Edit these to tune each mode
+// PARAMETERS - Edit these to tune the feel
 // ============================================================================
 
 const PARAMS = {
+  // Movement speeds
+  speed: 12,              // Normal swim speed (units/sec)
+  sprintSpeed: 20,        // Sprint speed (Alt held)
+  slowSpeed: 4,           // Slow/precise speed (Ctrl held)
   
-  // === DIRECT MODE ===
-  // No physics, instant response
-  direct: {
-    speed: 15,              // Units per second
-    sprintSpeed: 25,        // Sprint speed
-    slowSpeed: 5,           // Slow mode speed
-    turnSpeed: 10,          // How fast fish rotates
-    pitchSpeed: 8,
-  },
+  // Acceleration
+  acceleration: 30,       // How fast you reach target speed
+  deceleration: 20,       // How fast you stop when releasing keys
   
-  // === VELOCITY MODE ===
-  // We set velocity, Rapier handles collision only
-  velocity: {
-    speed: 12,              // Units per second  
-    sprintSpeed: 22,
-    slowSpeed: 4,
-    turnSpeed: 10,
-    pitchSpeed: 8,
-    // Physics settings (for collision response)
-    linearDamping: 0,       // We control velocity, no damping needed
-    gravityScale: 0,        // No gravity, we control everything
-  },
+  // Rotation
+  turnSpeed: 12,          // How fast fish turns to face movement
+  pitchSpeed: 10,         // How fast fish pitches up/down
   
-  // === FORCE MODE ===
-  // Full physics simulation
-  force: {
-    swimForce: 800,         // Newtons of push force
-    sprintMultiplier: 1.8,
-    slowMultiplier: 0.4,
-    turnSpeed: 8,
-    pitchSpeed: 6,
-    // Physics settings
-    linearDamping: 5.0,     // How fast you slow down (higher = faster stop)
-    gravityScale: 0.15,     // How much gravity affects you
-  },
+  // Physics
+  linearDamping: 0.5,     // Minimal damping (we control velocity)
+  gravityScale: 0.1,      // Slight gravity for underwater feel
   
-  // === HYBRID MODE ===
-  // Direct control feel with collision
-  hybrid: {
-    speed: 12,
-    sprintSpeed: 20,
-    slowSpeed: 4,
-    acceleration: 30,       // How fast we reach target speed
-    deceleration: 20,       // How fast we stop
-    turnSpeed: 12,
-    pitchSpeed: 10,
-    // Physics settings
-    linearDamping: 0.5,     // Minimal damping
-    gravityScale: 0.1,
-  },
+  // Dash
+  dashForce: 2000,        // Burst force when pressing Q
+  dashCooldown: 0.5,      // Seconds between dashes
 }
 
-
 // ============================================================================
-// STATE (don't edit)
+// STATE
 // ============================================================================
 
 const input = { forward: 0, right: 0, up: 0 }
 let isSprinting = false
 let isSlowMode = false
-const smoothedVelocity = new THREE.Vector3()
-const currentVelocity = new THREE.Vector3()
+let lastDashTime = 0
 
+const currentVelocity = new THREE.Vector3()
 
 // ============================================================================
 // INITIALIZATION
 // ============================================================================
 
 export function initSwimming() {
-  console.log(`[Swimming] Mode: ${MOVEMENT_MODE}`)
-  console.log(`[Swimming] Params:`, PARAMS[MOVEMENT_MODE])
+  console.log('[Swimming] Hybrid mode initialized')
   
-  // Apply physics settings for this mode
-  if (isPhysicsReady() && PARAMS[MOVEMENT_MODE]) {
-    const p = PARAMS[MOVEMENT_MODE]
-    if (p.linearDamping !== undefined) {
-      setPlayerDamping(p.linearDamping)
-    }
-    if (p.gravityScale !== undefined) {
-      setPlayerGravityScale(p.gravityScale)
-    }
+  // Apply physics settings
+  if (isPhysicsReady()) {
+    setPlayerDamping(PARAMS.linearDamping)
+    setPlayerGravityScale(PARAMS.gravityScale)
   }
 }
 
 export function disposeSwimming() {}
-
 
 // ============================================================================
 // INPUT
@@ -165,10 +83,10 @@ export function setSwimInput(forward, right, up) {
 
 export function setSprinting(sprinting) { isSprinting = sprinting }
 export function setSlowMode(slow) { isSlowMode = slow }
+
 export function isMoving() {
   return input.forward !== 0 || input.right !== 0 || input.up !== 0
 }
-
 
 // ============================================================================
 // MAIN UPDATE
@@ -186,28 +104,17 @@ export function updateSwimming(delta) {
     rotateToFaceMovement(player, direction, delta)
   }
   
-  // Apply movement based on mode
-  switch (MOVEMENT_MODE) {
-    case 'direct':
-      updateDirectMode(player, direction, delta)
-      break
-    case 'velocity':
-      updateVelocityMode(player, direction, delta)
-      break
-    case 'force':
-      updateForceMode(player, direction, delta)
-      break
-    case 'hybrid':
-      updateHybridMode(player, direction, delta)
-      break
-    default:
-      updateDirectMode(player, direction, delta)
+  // Apply hybrid movement
+  if (isPhysicsReady()) {
+    applyHybridMovement(direction, delta)
+  } else {
+    // Fallback: direct movement if no physics
+    applyDirectMovement(player, direction, delta)
   }
 }
 
-
 // ============================================================================
-// MOVEMENT DIRECTION (shared)
+// MOVEMENT
 // ============================================================================
 
 function getMovementDirection() {
@@ -236,7 +143,6 @@ function getMovementDirection() {
 function rotateToFaceMovement(player, direction, delta) {
   if (getCameraMode() !== 'orbit') return
   
-  const p = PARAMS[MOVEMENT_MODE]
   const targetYaw = Math.atan2(-direction.x, -direction.z)
   const targetPitch = Math.asin(Math.max(-1, Math.min(1, direction.y)))
   
@@ -245,130 +151,54 @@ function rotateToFaceMovement(player, direction, delta) {
   while (yawDiff > Math.PI) yawDiff -= Math.PI * 2
   while (yawDiff < -Math.PI) yawDiff += Math.PI * 2
   
-  player.rotation.y += yawDiff * p.turnSpeed * delta
-  player.rotation.x += (targetPitch - player.rotation.x) * p.pitchSpeed * delta
+  player.rotation.y += yawDiff * PARAMS.turnSpeed * delta
+  player.rotation.x += (targetPitch - player.rotation.x) * PARAMS.pitchSpeed * delta
 }
 
-
-// ============================================================================
-// MODE: DIRECT
-// Original movement. No physics. Instant response.
-// ============================================================================
-
-function updateDirectMode(player, direction, delta) {
-  const p = PARAMS.direct
-  
-  // Get speed
-  let speed = p.speed
-  if (isSprinting) speed = p.sprintSpeed
-  if (isSlowMode) speed = p.slowSpeed
-  
-  // Move directly
-  if (direction.length() > 0) {
-    player.position.addScaledVector(direction, speed * delta)
-  }
-}
-
-
-// ============================================================================
-// MODE: VELOCITY
-// We set velocity each frame. Rapier handles collision only.
-// Feels direct but respects terrain.
-// ============================================================================
-
-function updateVelocityMode(player, direction, delta) {
-  if (!isPhysicsReady()) {
-    updateDirectMode(player, direction, delta)
-    return
-  }
-  
-  const p = PARAMS.velocity
-  
-  // Get speed
-  let speed = p.speed
-  if (isSprinting) speed = p.sprintSpeed
-  if (isSlowMode) speed = p.slowSpeed
-  
-  // Set velocity directly
-  if (direction.length() > 0) {
-    const velocity = direction.clone().multiplyScalar(speed)
-    setPlayerVelocity(velocity)
-  } else {
-    // Stop when no input
-    setPlayerVelocity(new THREE.Vector3(0, 0, 0))
-  }
-}
-
-
-// ============================================================================
-// MODE: FORCE
-// Full physics. Apply forces, Rapier simulates everything.
-// ============================================================================
-
-function updateForceMode(player, direction, delta) {
-  if (!isPhysicsReady()) {
-    updateDirectMode(player, direction, delta)
-    return
-  }
-  
-  const p = PARAMS.force
-  
-  if (direction.length() === 0) return
-  
-  // Calculate force
-  let force = p.swimForce
-  if (isSprinting) force *= p.sprintMultiplier
-  if (isSlowMode) force *= p.slowMultiplier
-  
-  // Apply force to physics body
-  applyPlayerSwimForce(direction, force, delta)
-}
-
-
-// ============================================================================
-// MODE: HYBRID
-// Direct-feeling with smooth acceleration, but with collision.
-// ============================================================================
-
-function updateHybridMode(player, direction, delta) {
-  if (!isPhysicsReady()) {
-    updateDirectMode(player, direction, delta)
-    return
-  }
-  
-  const p = PARAMS.hybrid
-  
+function applyHybridMovement(direction, delta) {
   // Get target speed
-  let speed = p.speed
-  if (isSprinting) speed = p.sprintSpeed
-  if (isSlowMode) speed = p.slowSpeed
+  let speed = PARAMS.speed
+  if (isSprinting) speed = PARAMS.sprintSpeed
+  if (isSlowMode) speed = PARAMS.slowSpeed
   
   // Target velocity
   const targetVelocity = direction.clone().multiplyScalar(speed)
   
   // Smoothly interpolate current velocity to target
   if (direction.length() > 0) {
-    currentVelocity.lerp(targetVelocity, p.acceleration * delta)
+    currentVelocity.lerp(targetVelocity, PARAMS.acceleration * delta)
   } else {
-    currentVelocity.lerp(new THREE.Vector3(), p.deceleration * delta)
+    currentVelocity.lerp(new THREE.Vector3(), PARAMS.deceleration * delta)
     if (currentVelocity.length() < 0.1) currentVelocity.set(0, 0, 0)
   }
   
-  // Apply to physics
+  // Apply to physics body
   setPlayerVelocity(currentVelocity)
 }
 
+function applyDirectMovement(player, direction, delta) {
+  let speed = PARAMS.speed
+  if (isSprinting) speed = PARAMS.sprintSpeed
+  if (isSlowMode) speed = PARAMS.slowSpeed
+  
+  if (direction.length() > 0) {
+    player.position.addScaledVector(direction, speed * delta)
+  }
+}
 
 // ============================================================================
-// UTILITY
+// SPECIAL ACTIONS
 // ============================================================================
 
 export function triggerDash() {
+  const now = performance.now() / 1000
+  if (now - lastDashTime < PARAMS.dashCooldown) return false
   if (!isPhysicsReady()) return false
   
-  const direction = getMovementDirection()
+  let direction = getMovementDirection()
+  
+  // Dash forward if no input
   if (direction.length() === 0) {
-    // Dash forward if no input
     const yaw = getYaw()
     const pitch = getPitch()
     direction.set(
@@ -378,7 +208,8 @@ export function triggerDash() {
     )
   }
   
-  applyPlayerMovement(direction.normalize(), 2000)
+  applyPlayerMovement(direction.normalize(), PARAMS.dashForce)
+  lastDashTime = now
   return true
 }
 
@@ -387,16 +218,17 @@ export function fullStop() {
     setPlayerVelocity(new THREE.Vector3(0, 0, 0))
   }
   currentVelocity.set(0, 0, 0)
-  smoothedVelocity.set(0, 0, 0)
 }
+
+// ============================================================================
+// DEBUG & CONFIG
+// ============================================================================
 
 export function debugSwimming() {
   console.group('[Swimming] Debug')
-  console.log('Mode:', MOVEMENT_MODE)
-  console.log('Params:', PARAMS[MOVEMENT_MODE])
+  console.log('Params:', PARAMS)
   console.log('Input:', input)
-  console.log('Sprinting:', isSprinting)
-  console.log('Slow:', isSlowMode)
+  console.log('Sprinting:', isSprinting, '| Slow:', isSlowMode)
   if (isPhysicsReady()) {
     const vel = getPlayerVelocity()
     console.log('Velocity:', vel.length().toFixed(2), 'm/s')
@@ -404,21 +236,24 @@ export function debugSwimming() {
   console.groupEnd()
 }
 
-// For external config changes
-export function autoApplyPreset(creatureType, creatureClass, traits = {}) {
-  // Re-apply physics settings when creature changes
-  if (isPhysicsReady() && PARAMS[MOVEMENT_MODE]) {
-    const p = PARAMS[MOVEMENT_MODE]
-    if (p.linearDamping !== undefined) setPlayerDamping(p.linearDamping)
-    if (p.gravityScale !== undefined) setPlayerGravityScale(p.gravityScale)
-  }
-  return 'default'
-}
-
 export function setSwimConfig(config) {
-  Object.assign(PARAMS[MOVEMENT_MODE], config)
+  Object.assign(PARAMS, config)
+  if (isPhysicsReady()) {
+    if (config.linearDamping !== undefined) setPlayerDamping(config.linearDamping)
+    if (config.gravityScale !== undefined) setPlayerGravityScale(config.gravityScale)
+  }
 }
 
 export function getSwimConfig() {
-  return { ...PARAMS[MOVEMENT_MODE] }
+  return { ...PARAMS }
+}
+
+// Called when creature changes
+export function autoApplyPreset(creatureType, creatureClass, traits = {}) {
+  // Re-apply physics settings
+  if (isPhysicsReady()) {
+    setPlayerDamping(PARAMS.linearDamping)
+    setPlayerGravityScale(PARAMS.gravityScale)
+  }
+  return 'hybrid'
 }
