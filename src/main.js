@@ -113,9 +113,7 @@ console.log(`
     WASD              - Swim
     Space             - Up
     Shift             - Down
-    Alt               - Sprint
-    Ctrl              - Slow
-    Q                 - Dash
+    Q (hold)          - Extra (boost by default)
 
   OTHER:
     Mouse / Scroll    - Look / Zoom

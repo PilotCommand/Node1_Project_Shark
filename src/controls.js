@@ -1,22 +1,17 @@
 /**
- * controls.js - Input handling and game controls
- * 
- * Handles keyboard/mouse input and delegates movement to Swimming.js
+ * controls.js - Input handling
  * 
  * Controls:
- *   WASD        - Swim direction
- *   Space       - Swim up
- *   Shift       - Swim down
- *   Alt         - Sprint (hold)
- *   Ctrl        - Slow/precise mode (hold)
- *   Q           - Dash burst
+ *   WASD        - Swim
+ *   Space       - Up
+ *   Shift       - Down
+ *   Q (hold)    - Extra ability (see ExtraControls.js)
  *   
- *   R           - Mutate creature (same species)
- *   N           - Next species
- *   B           - Previous species
- *   M           - Regenerate map
- *   P           - Toggle collision wireframes
- *   F           - Debug info
+ *   R           - Mutate creature
+ *   N / B       - Next / Previous species
+ *   M           - New map
+ *   P           - Toggle wireframes
+ *   F           - Debug
  */
 
 import { getPlayer } from './player.js'
@@ -27,9 +22,6 @@ import {
   getCurrentIndex,
   getCreatureCatalog,
   toggleWireframe,
-  getCurrentType,
-  getCurrentClass,
-  getCurrentCreature,
 } from './player.js'
 import { 
   seedToString, 
@@ -53,16 +45,21 @@ import {
 import {
   initSwimming,
   setSwimInput,
-  setSprinting,
-  setSlowMode,
+  setBoosting,
   updateSwimming,
-  triggerDash,
   autoApplyPreset,
   debugSwimming,
 } from './Swimming.js'
+import {
+  activateExtra,
+  deactivateExtra,
+  updateExtra,
+  getActiveExtra,
+  debugExtra,
+} from './ExtraControls.js'
 
 // ============================================================================
-// INPUT STATE
+// STATE
 // ============================================================================
 
 const keys = {
@@ -72,31 +69,19 @@ const keys = {
   d: false,
   space: false,
   shift: false,
+  q: false,
 }
 
 // ============================================================================
-// HELPER FUNCTIONS
+// HELPERS
 // ============================================================================
 
-/**
- * Rebuild player physics body and update swimming preset
- */
 function rebuildPlayerPhysics() {
   const player = getPlayer()
   if (!player) return
   
-  // Update swimming preset for new creature
-  const creatureType = getCurrentType()
-  const creatureClass = getCurrentClass()
-  const creature = getCurrentCreature()
-  const traits = creature?.traits || {}
+  autoApplyPreset()
   
-  if (creatureType && creatureClass) {
-    const preset = autoApplyPreset(creatureType, creatureClass, traits)
-    console.log(`[Controls] Applied swim preset: ${preset}`)
-  }
-  
-  // Rebuild physics body
   if (isPhysicsReady()) {
     removePlayerBody()
     createPlayerBody()
@@ -104,9 +89,6 @@ function rebuildPlayerPhysics() {
   }
 }
 
-/**
- * Rebuild terrain mesh and physics after map regeneration
- */
 function rebuildTerrainPhysics() {
   disposeTerrainMesh()
   
@@ -126,9 +108,6 @@ function rebuildTerrainPhysics() {
   }
 }
 
-/**
- * Show on-screen notification
- */
 function showNotification(message, color = '#00ff88') {
   const existing = document.getElementById('creature-notification')
   if (existing) existing.remove()
@@ -152,7 +131,6 @@ function showNotification(message, color = '#00ff88') {
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
   `
   notification.textContent = message
-  
   document.body.appendChild(notification)
   
   setTimeout(() => {
@@ -166,13 +144,11 @@ function showNotification(message, color = '#00ff88') {
 // ============================================================================
 
 export function initControls() {
-  // Initialize swimming system
   initSwimming()
   
-  // Keyboard down events
   window.addEventListener('keydown', (e) => {
     switch(e.code) {
-      // Movement keys (handled in updateMovement)
+      // Movement
       case 'KeyW': keys.w = true; break
       case 'KeyA': keys.a = true; break
       case 'KeyS': keys.s = true; break
@@ -186,26 +162,16 @@ export function initControls() {
         keys.shift = true
         break
       
-      // Sprint (Alt)
-      case 'AltLeft':
-        setSprinting(true)
-        e.preventDefault()
-        break
-      
-      // Slow mode (Ctrl)
-      case 'ControlLeft':
-      case 'ControlRight':
-        setSlowMode(true)
-        break
-      
-      // Q = Dash
+      // Q = Extra ability (hold)
       case 'KeyQ':
-        if (triggerDash()) {
-          showNotification('Dash!', '#00ffff')
+        if (!keys.q) {
+          keys.q = true
+          activateExtra()
+          setBoosting(true)  // For boost extra
         }
         break
       
-      // M = Regenerate Map
+      // M = New Map
       case 'KeyM':
         const newSeed = regenerateMap()
         if (newSeed !== null) {
@@ -269,11 +235,11 @@ export function initControls() {
       case 'KeyF':
         debugPhysics()
         debugSwimming()
+        debugExtra()
         break
     }
   })
   
-  // Keyboard up events
   window.addEventListener('keyup', (e) => {
     switch(e.code) {
       case 'KeyW': keys.w = false; break
@@ -285,30 +251,25 @@ export function initControls() {
       case 'ShiftRight': 
         keys.shift = false
         break
-      case 'AltLeft':
-        setSprinting(false)
-        break
-      case 'ControlLeft':
-      case 'ControlRight':
-        setSlowMode(false)
+      case 'KeyQ':
+        keys.q = false
+        deactivateExtra()
+        setBoosting(false)  // For boost extra
         break
     }
   })
 }
 
 // ============================================================================
-// UPDATE (called every frame from main.js)
+// UPDATE
 // ============================================================================
 
 export function updateMovement(delta) {
-  // Convert key states to directional input (-1 to 1)
   const forward = (keys.w ? 1 : 0) - (keys.s ? 1 : 0)
   const right = (keys.d ? 1 : 0) - (keys.a ? 1 : 0)
   const up = (keys.space ? 1 : 0) - (keys.shift ? 1 : 0)
   
-  // Pass to swimming system
   setSwimInput(forward, right, up)
-  
-  // Update swimming (handles physics or direct movement)
   updateSwimming(delta)
+  updateExtra(delta)
 }

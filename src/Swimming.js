@@ -1,8 +1,9 @@
 /**
- * Swimming.js - Hybrid Movement System
+ * Swimming.js - Movement System
  * 
- * Smooth acceleration/deceleration with physics collision.
- * Edit PARAMS below to tune the feel.
+ * Simple controls:
+ *   WASD / Space / Shift - Move
+ *   Q (hold) - Boost (go faster)
  */
 
 import * as THREE from 'three'
@@ -10,7 +11,6 @@ import { getPlayer } from './player.js'
 import { getYaw, getPitch, getCameraMode } from './camera.js'
 import {
   isPhysicsReady,
-  applyPlayerMovement,
   getPlayerVelocity,
   setPlayerVelocity,
   setPlayerDamping,
@@ -24,8 +24,7 @@ import {
 const PARAMS = {
   // Movement speeds
   speed: 12,              // Normal swim speed (units/sec)
-  sprintSpeed: 20,        // Sprint speed (Alt held)
-  slowSpeed: 4,           // Slow/precise speed (Ctrl held)
+  boostSpeed: 28,         // Boost speed when holding Q
   
   // Acceleration
   acceleration: 30,       // How fast you reach target speed
@@ -36,12 +35,8 @@ const PARAMS = {
   pitchSpeed: 10,         // How fast fish pitches up/down
   
   // Physics
-  linearDamping: 0.5,     // Minimal damping (we control velocity)
+  linearDamping: 0.5,     // Minimal damping
   gravityScale: 0.1,      // Slight gravity for underwater feel
-  
-  // Dash
-  dashForce: 2000,        // Burst force when pressing Q
-  dashCooldown: 0.5,      // Seconds between dashes
 }
 
 // ============================================================================
@@ -49,10 +44,7 @@ const PARAMS = {
 // ============================================================================
 
 const input = { forward: 0, right: 0, up: 0 }
-let isSprinting = false
-let isSlowMode = false
-let lastDashTime = 0
-
+let isBoosting = false
 const currentVelocity = new THREE.Vector3()
 
 // ============================================================================
@@ -60,9 +52,8 @@ const currentVelocity = new THREE.Vector3()
 // ============================================================================
 
 export function initSwimming() {
-  console.log('[Swimming] Hybrid mode initialized')
+  console.log('[Swimming] Initialized')
   
-  // Apply physics settings
   if (isPhysicsReady()) {
     setPlayerDamping(PARAMS.linearDamping)
     setPlayerGravityScale(PARAMS.gravityScale)
@@ -81,8 +72,7 @@ export function setSwimInput(forward, right, up) {
   input.up = Math.max(-1, Math.min(1, up))
 }
 
-export function setSprinting(sprinting) { isSprinting = sprinting }
-export function setSlowMode(slow) { isSlowMode = slow }
+export function setBoosting(boosting) { isBoosting = boosting }
 
 export function isMoving() {
   return input.forward !== 0 || input.right !== 0 || input.up !== 0
@@ -96,7 +86,6 @@ export function updateSwimming(delta) {
   const player = getPlayer()
   if (!player) return
   
-  // Get movement direction from input + camera
   const direction = getMovementDirection()
   
   // Rotate fish to face movement
@@ -104,11 +93,10 @@ export function updateSwimming(delta) {
     rotateToFaceMovement(player, direction, delta)
   }
   
-  // Apply hybrid movement
+  // Apply movement
   if (isPhysicsReady()) {
     applyHybridMovement(direction, delta)
   } else {
-    // Fallback: direct movement if no physics
     applyDirectMovement(player, direction, delta)
   }
 }
@@ -121,7 +109,6 @@ function getMovementDirection() {
   const yaw = getYaw()
   const pitch = getPitch()
   
-  // Camera-relative directions
   const forward = new THREE.Vector3(
     -Math.sin(yaw) * Math.cos(pitch),
     Math.sin(pitch),
@@ -130,7 +117,6 @@ function getMovementDirection() {
   const right = new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw))
   const up = new THREE.Vector3(0, 1, 0)
   
-  // Combine based on input
   const direction = new THREE.Vector3()
   direction.addScaledVector(forward, input.forward)
   direction.addScaledVector(right, input.right)
@@ -146,7 +132,6 @@ function rotateToFaceMovement(player, direction, delta) {
   const targetYaw = Math.atan2(-direction.x, -direction.z)
   const targetPitch = Math.asin(Math.max(-1, Math.min(1, direction.y)))
   
-  // Smooth rotation
   let yawDiff = targetYaw - player.rotation.y
   while (yawDiff > Math.PI) yawDiff -= Math.PI * 2
   while (yawDiff < -Math.PI) yawDiff += Math.PI * 2
@@ -157,14 +142,12 @@ function rotateToFaceMovement(player, direction, delta) {
 
 function applyHybridMovement(direction, delta) {
   // Get target speed
-  let speed = PARAMS.speed
-  if (isSprinting) speed = PARAMS.sprintSpeed
-  if (isSlowMode) speed = PARAMS.slowSpeed
+  const speed = isBoosting ? PARAMS.boostSpeed : PARAMS.speed
   
   // Target velocity
   const targetVelocity = direction.clone().multiplyScalar(speed)
   
-  // Smoothly interpolate current velocity to target
+  // Smoothly interpolate
   if (direction.length() > 0) {
     currentVelocity.lerp(targetVelocity, PARAMS.acceleration * delta)
   } else {
@@ -172,14 +155,11 @@ function applyHybridMovement(direction, delta) {
     if (currentVelocity.length() < 0.1) currentVelocity.set(0, 0, 0)
   }
   
-  // Apply to physics body
   setPlayerVelocity(currentVelocity)
 }
 
 function applyDirectMovement(player, direction, delta) {
-  let speed = PARAMS.speed
-  if (isSprinting) speed = PARAMS.sprintSpeed
-  if (isSlowMode) speed = PARAMS.slowSpeed
+  const speed = isBoosting ? PARAMS.boostSpeed : PARAMS.speed
   
   if (direction.length() > 0) {
     player.position.addScaledVector(direction, speed * delta)
@@ -187,31 +167,8 @@ function applyDirectMovement(player, direction, delta) {
 }
 
 // ============================================================================
-// SPECIAL ACTIONS
+// UTILITY
 // ============================================================================
-
-export function triggerDash() {
-  const now = performance.now() / 1000
-  if (now - lastDashTime < PARAMS.dashCooldown) return false
-  if (!isPhysicsReady()) return false
-  
-  let direction = getMovementDirection()
-  
-  // Dash forward if no input
-  if (direction.length() === 0) {
-    const yaw = getYaw()
-    const pitch = getPitch()
-    direction.set(
-      -Math.sin(yaw) * Math.cos(pitch),
-      Math.sin(pitch),
-      -Math.cos(yaw) * Math.cos(pitch)
-    )
-  }
-  
-  applyPlayerMovement(direction.normalize(), PARAMS.dashForce)
-  lastDashTime = now
-  return true
-}
 
 export function fullStop() {
   if (isPhysicsReady()) {
@@ -220,15 +177,11 @@ export function fullStop() {
   currentVelocity.set(0, 0, 0)
 }
 
-// ============================================================================
-// DEBUG & CONFIG
-// ============================================================================
-
 export function debugSwimming() {
   console.group('[Swimming] Debug')
   console.log('Params:', PARAMS)
   console.log('Input:', input)
-  console.log('Sprinting:', isSprinting, '| Slow:', isSlowMode)
+  console.log('Boosting:', isBoosting)
   if (isPhysicsReady()) {
     const vel = getPlayerVelocity()
     console.log('Velocity:', vel.length().toFixed(2), 'm/s')
@@ -248,12 +201,10 @@ export function getSwimConfig() {
   return { ...PARAMS }
 }
 
-// Called when creature changes
-export function autoApplyPreset(creatureType, creatureClass, traits = {}) {
-  // Re-apply physics settings
+export function autoApplyPreset() {
   if (isPhysicsReady()) {
     setPlayerDamping(PARAMS.linearDamping)
     setPlayerGravityScale(PARAMS.gravityScale)
   }
-  return 'hybrid'
+  return 'default'
 }
