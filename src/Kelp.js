@@ -71,15 +71,17 @@ export const KelpConfig = {
     radius: 5,             // Cluster radius at scale 1
     height: BASE_HEIGHT,
     spacing: 0.6,          // Min spacing at scale 1
+    yOffset: 0.5,          // Y offset at scale 1 (kelp sinks this much)
   },
   
   // === SCALING EXPONENTS (how fast each grows with scale) ===
   scaling: {
     count: COUNT_GROWTH_RATE,
     radius: 2,           // Radius grows moderately
-    height: 0.8,           // Height grows steadily
+    height: 1,           // Height grows steadily
     spacing: 1,         // Spacing grows slow
     width: 3,           // Ribbon width grows moderately
+    yOffset: 1.2,        // Y offset grows with scale (larger kelp sinks deeper)
     taper: 0.3,         // Taper DECREASES with scale (inverse)
                         // Higher = faster decrease. 0 = no change
                         // At scale 1: taper = 0.75 (base)
@@ -134,6 +136,7 @@ function getScaledValues(scale) {
     height: base.height * Math.pow(scale, exp.height),
     spacing: base.spacing * Math.pow(scale, exp.spacing),
     width: cfg.ribbon.baseWidth * Math.pow(scale, exp.width),
+    yOffset: base.yOffset * Math.pow(scale, exp.yOffset),
     taper: taperValue,
   }
 }
@@ -355,7 +358,7 @@ export function createKelpCluster(options = {}) {
     })
     
     const y = getTerrainHeight ? getTerrainHeight(x, z) : baseY
-    kelp.position.set(x, y, z)
+    kelp.position.set(x, y - scaled.yOffset, z)
     
     placed.push({ x, z })
     group.add(kelp)
@@ -366,6 +369,7 @@ export function createKelpCluster(options = {}) {
   group.userData.plantCount = group.children.length
   group.userData.radius = scaled.radius
   group.userData.taper = scaled.taper
+  group.userData.yOffset = scaled.yOffset
   
   return group
 }
