@@ -55,6 +55,13 @@ export const KelpConfig = {
     opacity: 0.9,
   },
   
+  // === WATER TRIMMING ===
+  water: {
+    level: 30,             // Y position of water surface (matches map.js)
+    trimMargin: 0.5,       // How far below surface to trim (prevents poking through)
+    enabled: true,         // Enable/disable water trimming
+  },
+  
   // === COLORS ===
   colors: [
     0x2d5a27,  // Dark olive
@@ -335,7 +342,21 @@ export function createKelpCluster(options = {}) {
     
     // Height variation
     const heightVar = cfg.variation.height
-    const h = scaled.height * (1 + (rng() - 0.5) * heightVar * 2)
+    let h = scaled.height * (1 + (rng() - 0.5) * heightVar * 2)
+    
+    // Calculate kelp base Y position
+    const baseYPos = (getTerrainHeight ? getTerrainHeight(x, z) : baseY) - scaled.yOffset
+    
+    // Trim height at water level
+    if (cfg.water.enabled) {
+      const maxHeight = cfg.water.level - cfg.water.trimMargin - baseYPos
+      if (maxHeight > 0 && h > maxHeight) {
+        h = maxHeight
+      } else if (maxHeight <= 0) {
+        // Skip this kelp if it's already above water
+        continue
+      }
+    }
     
     // Width matches scale
     const w = scaled.width * (0.8 + rng() * 0.4)
@@ -500,6 +521,24 @@ export function previewScale(scale) {
   return getScaledValues(scale)
 }
 
+/** Set the water level for trimming kelp */
+export function setWaterLevel(level, trimMargin = null) {
+  KelpConfig.water.level = level
+  if (trimMargin !== null) {
+    KelpConfig.water.trimMargin = trimMargin
+  }
+}
+
+/** Enable or disable water trimming */
+export function setWaterTrimming(enabled) {
+  KelpConfig.water.enabled = enabled
+}
+
+/** Get current water settings */
+export function getWaterSettings() {
+  return { ...KelpConfig.water }
+}
+
 /** Cull kelp inside boulders */
 export function cullKelpInBoulders(kelpGroup, boulders) {
   if (!boulders?.length) return 0
@@ -548,6 +587,9 @@ export default {
   KelpConfig,
   ScalePreset,
   previewScale,
+  setWaterLevel,
+  setWaterTrimming,
+  getWaterSettings,
   createKelp,
   createKelpCluster,
   createKelpForest,
