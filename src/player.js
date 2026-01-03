@@ -18,7 +18,7 @@ import {
 } from './ScaleMesh.js'
 
 // Capsule wireframe state
-let wireframeVisible = true
+let wireframeVisible = false
 
 let currentCreature = null
 let creatureParts = null
@@ -31,7 +31,7 @@ const CREATURE_CATALOG = getAllCreatureClasses()
 
 let sceneRef = null
 
-export function initPlayer(scene) {
+export function initPlayer(scene, spawnPosition = null) {
   sceneRef = scene
   
   // Start with the fish starter
@@ -41,13 +41,19 @@ export function initPlayer(scene) {
   currentIndex = 0
   creatureParts = currentCreature.parts
   
-  currentCreature.mesh.position.set(0, 0, 0)
+  // Use provided spawn position or default to origin
+  if (spawnPosition) {
+    currentCreature.mesh.position.copy(spawnPosition)
+  } else {
+    currentCreature.mesh.position.set(0, 0, 0)
+  }
   scene.add(currentCreature.mesh)
   
   // Attach capsule wireframe for collision visualization
   // Pass full creature object - ScaleMesh handles both traits object and direct properties
   const capsuleParams = computeCapsuleParams(currentCreature.mesh, currentCreature)
   attachCapsuleWireframe(currentCreature.mesh, currentCreature, { color: 0x00ff00 })
+  setWireframeVisible(currentCreature.mesh, wireframeVisible)  // Respect initial state
   logCapsuleStats(capsuleParams, currentClass)
   
   MeshRegistry.register('player', {

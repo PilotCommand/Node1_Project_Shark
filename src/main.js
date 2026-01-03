@@ -51,13 +51,20 @@ scene.add(sandLight)
 const map = createMap(scene)
 scene.add(map)
 
-initPlayer(scene)
+// Initialize SpawnFactory and analyze BEFORE player spawns
+SpawnFactory.init(scene)
+SpawnFactory.analyzePlayableSpace()
+
+// Get a valid spawn point for player
+const spawnPoint = SpawnFactory.getRandomPlayablePoint()
+if (spawnPoint) {
+  console.log(`[Main] Player spawn point: (${spawnPoint.x.toFixed(1)}, ${spawnPoint.y.toFixed(1)}, ${spawnPoint.z.toFixed(1)})`)
+}
+
+initPlayer(scene, spawnPoint)
 initCameraControls(renderer.domElement)
 initControls()
 initHUD()
-
-// Initialize SpawnFactory
-SpawnFactory.init(scene)
 
 // Build unified terrain collision mesh (after map is created)
 const terrainMeshData = buildTerrainMesh(scene)

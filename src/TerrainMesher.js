@@ -59,7 +59,7 @@ const CONFIG = {
 
 let terrainMesh = null          // The merged geometry (for physics)
 let terrainWireframe = null     // The visual wireframe
-let wireframeVisible = true
+let wireframeVisible = false
 let sceneRef = null
 
 // Cached data for physics
