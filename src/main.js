@@ -109,73 +109,27 @@ console.log(`
 🌊 OCEAN CREATURE SIMULATOR
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-  CONTROLS:
-    WASD / Space / Shift  - Swim
-    Mouse                 - Look
-    Scroll                - Zoom in/out
-    M                     - Mutate (new creature, same species)
-    N                     - Next species
-    B                     - Back (previous species)
-    P                     - Toggle collision wireframes (player + terrain)
+  MOVEMENT:
+    WASD              - Swim
+    Space             - Up
+    Shift             - Down
+    Alt               - Sprint
+    Ctrl              - Slow
+    Q                 - Dash
 
-  ENCYCLOPEDIA (47 creatures, 1 unit = 1 meter):
-  ──────────────────────────────────────────────────────────────
-  
-  🐟 FISH (23 species):
-  
-    Cartilaginous:
-      🦈 Shark, 🔨 Hammerhead, 🦅 Ray, 🦅 Manta
-    
-    Elongated:
-      🐍 Eel, 🐍 Moray, 🐟 Barracuda
-    
-    Pelagic:
-      🐟 Tuna, 🗡️ Marlin, ✈️ Flying Fish
-    
-    Reef:
-      🐟 Grouper, 🐠 Tang, 🐠 Angelfish, 🦁 Lionfish,
-      👑 Betta, 🐡 Puffer, 😈 Piranha, 🐴 Seahorse
-    
-    Deep Sea:
-      🔦 Anglerfish
-    
-    Unusual:
-      🌞 Sunfish
-    
-    Benthic:
-      🫓 Flounder, 🐱 Catfish
+  OTHER:
+    Mouse / Scroll    - Look / Zoom
+    R                 - Mutate creature
+    N / B             - Next / Previous species
+    M                 - New map
+    P                 - Toggle wireframes
+    F                 - Debug
 
-  🐬 MARINE MAMMALS (13 species):
-  
-    Large Whales:
-      🐋 Blue Whale, 🐋 Humpback, 🐋 Sperm Whale
-    
-    Small Whales:
-      🐳 Beluga, 🦄 Narwhal, 🐋 Pilot Whale
-    
-    Dolphins:
-      🐬 Dolphin, 🐬 Orca
-    
-    Pinnipeds:
-      🦭 Seal, 🦭 Sea Lion, 🦭 Walrus
-    
-    Other:
-      🦦 Sea Otter, 🐘 Manatee
-
-  🦀 CRUSTACEANS (11 species):
-  
-    Crabs:
-      🦀 Crab, 🦀 King Crab, 🦀 Spider Crab,
-      🥥 Coconut Crab, 🦀 Fiddler Crab
-    
-    Lobsters:
-      🦞 Lobster, 🦞 Crayfish
-    
-    Shrimp:
-      🦐 Shrimp, 🦐 Mantis Shrimp, 🦐 Pistol Shrimp
-    
-    Other:
-      🧲 Horseshoe Crab
+  MOVEMENT MODE: Edit Swimming.js line ~47 to change
+    'direct'   - Instant, no physics (original)
+    'velocity' - Direct feel with collision
+    'force'    - Full physics, momentum
+    'hybrid'   - Smooth acceleration with collision
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 `)

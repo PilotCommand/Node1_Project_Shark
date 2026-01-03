@@ -582,6 +582,58 @@ export function teleportPlayer(position) {
   playerBody.setLinvel(new RAPIER.Vector3(0, 0, 0), true)
 }
 
+/**
+ * Set player damping (how fast they slow down)
+ * @param {number} linearDamping - Linear damping (0 = no drag, 10 = instant stop)
+ * @param {number} angularDamping - Angular damping
+ */
+export function setPlayerDamping(linearDamping, angularDamping = linearDamping) {
+  if (!playerBody) return
+  
+  playerBody.setLinearDamping(linearDamping)
+  playerBody.setAngularDamping(angularDamping)
+  
+  if (CONFIG.debug) {
+    console.log(`[Physics] Player damping: linear=${linearDamping}, angular=${angularDamping}`)
+  }
+}
+
+/**
+ * Set player gravity scale (how much gravity affects them)
+ * @param {number} scale - 0 = no gravity, 1 = full gravity, 0.3 = underwater feel
+ */
+export function setPlayerGravityScale(scale) {
+  if (!playerBody) return
+  
+  playerBody.setGravityScale(scale, true)
+  
+  if (CONFIG.debug) {
+    console.log(`[Physics] Player gravity scale: ${scale}`)
+  }
+}
+
+/**
+ * Get current player damping
+ * @returns {{ linear: number, angular: number } | null}
+ */
+export function getPlayerDamping() {
+  if (!playerBody) return null
+  
+  return {
+    linear: playerBody.linearDamping(),
+    angular: playerBody.angularDamping(),
+  }
+}
+
+/**
+ * Get current player gravity scale
+ * @returns {number | null}
+ */
+export function getPlayerGravityScale() {
+  if (!playerBody) return null
+  return playerBody.gravityScale()
+}
+
 // ============================================================================
 // UTILITY FUNCTIONS
 // ============================================================================
@@ -754,6 +806,12 @@ export default {
   setPlayerVelocity,
   getPlayerVelocity,
   teleportPlayer,
+  
+  // Player physics tuning
+  setPlayerDamping,
+  setPlayerGravityScale,
+  getPlayerDamping,
+  getPlayerGravityScale,
   
   // Queries
   raycast,

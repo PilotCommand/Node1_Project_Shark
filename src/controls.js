@@ -1,6 +1,25 @@
-import * as THREE from 'three'
+/**
+ * controls.js - Input handling and game controls
+ * 
+ * Handles keyboard/mouse input and delegates movement to Swimming.js
+ * 
+ * Controls:
+ *   WASD        - Swim direction
+ *   Space       - Swim up
+ *   Shift       - Swim down
+ *   Alt         - Sprint (hold)
+ *   Ctrl        - Slow/precise mode (hold)
+ *   Q           - Dash burst
+ *   
+ *   R           - Mutate creature (same species)
+ *   N           - Next species
+ *   B           - Previous species
+ *   M           - Regenerate map
+ *   P           - Toggle collision wireframes
+ *   F           - Debug info
+ */
+
 import { getPlayer } from './player.js'
-import { getYaw, getPitch, getCameraMode } from './camera.js'
 import { 
   regeneratePlayerCreature, 
   cyclePlayerClass,
@@ -8,6 +27,9 @@ import {
   getCurrentIndex,
   getCreatureCatalog,
   toggleWireframe,
+  getCurrentType,
+  getCurrentClass,
+  getCurrentCreature,
 } from './player.js'
 import { 
   seedToString, 
@@ -17,20 +39,31 @@ import {
 import { regenerateMap } from './map.js'
 import { 
   toggleTerrainWireframe,
-  isTerrainWireframeVisible,
   rebuildTerrainMesh,
   disposeTerrainMesh,
 } from './TerrainMesher.js'
 import {
   isPhysicsReady,
-  applyPlayerSwimForce,
-  setPhysicsEnabled,
   debugPhysics,
   removePlayerBody,
   createPlayerBody,
   removeTerrainCollider,
   buildTerrainCollider,
 } from './Physics.js'
+import {
+  initSwimming,
+  setSwimInput,
+  setSprinting,
+  setSlowMode,
+  updateSwimming,
+  triggerDash,
+  autoApplyPreset,
+  debugSwimming,
+} from './Swimming.js'
+
+// ============================================================================
+// INPUT STATE
+// ============================================================================
 
 const keys = {
   w: false,
@@ -38,51 +71,54 @@ const keys = {
   s: false,
   d: false,
   space: false,
-  shift: false
+  shift: false,
 }
 
-// Movement config
-const MOVE_SPEED = 10           // Non-physics fallback speed
-const SWIM_FORCE = 500          // Physics swim force (Newtons)
-const PHYSICS_ENABLED = true    // Use physics when available
+// ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
 
 /**
- * Rebuild player physics body after creature change
- * Preserves position and velocity from old body
+ * Rebuild player physics body and update swimming preset
  */
 function rebuildPlayerPhysics() {
-  if (!isPhysicsReady()) return
-  
-  // Get current position from mesh (which was just updated)
   const player = getPlayer()
   if (!player) return
   
-  // Remove old physics body and create new one with updated capsule dimensions
-  removePlayerBody()
-  createPlayerBody()
+  // Update swimming preset for new creature
+  const creatureType = getCurrentType()
+  const creatureClass = getCurrentClass()
+  const creature = getCurrentCreature()
+  const traits = creature?.traits || {}
   
-  console.log('[Controls] Rebuilt player physics body')
+  if (creatureType && creatureClass) {
+    const preset = autoApplyPreset(creatureType, creatureClass, traits)
+    console.log(`[Controls] Applied swim preset: ${preset}`)
+  }
+  
+  // Rebuild physics body
+  if (isPhysicsReady()) {
+    removePlayerBody()
+    createPlayerBody()
+    console.log('[Controls] Rebuilt player physics body')
+  }
 }
 
 /**
  * Rebuild terrain mesh and physics after map regeneration
  */
 function rebuildTerrainPhysics() {
-  // Dispose old terrain mesh
   disposeTerrainMesh()
   
-  // Remove old physics collider
   if (isPhysicsReady()) {
     removeTerrainCollider()
   }
   
-  // Build new terrain mesh from new map
   const meshData = rebuildTerrainMesh()
   
   if (meshData) {
     console.log(`[Controls] Rebuilt terrain mesh: ${meshData.triangleCount} triangles`)
     
-    // Build new physics collider
     if (isPhysicsReady()) {
       buildTerrainCollider()
       console.log('[Controls] Rebuilt terrain physics collider')
@@ -90,113 +126,9 @@ function rebuildTerrainPhysics() {
   }
 }
 
-export function initControls() {
-  window.addEventListener('keydown', (e) => {
-    switch(e.code) {
-      case 'KeyW': keys.w = true; break
-      case 'KeyA': keys.a = true; break
-      case 'KeyS': keys.s = true; break
-      case 'KeyD': keys.d = true; break
-      case 'Space': keys.space = true; e.preventDefault(); break
-      case 'ShiftLeft': 
-      case 'ShiftRight': keys.shift = true; break
-      
-      // M = regenerate Map/terrain
-      case 'KeyM':
-        const newSeed = regenerateMap()
-        if (newSeed !== null) {
-          // Rebuild terrain mesh and physics collider
-          rebuildTerrainPhysics()
-          
-          showNotification(
-            `New terrain | Seed: ${newSeed.toString(16).toUpperCase().padStart(8, '0')}`,
-            '#00ffff'
-          )
-        }
-        break
-      
-      // R = Regenerate creature (mutate - new random of same type/class)
-      case 'KeyR':
-        const result = regeneratePlayerCreature()
-        if (result) {
-          // Rebuild physics body with new capsule dimensions
-          rebuildPlayerPhysics()
-          
-          const size = result.traits?.length?.toFixed(1) || '?'
-          const shortName = getCreatureShortName(result.creatureType, result.creatureClass)
-          showNotification(
-            `${shortName} | ${size}m | ${seedToString(result.seed)}`,
-            '#00ff88'
-          )
-        }
-        break
-      
-      // N = Next class (cycle forward through ALL creatures)
-      case 'KeyN':
-        const next = cyclePlayerClass()
-        if (next) {
-          // Rebuild physics body with new capsule dimensions
-          rebuildPlayerPhysics()
-          
-          const displayName = getCreatureDisplayName(next.creatureType, next.creatureClass)
-          const index = getCurrentIndex()
-          const total = getCreatureCatalog().length
-          showNotification(`${displayName} [${index + 1}/${total}]`, '#ffaa00')
-        }
-        break
-      
-      // B = Back/Previous class (cycle backward)
-      case 'KeyB':
-        const prev = cyclePreviousClass()
-        if (prev) {
-          // Rebuild physics body with new capsule dimensions
-          rebuildPlayerPhysics()
-          
-          const displayName = getCreatureDisplayName(prev.creatureType, prev.creatureClass)
-          const index = getCurrentIndex()
-          const total = getCreatureCatalog().length
-          showNotification(`${displayName} [${index + 1}/${total}]`, '#ffaa00')
-        }
-        break
-      
-      // P = Toggle Physics/Collider wireframes (BOTH player AND terrain)
-      case 'KeyP':
-        // Toggle player wireframe
-        const playerWireframeOn = toggleWireframe()
-        
-        // Toggle terrain wireframe (sync with player wireframe state)
-        toggleTerrainWireframe()
-        
-        showNotification(
-          `Collision wireframes: ${playerWireframeOn ? 'ON' : 'OFF'}`,
-          playerWireframeOn ? '#00ff00' : '#ff6600'
-        )
-        break
-      
-      // F = Toggle physics on/off (for debugging)
-      case 'KeyF':
-        if (isPhysicsReady()) {
-          // Toggle physics and show notification
-          // Note: Would need to track state, simplified here
-          debugPhysics()
-        }
-        break
-    }
-  })
-  
-  window.addEventListener('keyup', (e) => {
-    switch(e.code) {
-      case 'KeyW': keys.w = false; break
-      case 'KeyA': keys.a = false; break
-      case 'KeyS': keys.s = false; break
-      case 'KeyD': keys.d = false; break
-      case 'Space': keys.space = false; break
-      case 'ShiftLeft':
-      case 'ShiftRight': keys.shift = false; break
-    }
-  })
-}
-
+/**
+ * Show on-screen notification
+ */
 function showNotification(message, color = '#00ff88') {
   const existing = document.getElementById('creature-notification')
   if (existing) existing.remove()
@@ -229,62 +161,154 @@ function showNotification(message, color = '#00ff88') {
   }, 2500)
 }
 
+// ============================================================================
+// INITIALIZATION
+// ============================================================================
+
+export function initControls() {
+  // Initialize swimming system
+  initSwimming()
+  
+  // Keyboard down events
+  window.addEventListener('keydown', (e) => {
+    switch(e.code) {
+      // Movement keys (handled in updateMovement)
+      case 'KeyW': keys.w = true; break
+      case 'KeyA': keys.a = true; break
+      case 'KeyS': keys.s = true; break
+      case 'KeyD': keys.d = true; break
+      case 'Space': 
+        keys.space = true
+        e.preventDefault()
+        break
+      case 'ShiftLeft': 
+      case 'ShiftRight': 
+        keys.shift = true
+        break
+      
+      // Sprint (Alt)
+      case 'AltLeft':
+        setSprinting(true)
+        e.preventDefault()
+        break
+      
+      // Slow mode (Ctrl)
+      case 'ControlLeft':
+      case 'ControlRight':
+        setSlowMode(true)
+        break
+      
+      // Q = Dash
+      case 'KeyQ':
+        if (triggerDash()) {
+          showNotification('Dash!', '#00ffff')
+        }
+        break
+      
+      // M = Regenerate Map
+      case 'KeyM':
+        const newSeed = regenerateMap()
+        if (newSeed !== null) {
+          rebuildTerrainPhysics()
+          showNotification(
+            `New terrain | Seed: ${newSeed.toString(16).toUpperCase().padStart(8, '0')}`,
+            '#00ffff'
+          )
+        }
+        break
+      
+      // R = Mutate creature
+      case 'KeyR':
+        const result = regeneratePlayerCreature()
+        if (result) {
+          rebuildPlayerPhysics()
+          const size = result.traits?.length?.toFixed(1) || '?'
+          const shortName = getCreatureShortName(result.creatureType, result.creatureClass)
+          showNotification(
+            `${shortName} | ${size}m | ${seedToString(result.seed)}`,
+            '#00ff88'
+          )
+        }
+        break
+      
+      // N = Next species
+      case 'KeyN':
+        const next = cyclePlayerClass()
+        if (next) {
+          rebuildPlayerPhysics()
+          const displayName = getCreatureDisplayName(next.creatureType, next.creatureClass)
+          const index = getCurrentIndex()
+          const total = getCreatureCatalog().length
+          showNotification(`${displayName} [${index + 1}/${total}]`, '#ffaa00')
+        }
+        break
+      
+      // B = Previous species
+      case 'KeyB':
+        const prev = cyclePreviousClass()
+        if (prev) {
+          rebuildPlayerPhysics()
+          const displayName = getCreatureDisplayName(prev.creatureType, prev.creatureClass)
+          const index = getCurrentIndex()
+          const total = getCreatureCatalog().length
+          showNotification(`${displayName} [${index + 1}/${total}]`, '#ffaa00')
+        }
+        break
+      
+      // P = Toggle wireframes
+      case 'KeyP':
+        const wireframeOn = toggleWireframe()
+        toggleTerrainWireframe()
+        showNotification(
+          `Collision wireframes: ${wireframeOn ? 'ON' : 'OFF'}`,
+          wireframeOn ? '#00ff00' : '#ff6600'
+        )
+        break
+      
+      // F = Debug
+      case 'KeyF':
+        debugPhysics()
+        debugSwimming()
+        break
+    }
+  })
+  
+  // Keyboard up events
+  window.addEventListener('keyup', (e) => {
+    switch(e.code) {
+      case 'KeyW': keys.w = false; break
+      case 'KeyA': keys.a = false; break
+      case 'KeyS': keys.s = false; break
+      case 'KeyD': keys.d = false; break
+      case 'Space': keys.space = false; break
+      case 'ShiftLeft':
+      case 'ShiftRight': 
+        keys.shift = false
+        break
+      case 'AltLeft':
+        setSprinting(false)
+        break
+      case 'ControlLeft':
+      case 'ControlRight':
+        setSlowMode(false)
+        break
+    }
+  })
+}
+
+// ============================================================================
+// UPDATE (called every frame from main.js)
+// ============================================================================
+
 export function updateMovement(delta) {
-  const player = getPlayer()
-  if (!player) return
+  // Convert key states to directional input (-1 to 1)
+  const forward = (keys.w ? 1 : 0) - (keys.s ? 1 : 0)
+  const right = (keys.d ? 1 : 0) - (keys.a ? 1 : 0)
+  const up = (keys.space ? 1 : 0) - (keys.shift ? 1 : 0)
   
-  const yaw = getYaw()
-  const pitch = getPitch()
+  // Pass to swimming system
+  setSwimInput(forward, right, up)
   
-  // Calculate movement direction vectors
-  const forward = new THREE.Vector3(
-    -Math.sin(yaw) * Math.cos(pitch),
-    Math.sin(pitch),
-    -Math.cos(yaw) * Math.cos(pitch)
-  )
-  
-  const right = new THREE.Vector3(
-    Math.cos(yaw),
-    0,
-    -Math.sin(yaw)
-  )
-  
-  const up = new THREE.Vector3(0, 1, 0)
-  const velocity = new THREE.Vector3()
-  
-  // Build movement direction from input
-  if (keys.w) velocity.add(forward)
-  if (keys.s) velocity.sub(forward)
-  if (keys.d) velocity.add(right)
-  if (keys.a) velocity.sub(right)
-  if (keys.space) velocity.add(up)
-  if (keys.shift) velocity.sub(up)
-  
-  if (velocity.length() > 0) {
-    velocity.normalize()
-    
-    // Update player mesh rotation in orbit mode
-    if (getCameraMode() === 'orbit') {
-      const targetYaw = Math.atan2(-velocity.x, -velocity.z)
-      const targetPitch = Math.asin(velocity.y)
-      
-      const rotationSpeed = 10 * delta
-      
-      let yawDiff = targetYaw - player.rotation.y
-      while (yawDiff > Math.PI) yawDiff -= Math.PI * 2
-      while (yawDiff < -Math.PI) yawDiff += Math.PI * 2
-      player.rotation.y += yawDiff * rotationSpeed
-      
-      player.rotation.x += (targetPitch - player.rotation.x) * rotationSpeed
-    }
-    
-    // Apply movement - physics or direct
-    if (PHYSICS_ENABLED && isPhysicsReady()) {
-      // Physics-based: apply force (position updated in Physics.js)
-      applyPlayerSwimForce(velocity, SWIM_FORCE, delta)
-    } else {
-      // Direct position update (no physics fallback)
-      player.position.add(velocity.multiplyScalar(MOVE_SPEED * delta))
-    }
-  }
+  // Update swimming (handles physics or direct movement)
+  updateSwimming(delta)
 }
