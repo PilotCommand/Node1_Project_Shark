@@ -80,6 +80,10 @@ export const KelpConfig = {
     height: 0.8,           // Height grows steadily
     spacing: 1,         // Spacing grows slow
     width: 3,           // Ribbon width grows moderately
+    taper: 0.3,         // Taper DECREASES with scale (inverse)
+                        // Higher = faster decrease. 0 = no change
+                        // At scale 1: taper = 0.75 (base)
+                        // At scale 10: taper ≈ 0.38 (with 0.3 exponent)
   },
   
   // === VARIATION ===
@@ -119,12 +123,18 @@ function getScaledValues(scale) {
   const base = cfg.base
   const exp = cfg.scaling
   
+  // Inverse taper: larger scale = less taper
+  // Clamp between 0.1 (almost no taper) and 0.95 (very pointy)
+  const baseTaper = cfg.ribbon.taperAmount
+  const taperValue = Math.max(0.1, Math.min(0.95, baseTaper / Math.pow(scale, exp.taper)))
+  
   return {
     count: Math.round(base.count * Math.pow(scale, exp.count)),
     radius: base.radius * Math.pow(scale, exp.radius),
     height: base.height * Math.pow(scale, exp.height),
     spacing: base.spacing * Math.pow(scale, exp.spacing),
     width: cfg.ribbon.baseWidth * Math.pow(scale, exp.width),
+    taper: taperValue,
   }
 }
 
@@ -153,7 +163,7 @@ function pick(rng, arr) {
 // RIBBON GEOMETRY
 // ============================================================================
 
-function createRibbonGeometry(height, width, rng) {
+function createRibbonGeometry(height, width, taper, rng) {
   const cfg = KelpConfig
   const segments = cfg.ribbon.segments
   
@@ -174,8 +184,8 @@ function createRibbonGeometry(height, width, rng) {
     const t = i / segments
     const y = t * height
     
-    // Taper width
-    const w = width * (1 - t * cfg.ribbon.taperAmount)
+    // Taper width (using passed taper value)
+    const w = width * (1 - t * taper)
     
     // Wave
     const waveStrength = t * t * waveAmount
@@ -221,6 +231,7 @@ function createRibbonGeometry(height, width, rng) {
  * @param {object} options
  * @param {number} [options.height] - Kelp height
  * @param {number} [options.width] - Ribbon width
+ * @param {number} [options.taper] - Taper amount (0-1)
  * @param {number} [options.seed] - Random seed
  * @param {number} [options.color] - Override color (hex)
  */
@@ -228,6 +239,7 @@ export function createKelp(options = {}) {
   const {
     height = 15,
     width = KelpConfig.ribbon.baseWidth,
+    taper = KelpConfig.ribbon.taperAmount,
     seed = null,
     color = null,
   } = options
@@ -246,7 +258,7 @@ export function createKelp(options = {}) {
     hsl.l * (0.85 + rng() * 0.3)
   )
   
-  const geometry = createRibbonGeometry(height, width, rng)
+  const geometry = createRibbonGeometry(height, width, taper, rng)
   const material = new THREE.MeshStandardMaterial({
     color: kelpColor,
     roughness: cfg.material.roughness,
@@ -284,7 +296,7 @@ export function createKelpCluster(options = {}) {
   const rng = seed !== null ? createRNG(seed) : Math.random
   const cfg = KelpConfig
   
-  // Get scaled values
+  // Get scaled values (now includes taper)
   const scaled = getScaledValues(scale)
   
   // Apply count variation
@@ -325,6 +337,9 @@ export function createKelpCluster(options = {}) {
     // Width matches scale
     const w = scaled.width * (0.8 + rng() * 0.4)
     
+    // Taper with slight variation
+    const t = scaled.taper * (0.9 + rng() * 0.2)
+    
     // Color variation
     const colorVar = new THREE.Color(clusterColor)
     const hsl = {}
@@ -334,6 +349,7 @@ export function createKelpCluster(options = {}) {
     const kelp = createKelp({
       height: h,
       width: w,
+      taper: t,
       seed: seed ? seed + i * 777 : null,
       color: colorVar.getHex(),
     })
@@ -349,6 +365,7 @@ export function createKelpCluster(options = {}) {
   group.userData.scale = scale
   group.userData.plantCount = group.children.length
   group.userData.radius = scaled.radius
+  group.userData.taper = scaled.taper
   
   return group
 }
