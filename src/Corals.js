@@ -36,6 +36,11 @@ export const CoralConfig = {
   roughness: 0.85,
   metalness: 0.05,
   
+  // Dodecahedron cluster settings
+  dodecahedronScale: 0.35,    // How spread out the vertices are (lower = tighter cluster)
+  pieceScale: 0.35,           // Size of each coral piece relative to formation size
+  skipChance: 0.1,            // Chance for each vertex to not spawn a coral (0-1)
+  
   // Tropical coral colors
   colors: [
     0xff6b9d,  // Hot pink
@@ -274,54 +279,74 @@ function createCoralPiece(rng, size, color = null) {
 }
 
 // ============================================================================
-// PUBLIC API
+// DODECAHEDRON VERTICES
 // ============================================================================
 
 /**
- * Cull pieces with 60%+ volume overlap (delete smaller)
+ * Generate all 20 vertices of a regular dodecahedron
+ * Uses the golden ratio for vertex positions
  */
-function cullOverlappingPieces(pieces) {
-  const toRemove = new Set()
+function getDodecahedronVertices() {
+  const phi = (1 + Math.sqrt(5)) / 2  // Golden ratio ≈ 1.618
+  const invPhi = 1 / phi
   
-  for (let i = 0; i < pieces.length; i++) {
-    if (toRemove.has(i)) continue
-    
-    const a = pieces[i]
-    
-    for (let j = i + 1; j < pieces.length; j++) {
-      if (toRemove.has(j)) continue
-      
-      const b = pieces[j]
-      
-      // Distance between centers
-      const dx = a.x - b.x
-      const dy = a.y - b.y
-      const dz = a.z - b.z
-      const dist = Math.sqrt(dx*dx + dy*dy + dz*dz)
-      
-      // Determine smaller and larger
-      const [smaller, larger, smallerIdx] = a.size < b.size 
-        ? [a, b, i] 
-        : [b, a, j]
-      
-      // Approximate overlap fraction of smaller sphere
-      const overlapFraction = (larger.size + smaller.size - dist) / (2 * smaller.size)
-      
-      // If 60%+ overlap, remove smaller
-      if (overlapFraction >= 0.6) {
-        toRemove.add(smallerIdx)
+  const vertices = []
+  
+  // Cube vertices: (±1, ±1, ±1)
+  for (const x of [-1, 1]) {
+    for (const y of [-1, 1]) {
+      for (const z of [-1, 1]) {
+        vertices.push(new THREE.Vector3(x, y, z))
       }
     }
   }
   
-  return toRemove
+  // Rectangle vertices in YZ plane: (0, ±1/φ, ±φ)
+  for (const y of [-invPhi, invPhi]) {
+    for (const z of [-phi, phi]) {
+      vertices.push(new THREE.Vector3(0, y, z))
+    }
+  }
+  
+  // Rectangle vertices in XY plane: (±1/φ, ±φ, 0)
+  for (const x of [-invPhi, invPhi]) {
+    for (const y of [-phi, phi]) {
+      vertices.push(new THREE.Vector3(x, y, 0))
+    }
+  }
+  
+  // Rectangle vertices in XZ plane: (±φ, 0, ±1/φ)
+  for (const x of [-phi, phi]) {
+    for (const z of [-invPhi, invPhi]) {
+      vertices.push(new THREE.Vector3(x, 0, z))
+    }
+  }
+  
+  return vertices
 }
 
 /**
- * Create a coral formation (cluster of convex pieces)
+ * Get the higher 10 vertices of a dodecahedron (sorted by Y, top half)
+ */
+function getHigherDodecahedronVertices() {
+  const allVertices = getDodecahedronVertices()
+  
+  // Sort by Y coordinate descending
+  allVertices.sort((a, b) => b.y - a.y)
+  
+  // Return only the top 10 vertices
+  return allVertices.slice(0, 10)
+}
+
+// ============================================================================
+// PUBLIC API
+// ============================================================================
+
+/**
+ * Create a coral formation (cluster of convex pieces arranged in a dodecahedron bunker)
+ * Uses only the higher 10 vertices of a dodecahedron, each with 50% spawn chance
  * @param {object} options
  * @param {number} [options.size=1] - Base size of the formation
- * @param {number} [options.pieceCount] - Number of pieces (auto-calculated if not set)
  * @param {number} [options.seed] - Random seed
  * @param {boolean} [options.multiColor=true] - Use multiple colors or single color
  * @returns {THREE.Group}
@@ -329,7 +354,6 @@ function cullOverlappingPieces(pieces) {
 export function createCoral(options = {}) {
   const {
     size = 1,
-    pieceCount = null,
     seed = null,
     multiColor = true,
   } = options
@@ -337,50 +361,31 @@ export function createCoral(options = {}) {
   const rng = seed !== null ? createRNG(seed) : Math.random
   const group = new THREE.Group()
   
-  // Calculate piece count based on size if not specified
-  // Logarithmic scaling so large corals don't have too many pieces
-  const count = pieceCount || Math.floor(8 + Math.sqrt(size) * 5 + rng() * 8)
+  // Get the higher 10 vertices of a dodecahedron
+  const vertices = getHigherDodecahedronVertices()
   
   // Pick a base color for single-color mode
   const baseColor = multiColor ? null : pick(rng, CoralConfig.colors)
   
-  // Collect pieces for overlap culling
-  const pieces = []
+  // Piece size relative to formation size
+  const pieceSize = size * CoralConfig.pieceScale
   
-  for (let i = 0; i < count; i++) {
-    // Piece size varies - mix of small and large relative to formation
-    const t = rng()
-    const pieceSize = size * (0.1 + t * t * 0.4)  // 10% to 50% of formation size
+  // Place a coral piece at each vertex (with skip chance)
+  for (const vertex of vertices) {
+    // Skip chance for this vertex
+    if (rng() < CoralConfig.skipChance) continue
     
     const piece = createCoralPiece(rng, pieceSize, baseColor)
     
-    // Position pieces in a clustered formation
-    const distFactor = Math.pow(rng(), 0.6)  // Cluster toward center
-    const dist = distFactor * size * 0.8
-    const angle = rng() * Math.PI * 2
-    const heightVar = rng() * rng()  // Bias toward ground level
+    // Position at the dodecahedron vertex, scaled by formation size
+    const scale = CoralConfig.dodecahedronScale
+    piece.position.set(
+      vertex.x * size * scale,
+      vertex.y * size * scale,
+      vertex.z * size * scale
+    )
     
-    const x = Math.cos(angle) * dist
-    const y = pieceSize * 0.4 + heightVar * size * 0.5
-    const z = Math.sin(angle) * dist
-    
-    piece.position.set(x, y, z)
-    
-    pieces.push({ mesh: piece, size: pieceSize, x, y, z })
-  }
-  
-  // Cull overlapping pieces
-  const culledIndices = cullOverlappingPieces(pieces)
-  
-  // Add surviving pieces
-  for (let i = 0; i < pieces.length; i++) {
-    if (culledIndices.has(i)) {
-      // Dispose culled piece
-      pieces[i].mesh.geometry.dispose()
-      pieces[i].mesh.material.dispose()
-      continue
-    }
-    group.add(pieces[i].mesh)
+    group.add(piece)
   }
   
   // Random rotation for the whole formation
