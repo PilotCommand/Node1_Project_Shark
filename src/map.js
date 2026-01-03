@@ -28,9 +28,9 @@ let currentSeed = DEFAULT_SEED
 //                4 = large rock    |  35 = building  |
 //
 // RING LAYOUT:
-//   CENTER (r < 150)      → Titan & Colossal boulders (rocky core)
-//   MIDDLE (150 < r < 350) → Large & Medium boulders (transition)
-//   OUTER  (r > 350)       → Small boulders + Kelp + Coral (living reef)
+//   CENTER (r < 150)      â†’ Titan & Colossal boulders (rocky core)
+//   MIDDLE (150 < r < 350) â†’ Large & Medium boulders (transition)
+//   OUTER  (r > 350)       â†’ Small boulders + Kelp + Coral (living reef)
 // =============================================================================
 
 const BOULDER_RINGS = [
@@ -93,21 +93,48 @@ const BOULDER_RINGS = [
 // OUTER RING LIFE CONFIG - Kelp & Coral in the outer zone
 // =============================================================================
 
-const LIFE_RING = {
-  innerRadius: 200,
+// ╔═══════════════════════════════════════════════════════════════════════════╗
+// ║  EASY KELP SETTINGS - EDIT THESE TO TUNE PERFORMANCE/DENSITY              ║
+// ╚═══════════════════════════════════════════════════════════════════════════╝
+
+const KELP_SETTINGS = {
+  // Total number of kelp clusters to spawn (lower = less lag)
+  clusterCount: 20,
+  
+  // Zone boundaries (distance from center)
+  innerRadius: 150,
   outerRadius: 480,
   
-  // Kelp forest clusters
+  // Minimum distance between clusters
+  minSpacing: 15,
+  
+  // Scale weights - higher weight = more common
+  // Comment out or set weight to 0 to disable a size tier
+  // WARNING: High scales (12+) spawn MANY plants and may cause lag!
+  scales: {
+    SEAGRASS_TINY:    { scale: 0.3,  weight: 2 },
+    SEAGRASS_SMALL:   { scale: 0.5,  weight: 2 },
+    SEAGRASS_MEDIUM:  { scale: 0.8,  weight: 2 },
+    KELP_SMALL:       { scale: 1.0,  weight: 3 },
+    KELP_MEDIUM:      { scale: 2.0,  weight: 3 },
+    KELP_LARGE:       { scale: 4.0,  weight: 2 },
+    KELP_HUGE:        { scale: 7.0,  weight: 1 },
+    KELP_COLOSSAL:    { scale: 12.0, weight: 0 },  // 0 = disabled
+    KELP_MEGA:        { scale: 18.0, weight: 0 },  // 0 = disabled
+    KELP_TITAN:       { scale: 25.0, weight: 0 },  // 0 = disabled
+    KELP_LEVIATHAN:   { scale: 35.0, weight: 0 },  // 0 = disabled
+  },
+}
+
+// Convert settings to internal format
+const LIFE_RING = {
+  innerRadius: KELP_SETTINGS.innerRadius,
+  outerRadius: KELP_SETTINGS.outerRadius,
+  
   kelp: {
-    clusterCount: 20,
-    scales: [
-      { scale: 0.5, weight: 2 },   // Small seagrass
-      { scale: 1.0, weight: 3 },   // Small kelp
-      { scale: 1.5, weight: 4 },   // Medium kelp (most common)
-      { scale: 2.5, weight: 3 },   // Large kelp
-      { scale: 4.0, weight: 2 },   // Huge kelp
-    ],
-    minSpacing: 15,  // Minimum distance between clusters
+    clusterCount: KELP_SETTINGS.clusterCount,
+    scales: Object.values(KELP_SETTINGS.scales).filter(s => s.weight > 0),
+    minSpacing: KELP_SETTINGS.minSpacing,
   },
   
   // Coral reef clusters

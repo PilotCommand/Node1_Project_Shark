@@ -7,8 +7,29 @@
 
 import * as THREE from 'three'
 
+// ╔═══════════════════════════════════════════════════════════════════════════╗
+// ║  EASY KELP SETTINGS - EDIT THESE FIRST                                    ║
+// ╚═══════════════════════════════════════════════════════════════════════════╝
+
+// Plants per cluster at scale=1 (scales exponentially - see below)
+// Lower = less lag, higher = denser forests
+const BASE_PLANT_COUNT = 12;
+
+// Height of kelp at scale=1 (in meters)
+const BASE_HEIGHT = 20;
+
+// How fast plant count grows with scale (1.0 = linear, 2.0 = quadratic)
+// Lower = fewer plants at high scales = less lag
+// 1.0 = scale 10x spawns 10x plants
+// 1.5 = scale 10x spawns ~32x plants  
+// 2.0 = scale 10x spawns 100x plants (laggy!)
+const COUNT_GROWTH_RATE = 1.4;
+
+// Geometry detail per ribbon (fewer = less lag, more = smoother)
+const RIBBON_SEGMENTS = 12;
+
 // ============================================================================
-// CONFIGURATION - EDIT HERE
+// CONFIGURATION - ADVANCED SETTINGS
 // ============================================================================
 
 export const KelpConfig = {
@@ -17,7 +38,7 @@ export const KelpConfig = {
   ribbon: {
     baseWidth: 0.25,       // Width at scale 1
     taperAmount: 0.75,     // 0 = no taper, 1 = point at top
-    segments: 14,          // Geometry detail
+    segments: RIBBON_SEGMENTS,
   },
   
   // === WAVINESS ===
@@ -46,22 +67,19 @@ export const KelpConfig = {
   
   // === BASE VALUES (at scale = 1) ===
   base: {
-    count: 10,             // Plants per cluster at scale 1
-    radius: 3,             // Cluster radius at scale 1
-    height: 15,            // Kelp height at scale 1
-    spacing: 0.5,          // Min spacing at scale 1
+    count: BASE_PLANT_COUNT,
+    radius: 5,             // Cluster radius at scale 1
+    height: BASE_HEIGHT,
+    spacing: 0.6,          // Min spacing at scale 1
   },
   
   // === SCALING EXPONENTS (how fast each grows with scale) ===
-  // Value of 1.0 = linear scaling
-  // Value of 0.5 = square root scaling (slower)
-  // Value of 2.0 = quadratic scaling (faster)
   scaling: {
-    count: 1.8,            // Count grows fast with scale
-    radius: 0.7,           // Radius grows slower (keeps density)
-    height: 0.5,           // Height grows slowest
-    spacing: 0.3,          // Spacing grows very slow
-    width: 0.4,            // Ribbon width grows slow
+    count: COUNT_GROWTH_RATE,
+    radius: 2,           // Radius grows moderately
+    height: 0.8,           // Height grows steadily
+    spacing: 1,         // Spacing grows slow
+    width: 3,           // Ribbon width grows moderately
   },
   
   // === VARIATION ===
@@ -83,11 +101,13 @@ export const ScalePreset = {
   
   // Kelp sizes
   KELP_SMALL:       1.0,
-  KELP_MEDIUM:      1.5,
-  KELP_LARGE:       2.5,
-  KELP_HUGE:        4.0,
-  KELP_COLOSSAL:    6.0,
-  KELP_MEGA:        8.0,
+  KELP_MEDIUM:      2.0,
+  KELP_LARGE:       4.0,
+  KELP_HUGE:        7.0,
+  KELP_COLOSSAL:    12.0,
+  KELP_MEGA:        18.0,
+  KELP_TITAN:       25.0,
+  KELP_LEVIATHAN:   35.0,
 }
 
 // ============================================================================
@@ -444,6 +464,12 @@ export const createKelpColossal = (opts = {}) =>
 export const createKelpMega = (opts = {}) => 
   createKelpCluster({ ...opts, scale: ScalePreset.KELP_MEGA })
 
+export const createKelpTitan = (opts = {}) => 
+  createKelpCluster({ ...opts, scale: ScalePreset.KELP_TITAN })
+
+export const createKelpLeviathan = (opts = {}) => 
+  createKelpCluster({ ...opts, scale: ScalePreset.KELP_LEVIATHAN })
+
 // ============================================================================
 // UTILITIES
 // ============================================================================
@@ -513,5 +539,7 @@ export default {
   createKelpHuge,
   createKelpColossal,
   createKelpMega,
+  createKelpTitan,
+  createKelpLeviathan,
   cullKelpInBoulders,
 }
