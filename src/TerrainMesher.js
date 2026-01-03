@@ -154,9 +154,18 @@ export function buildTerrainMesh(scene) {
   // Create merged geometry
   const mergedGeometry = new THREE.BufferGeometry()
   const positionArray = new Float32Array(allPositions)
-  const indexArray = allIndices.length > 65535 
-    ? new Uint32Array(allIndices) 
-    : new Uint16Array(allIndices)
+  
+  // Flip triangle winding order for correct collision normals
+  // Rapier trimeshes are one-sided, so normals must point "outward" (up for floor)
+  const flippedIndices = []
+  for (let i = 0; i < allIndices.length; i += 3) {
+    // Reverse winding: ABC -> ACB
+    flippedIndices.push(allIndices[i], allIndices[i + 2], allIndices[i + 1])
+  }
+  
+  const indexArray = flippedIndices.length > 65535 
+    ? new Uint32Array(flippedIndices) 
+    : new Uint16Array(flippedIndices)
   
   mergedGeometry.setAttribute('position', new THREE.BufferAttribute(positionArray, 3))
   mergedGeometry.setIndex(new THREE.BufferAttribute(indexArray, 1))
@@ -164,9 +173,9 @@ export function buildTerrainMesh(scene) {
   mergedGeometry.computeBoundingBox()
   mergedGeometry.computeBoundingSphere()
   
-  // Store for physics
+  // Store for physics - use flipped indices
   cachedVertices = positionArray
-  cachedIndices = new Uint32Array(allIndices)  // Always use Uint32 for physics
+  cachedIndices = new Uint32Array(flippedIndices)  // Always use Uint32 for physics
   
   // Create wireframe visualization
   const wireframeGeometry = new THREE.WireframeGeometry(mergedGeometry)
@@ -483,6 +492,20 @@ export function disposeTerrainMesh() {
   MeshRegistry.unregister('terrainCollider')
 }
 
+/**
+ * Rebuild terrain mesh using cached scene reference
+ * Call this after map regeneration
+ * @returns {object | null} Mesh data or null if no scene cached
+ */
+export function rebuildTerrainMesh() {
+  if (!sceneRef) {
+    console.warn('[TerrainMesher] No scene reference - call buildTerrainMesh(scene) first')
+    return null
+  }
+  
+  return buildTerrainMesh(sceneRef)
+}
+
 // ============================================================================
 // PHYSICS INTEGRATION (RAPIER)
 // ============================================================================
@@ -610,6 +633,7 @@ export function debugTerrainMesh() {
 export default {
   // Main functions
   buildTerrainMesh,
+  rebuildTerrainMesh,
   disposeTerrainMesh,
   
   // Wireframe controls

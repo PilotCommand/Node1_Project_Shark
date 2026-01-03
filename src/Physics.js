@@ -114,10 +114,9 @@ export async function initPhysics() {
   console.log('[Physics] Initializing Rapier...')
   
   try {
-    // Dynamic import of Rapier WASM module
-    // Using a variable to prevent Vite from analyzing the import at build time
-    const rapierModule = '@dimforge/rapier3d'
-    RAPIER = await import(/* @vite-ignore */ rapierModule)
+    // Import Rapier - use rapier3d-compat for web browsers
+    // Note: rapier3d is for Node.js, rapier3d-compat is for web/Vite
+    RAPIER = await import('@dimforge/rapier3d-compat')
     await RAPIER.init()
     
     // Create physics world
@@ -141,7 +140,7 @@ export async function initPhysics() {
   } catch (error) {
     console.warn('[Physics] Failed to initialize Rapier:', error.message)
     console.log('[Physics] Running without physics - install Rapier with:')
-    console.log('  npm install @dimforge/rapier3d')
+    console.log('  npm install @dimforge/rapier3d-compat')
     console.log('[Physics] Game will use direct movement (no collisions)')
     return false
   }
@@ -197,6 +196,8 @@ export function buildTerrainCollider() {
       .setFriction(CONFIG.terrain.friction)
       .setRestitution(CONFIG.terrain.restitution)
       .setCollisionGroups(createCollisionGroups(CONFIG.groups.TERRAIN, 0xFFFF))
+      // Enable collision events for debugging
+      .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS)
     
     // Create collider (no rigid body needed for static geometry)
     const collider = world.createCollider(colliderDesc)
@@ -284,9 +285,11 @@ export function createPlayerBody() {
       .setFriction(CONFIG.player.friction)
       .setRestitution(CONFIG.player.restitution)
       .setMass(CONFIG.player.mass)
-      .setCollisionGroups(createCollisionGroups(CONFIG.player, CONFIG.groups.TERRAIN | CONFIG.groups.NPC))
+      .setCollisionGroups(createCollisionGroups(CONFIG.groups.PLAYER, CONFIG.groups.TERRAIN | CONFIG.groups.NPC))
       // Rotate capsule to align with Z axis (fish forward direction)
       .setRotation({ x: 0.7071068, y: 0, z: 0, w: 0.7071068 })  // 90° around X
+      // Enable collision events for debugging
+      .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS)
     
     playerCollider = world.createCollider(colliderDesc, playerBody)
     

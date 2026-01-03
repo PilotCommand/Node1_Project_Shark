@@ -18,12 +18,18 @@ import { regenerateMap } from './map.js'
 import { 
   toggleTerrainWireframe,
   isTerrainWireframeVisible,
+  rebuildTerrainMesh,
+  disposeTerrainMesh,
 } from './TerrainMesher.js'
 import {
   isPhysicsReady,
   applyPlayerSwimForce,
   setPhysicsEnabled,
   debugPhysics,
+  removePlayerBody,
+  createPlayerBody,
+  removeTerrainCollider,
+  buildTerrainCollider,
 } from './Physics.js'
 
 const keys = {
@@ -40,6 +46,50 @@ const MOVE_SPEED = 10           // Non-physics fallback speed
 const SWIM_FORCE = 500          // Physics swim force (Newtons)
 const PHYSICS_ENABLED = true    // Use physics when available
 
+/**
+ * Rebuild player physics body after creature change
+ * Preserves position and velocity from old body
+ */
+function rebuildPlayerPhysics() {
+  if (!isPhysicsReady()) return
+  
+  // Get current position from mesh (which was just updated)
+  const player = getPlayer()
+  if (!player) return
+  
+  // Remove old physics body and create new one with updated capsule dimensions
+  removePlayerBody()
+  createPlayerBody()
+  
+  console.log('[Controls] Rebuilt player physics body')
+}
+
+/**
+ * Rebuild terrain mesh and physics after map regeneration
+ */
+function rebuildTerrainPhysics() {
+  // Dispose old terrain mesh
+  disposeTerrainMesh()
+  
+  // Remove old physics collider
+  if (isPhysicsReady()) {
+    removeTerrainCollider()
+  }
+  
+  // Build new terrain mesh from new map
+  const meshData = rebuildTerrainMesh()
+  
+  if (meshData) {
+    console.log(`[Controls] Rebuilt terrain mesh: ${meshData.triangleCount} triangles`)
+    
+    // Build new physics collider
+    if (isPhysicsReady()) {
+      buildTerrainCollider()
+      console.log('[Controls] Rebuilt terrain physics collider')
+    }
+  }
+}
+
 export function initControls() {
   window.addEventListener('keydown', (e) => {
     switch(e.code) {
@@ -55,6 +105,9 @@ export function initControls() {
       case 'KeyM':
         const newSeed = regenerateMap()
         if (newSeed !== null) {
+          // Rebuild terrain mesh and physics collider
+          rebuildTerrainPhysics()
+          
           showNotification(
             `New terrain | Seed: ${newSeed.toString(16).toUpperCase().padStart(8, '0')}`,
             '#00ffff'
@@ -66,6 +119,9 @@ export function initControls() {
       case 'KeyR':
         const result = regeneratePlayerCreature()
         if (result) {
+          // Rebuild physics body with new capsule dimensions
+          rebuildPlayerPhysics()
+          
           const size = result.traits?.length?.toFixed(1) || '?'
           const shortName = getCreatureShortName(result.creatureType, result.creatureClass)
           showNotification(
@@ -79,6 +135,9 @@ export function initControls() {
       case 'KeyN':
         const next = cyclePlayerClass()
         if (next) {
+          // Rebuild physics body with new capsule dimensions
+          rebuildPlayerPhysics()
+          
           const displayName = getCreatureDisplayName(next.creatureType, next.creatureClass)
           const index = getCurrentIndex()
           const total = getCreatureCatalog().length
@@ -90,6 +149,9 @@ export function initControls() {
       case 'KeyB':
         const prev = cyclePreviousClass()
         if (prev) {
+          // Rebuild physics body with new capsule dimensions
+          rebuildPlayerPhysics()
+          
           const displayName = getCreatureDisplayName(prev.creatureType, prev.creatureClass)
           const index = getCurrentIndex()
           const total = getCreatureCatalog().length
