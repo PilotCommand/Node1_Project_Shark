@@ -14,6 +14,7 @@
  * 
  */
 
+import * as THREE from 'three'
 import { getPlayer } from './player.js'
 
 // ============================================================================
@@ -34,6 +35,145 @@ import { getPlayer } from './player.js'
  */
 const ACTIVE_EXTRA = 'boost'
 
+// ============================================================================
+// TRAIL RIBBON SYSTEM
+// ============================================================================
+
+const TRAIL_CONFIG = {
+  maxPoints: 100,          // Maximum trail length
+  minDistance: 0.5,        // Minimum distance between points
+  color: 0x00ffaa,         // Trail color
+  opacity: 0.6,
+  fadeOut: true,           // Fade trail when stopping
+  fadeSpeed: 0.1,          // How fast trail fades (per second)
+}
+
+let trailLine = null
+let trailPoints = []
+let trailGeometry = null
+let trailMaterial = null
+let sceneRef = null
+let isFading = false
+
+/**
+ * Initialize trail system with scene reference
+ */
+export function initTrail(scene) {
+  sceneRef = scene
+}
+
+/**
+ * Create the trail line object
+ */
+function createTrailLine() {
+  if (!sceneRef) return
+  
+  // Dispose old trail if exists
+  disposeTrailLine()
+  
+  trailPoints = []
+  
+  trailGeometry = new THREE.BufferGeometry()
+  trailMaterial = new THREE.LineBasicMaterial({
+    color: TRAIL_CONFIG.color,
+    transparent: true,
+    opacity: TRAIL_CONFIG.opacity,
+  })
+  
+  trailLine = new THREE.Line(trailGeometry, trailMaterial)
+  trailLine.frustumCulled = false
+  sceneRef.add(trailLine)
+  isFading = false
+}
+
+/**
+ * Add a point to the trail
+ */
+function addTrailPoint(position) {
+  if (!trailLine) return
+  
+  // Check minimum distance from last point
+  if (trailPoints.length > 0) {
+    const last = trailPoints[trailPoints.length - 1]
+    const dist = position.distanceTo(last)
+    if (dist < TRAIL_CONFIG.minDistance) return
+  }
+  
+  // Add new point
+  trailPoints.push(position.clone())
+  
+  // Limit trail length
+  if (trailPoints.length > TRAIL_CONFIG.maxPoints) {
+    trailPoints.shift()
+  }
+  
+  // Update geometry
+  updateTrailGeometry()
+}
+
+/**
+ * Update the trail line geometry
+ */
+function updateTrailGeometry() {
+  if (!trailGeometry || trailPoints.length < 2) return
+  
+  const positions = []
+  for (const p of trailPoints) {
+    positions.push(p.x, p.y, p.z)
+  }
+  
+  trailGeometry.setAttribute(
+    'position',
+    new THREE.Float32BufferAttribute(positions, 3)
+  )
+  trailGeometry.attributes.position.needsUpdate = true
+}
+
+/**
+ * Start fading out the trail
+ */
+function startTrailFade() {
+  if (TRAIL_CONFIG.fadeOut && trailLine) {
+    isFading = true
+  } else {
+    disposeTrailLine()
+  }
+}
+
+/**
+ * Update trail fade (call each frame)
+ */
+function updateTrailFade(delta) {
+  if (!isFading || !trailMaterial) return
+  
+  trailMaterial.opacity -= TRAIL_CONFIG.fadeSpeed * delta
+  
+  if (trailMaterial.opacity <= 0) {
+    disposeTrailLine()
+    isFading = false
+  }
+}
+
+/**
+ * Dispose trail line and clean up
+ */
+function disposeTrailLine() {
+  if (trailLine && sceneRef) {
+    sceneRef.remove(trailLine)
+  }
+  if (trailGeometry) {
+    trailGeometry.dispose()
+    trailGeometry = null
+  }
+  if (trailMaterial) {
+    trailMaterial.dispose()
+    trailMaterial = null
+  }
+  trailLine = null
+  trailPoints = []
+  isFading = false
+}
+
 
 // ============================================================================
 // EXTRAS DEFINITIONS
@@ -42,7 +182,7 @@ const ACTIVE_EXTRA = 'boost'
 const EXTRAS = {
   
   // -------------------------------------------------------------------------
-  // BOOST - Hold Q to swim faster
+  // BOOST - Hold Q to swim faster + trail ribbon
   // -------------------------------------------------------------------------
   boost: {
     name: 'Boost',
@@ -50,22 +190,27 @@ const EXTRAS = {
     
     // Called when Q is pressed
     onActivate: () => {
-      // Handled by Swimming.js via setBoosting()
+      // Create trail
+      createTrailLine()
     },
     
     // Called when Q is released
     onDeactivate: () => {
-      // Handled by Swimming.js via setBoosting()
+      // Start fading trail
+      startTrailFade()
     },
     
-    // Called every frame while Q is held (optional)
+    // Called every frame while Q is held
     onUpdate: (delta) => {
-      // Nothing needed - Swimming.js handles it
+      const player = getPlayer()
+      if (player && trailLine) {
+        addTrailPoint(player.position)
+      }
     },
   },
   
   // -------------------------------------------------------------------------
-  // OPACITY - Hold Q to change fish opacity (TODO)
+  // OPACITY - Hold Q to change fish opacity
   // -------------------------------------------------------------------------
   opacity: {
     name: 'Fade',
@@ -185,9 +330,12 @@ export function deactivateExtra() {
 }
 
 /**
- * Called every frame (optional per-frame logic)
+ * Called every frame (handles both active extra and trail fade)
  */
 export function updateExtra(delta) {
+  // Always update trail fade (even when not active)
+  updateTrailFade(delta)
+  
   if (!isActive) return
   
   const extra = getActiveExtra()
@@ -220,6 +368,8 @@ export function debugExtra() {
   console.log('Name:', extra.name)
   console.log('Description:', extra.description)
   console.log('Is Active:', isActive)
+  console.log('Trail Points:', trailPoints.length)
+  console.log('Is Fading:', isFading)
   console.log('Available:', getAvailableExtras())
   console.groupEnd()
 }
