@@ -7,15 +7,36 @@ import {
   getAllCreatureClasses,
   randomSeed,
   seedToString,
+  getClassVariants,
+  getVariantCount,
+  getVariantName,
+  getVariantDisplayName,
+  hasVariants,
 } from './Encyclopedia.js'
 import { MeshRegistry, Category, Tag } from './MeshRegistry.js'
 import { 
   attachCapsuleWireframe, 
   computeCapsuleParams,
+  createCapsuleWireframe,
   setWireframeVisible,
   setWireframeColor,
   logCapsuleStats,
+  disposeWireframe,
 } from './ScaleMesh.js'
+import {
+  normalizeCreature,
+  getNormalizationInfo,
+  getScaleFactor,
+  scaleCapsuleParams,
+  decreaseScale as normalDecreaseScale,
+  increaseScale as normalIncreaseScale,
+  getGrowthStats,
+  addFood as normalAddFood,
+  resetGrowth,
+  debug as debugNormalScale,
+  computeCapsuleVolume,
+  getManualScaleMultiplier,
+} from './NormalScale.js'
 
 // Capsule wireframe state
 let wireframeVisible = false
@@ -25,6 +46,11 @@ let creatureParts = null
 let currentType = CreatureType.FISH
 let currentClass = FishClass.STARTER
 let currentIndex = 0
+let currentVariantIndex = 0  // Track which variant of current class
+
+// Normalization state - tracks natural vs gameplay capsule params
+let naturalCapsuleParams = null      // Original size from Encyclopedia (META FACT)
+let normalizedCapsuleParams = null   // Gameplay size after normalization
 
 // All creature classes from Encyclopedia - fish AND mammals
 const CREATURE_CATALOG = getAllCreatureClasses()
@@ -49,12 +75,31 @@ export function initPlayer(scene, spawnPosition = null) {
   }
   scene.add(currentCreature.mesh)
   
-  // Attach capsule wireframe for collision visualization
-  // Pass full creature object - ScaleMesh handles both traits object and direct properties
-  const capsuleParams = computeCapsuleParams(currentCreature.mesh, currentCreature)
-  attachCapsuleWireframe(currentCreature.mesh, currentCreature, { color: 0x00ff00 })
-  setWireframeVisible(currentCreature.mesh, wireframeVisible)  // Respect initial state
-  logCapsuleStats(capsuleParams, currentClass)
+  // Compute NATURAL capsule params (META FACT - preserved from Encyclopedia)
+  naturalCapsuleParams = computeCapsuleParams(currentCreature.mesh, currentCreature)
+  
+  // Apply normalization - this scales the mesh to gameplay volume
+  const normalization = normalizeCreature(currentCreature.mesh, naturalCapsuleParams)
+  normalizedCapsuleParams = normalization.normalizedCapsuleParams
+  
+  // Attach capsule wireframe at NORMALIZED scale
+  attachCapsuleWireframe(currentCreature.mesh, null, { color: 0x00ff00 })
+  // The wireframe needs to be at normalized scale, so we recreate it
+  updateWireframeToNormalizedScale()
+  setWireframeVisible(currentCreature.mesh, wireframeVisible)
+  
+  // Log both natural and normalized stats
+  console.log(`[Player] Natural capsule:`, {
+    radius: naturalCapsuleParams.radius.toFixed(3),
+    halfHeight: naturalCapsuleParams.halfHeight.toFixed(3),
+    volume: normalization.naturalVolume.toFixed(3) + ' m³',
+  })
+  console.log(`[Player] Normalized capsule:`, {
+    radius: normalizedCapsuleParams.radius.toFixed(3),
+    halfHeight: normalizedCapsuleParams.halfHeight.toFixed(3),
+    volume: normalization.targetVolume.toFixed(3) + ' m³',
+    scaleFactor: normalization.scaleFactor.toFixed(3),
+  })
   
   MeshRegistry.register('player', {
     mesh: currentCreature.mesh,
@@ -69,12 +114,16 @@ export function initPlayer(scene, spawnPosition = null) {
       creatureClass: currentClass,
       traits: currentCreature.traits,
       parts: creatureParts,
-      capsuleParams: capsuleParams,  // Store for physics
+      // Store BOTH capsule params
+      naturalCapsuleParams: naturalCapsuleParams,    // META FACT
+      capsuleParams: normalizedCapsuleParams,        // For physics (gameplay scale)
+      normalization: normalization,
     }
   }, true)
   
-  const size = currentCreature.traits.length?.toFixed(1) || '1.5'
-  console.log(`Player: ${currentClass} | ${size}m | Seed: ${seedToString(currentCreature.seed)}`)
+  const naturalSize = currentCreature.traits.length?.toFixed(1) || '1.5'
+  const gameplayVolume = normalization.targetVolume.toFixed(2)
+  console.log(`Player: ${currentClass} | Natural: ${naturalSize}m | Vol: ${gameplayVolume}m³ | Seed: ${seedToString(currentCreature.seed)}`)
   
   return currentCreature.mesh
 }
@@ -115,12 +164,18 @@ function swapCreature(newCreatureData, newType, newClass) {
   
   sceneRef.add(currentCreature.mesh)
   
-  // Attach capsule wireframe to new creature
-  // Pass full creature object - ScaleMesh handles both traits object and direct properties
-  const capsuleParams = computeCapsuleParams(currentCreature.mesh, currentCreature)
-  attachCapsuleWireframe(currentCreature.mesh, currentCreature, { color: 0x00ff00 })
+  // Compute NATURAL capsule params (META FACT - preserved from Encyclopedia)
+  naturalCapsuleParams = computeCapsuleParams(currentCreature.mesh, currentCreature)
+  
+  // Apply normalization - this scales the mesh to gameplay volume
+  // Growth/manual scale are preserved, so player keeps their "size progression"
+  const normalization = normalizeCreature(currentCreature.mesh, naturalCapsuleParams)
+  normalizedCapsuleParams = normalization.normalizedCapsuleParams
+  
+  // Attach capsule wireframe at NORMALIZED scale
+  attachCapsuleWireframe(currentCreature.mesh, null, { color: 0x00ff00 })
+  updateWireframeToNormalizedScale()
   setWireframeVisible(currentCreature.mesh, wireframeVisible)
-  logCapsuleStats(capsuleParams, currentClass)
   
   MeshRegistry.register('player', {
     mesh: currentCreature.mesh,
@@ -135,7 +190,9 @@ function swapCreature(newCreatureData, newType, newClass) {
       creatureClass: currentClass,
       traits: currentCreature.traits,
       parts: creatureParts,
-      capsuleParams: capsuleParams,  // Store for physics
+      naturalCapsuleParams: naturalCapsuleParams,
+      capsuleParams: normalizedCapsuleParams,
+      normalization: normalization,
     }
   }, true)
   
@@ -144,7 +201,9 @@ function swapCreature(newCreatureData, newType, newClass) {
     creatureType: currentType,
     creatureClass: currentClass,
     traits: currentCreature.traits,
-    capsuleParams: capsuleParams,
+    naturalCapsuleParams: naturalCapsuleParams,
+    capsuleParams: normalizedCapsuleParams,
+    normalization: normalization,
   }
 }
 
@@ -186,6 +245,7 @@ export function regeneratePlayerCreature() {
  */
 export function cyclePlayerClass() {
   currentIndex = (currentIndex + 1) % CREATURE_CATALOG.length
+  currentVariantIndex = 0  // Reset variant when changing class
   const next = CREATURE_CATALOG[currentIndex]
   
   const newSeed = randomSeed()
@@ -214,6 +274,7 @@ export function cyclePlayerClass() {
  */
 export function cyclePreviousClass() {
   currentIndex = (currentIndex - 1 + CREATURE_CATALOG.length) % CREATURE_CATALOG.length
+  currentVariantIndex = 0  // Reset variant when changing class
   const prev = CREATURE_CATALOG[currentIndex]
   
   const newSeed = randomSeed()
@@ -235,6 +296,50 @@ export function cyclePreviousClass() {
   }
   
   return result
+}
+
+/**
+ * Cycle to next variant of current creature class (Z key)
+ * Variants affect both the name AND the colors (e.g., Yellowfin has yellow fins)
+ * This regenerates the creature with the new variant's palette
+ */
+export function cycleVariant() {
+  const variantCount = getVariantCount(currentClass)
+  
+  if (variantCount <= 1) {
+    // No variants for this class
+    return {
+      hasVariants: false,
+      variantName: getVariantName(currentClass, 0),
+      variantIndex: 0,
+      variantCount: 1,
+      regenerated: false,
+    }
+  }
+  
+  // Cycle to next variant
+  currentVariantIndex = (currentVariantIndex + 1) % variantCount
+  const variantName = getVariantName(currentClass, currentVariantIndex)
+  
+  console.log(`Variant: ${variantName} [${currentVariantIndex + 1}/${variantCount}]`)
+  
+  // Regenerate creature with new variant (keeps same seed for consistent size)
+  const currentSeed = currentCreature?.seed || randomSeed()
+  const newCreatureData = generateCreature(currentSeed, currentType, currentClass, currentVariantIndex)
+  
+  if (newCreatureData) {
+    // Swap to new creature with variant colors
+    swapCreature(newCreatureData, currentType, currentClass)
+  }
+  
+  return {
+    hasVariants: true,
+    variantName,
+    variantIndex: currentVariantIndex,
+    variantCount,
+    displayName: getVariantDisplayName(currentClass, currentVariantIndex),
+    regenerated: true,
+  }
 }
 
 /**
@@ -305,6 +410,22 @@ export function getCurrentIndex() {
   return currentIndex
 }
 
+export function getCurrentVariantIndex() {
+  return currentVariantIndex
+}
+
+export function getCurrentVariantName() {
+  return getVariantName(currentClass, currentVariantIndex)
+}
+
+export function getCurrentVariantDisplayName() {
+  return getVariantDisplayName(currentClass, currentVariantIndex)
+}
+
+export function getCurrentVariantCount() {
+  return getVariantCount(currentClass)
+}
+
 // Legacy aliases for compatibility
 export const getFishParts = getCreatureParts
 export const getCurrentFish = getCurrentCreature
@@ -349,12 +470,20 @@ export function setPlayerWireframeColor(color) {
 }
 
 /**
- * Get current capsule params for physics
+ * Get current capsule params for physics (NORMALIZED scale)
  * @returns {{ radius: number, halfHeight: number, center: THREE.Vector3 } | null}
  */
 export function getPlayerCapsuleParams() {
-  if (!currentCreature?.mesh) return null
-  return computeCapsuleParams(currentCreature.mesh, currentCreature)
+  // Return NORMALIZED capsule params for physics
+  return normalizedCapsuleParams
+}
+
+/**
+ * Get NATURAL capsule params (META FACT from Encyclopedia)
+ * @returns {{ radius: number, halfHeight: number, center: THREE.Vector3 } | null}
+ */
+export function getNaturalCapsuleParams() {
+  return naturalCapsuleParams
 }
 
 /**
@@ -363,6 +492,153 @@ export function getPlayerCapsuleParams() {
  */
 export function isWireframeVisible() {
   return wireframeVisible
+}
+
+// ============================================================================
+// NORMALIZATION / SCALE CONTROLS
+// ============================================================================
+
+/**
+ * Helper: Update wireframe to match normalized scale
+ * Called after normalization or scale change
+ */
+function updateWireframeToNormalizedScale() {
+  if (!currentCreature?.mesh || !normalizedCapsuleParams) return
+  
+  // Remove old wireframe
+  const oldWireframe = currentCreature.mesh.getObjectByName('capsule-wireframe')
+  if (oldWireframe) {
+    currentCreature.mesh.remove(oldWireframe)
+    disposeWireframe(oldWireframe)
+  }
+  
+  // Create new wireframe at normalized scale
+  // Since the mesh is already scaled, we need to create wireframe at original scale
+  // (the wireframe will be scaled along with the mesh)
+  // So we use the natural params divided by the mesh scale
+  const meshScale = currentCreature.mesh.scale.x  // Uniform scale
+  const wireframeParams = {
+    radius: naturalCapsuleParams.radius,
+    halfHeight: naturalCapsuleParams.halfHeight,
+    center: naturalCapsuleParams.center || new THREE.Vector3(),
+  }
+  
+  const wireframe = createCapsuleWireframe(wireframeParams, { color: 0x00ff00 })
+  currentCreature.mesh.add(wireframe)
+}
+
+/**
+ * Apply current scale to mesh and update physics
+ * Called after scale change (R/T keys, eating, etc.)
+ */
+export function applyCurrentScale() {
+  if (!currentCreature?.mesh || !naturalCapsuleParams) return null
+  
+  // Get new scale factor based on current growth + manual scale
+  const scaleFactor = getScaleFactor(naturalCapsuleParams)
+  
+  // Apply to mesh
+  currentCreature.mesh.scale.setScalar(scaleFactor)
+  
+  // Update normalized capsule params
+  normalizedCapsuleParams = scaleCapsuleParams(naturalCapsuleParams, scaleFactor)
+  
+  // Update registry
+  const entry = MeshRegistry.get('player')
+  if (entry) {
+    entry.metadata.capsuleParams = normalizedCapsuleParams
+    entry.metadata.normalization = getNormalizationInfo(naturalCapsuleParams)
+  }
+  
+  return {
+    scaleFactor,
+    normalizedCapsuleParams,
+    volume: getNormalizationInfo(naturalCapsuleParams).gameplay.volume,
+  }
+}
+
+/**
+ * Decrease player scale (R key)
+ * @returns {object} { scalePercent, volume }
+ */
+export function decreasePlayerScale() {
+  const result = normalDecreaseScale()
+  const scaleResult = applyCurrentScale()
+  
+  console.log(`[Player] Scale decreased to ${(getManualScaleMultiplier() * 100).toFixed(0)}%`)
+  
+  return {
+    scalePercent: getManualScaleMultiplier() * 100,
+    volume: scaleResult?.volume || 0,
+    normalizedCapsuleParams: scaleResult?.normalizedCapsuleParams,
+  }
+}
+
+/**
+ * Increase player scale (T key)
+ * @returns {object} { scalePercent, volume }
+ */
+export function increasePlayerScale() {
+  const result = normalIncreaseScale()
+  const scaleResult = applyCurrentScale()
+  
+  console.log(`[Player] Scale increased to ${(getManualScaleMultiplier() * 100).toFixed(0)}%`)
+  
+  return {
+    scalePercent: getManualScaleMultiplier() * 100,
+    volume: scaleResult?.volume || 0,
+    normalizedCapsuleParams: scaleResult?.normalizedCapsuleParams,
+  }
+}
+
+/**
+ * Add food to player and grow
+ * @param {number} foodValue - Amount of food eaten
+ * @returns {object} { volumeGained, totalVolume, growthMultiplier }
+ */
+export function addFood(foodValue) {
+  const result = normalAddFood(foodValue)
+  applyCurrentScale()
+  
+  console.log(`[Player] Ate food: +${result.volumeGained.toFixed(3)} m³ | Total: ${result.totalVolume.toFixed(2)} m³`)
+  
+  return result
+}
+
+/**
+ * Get current normalization info for display/debug
+ * @returns {object}
+ */
+export function getPlayerNormalizationInfo() {
+  if (!naturalCapsuleParams) return null
+  return getNormalizationInfo(naturalCapsuleParams)
+}
+
+/**
+ * Debug player normalization state
+ */
+export function debugPlayerScale() {
+  console.group('[Player] Scale Debug')
+  
+  if (naturalCapsuleParams) {
+    const info = getNormalizationInfo(naturalCapsuleParams)
+    console.log('Natural (META FACT):')
+    console.log(`  Length: ${currentCreature?.traits?.length?.toFixed(2) || '?'}m`)
+    console.log(`  Capsule: r=${info.natural.radius.toFixed(3)}, h=${info.natural.halfHeight.toFixed(3)}`)
+    console.log(`  Volume: ${info.natural.volume.toFixed(3)} m³`)
+    console.log('Gameplay (Normalized):')
+    console.log(`  Scale factor: ${info.scaleFactor.toFixed(3)}×`)
+    console.log(`  Capsule: r=${info.gameplay.radius.toFixed(3)}, h=${info.gameplay.halfHeight.toFixed(3)}`)
+    console.log(`  Volume: ${info.gameplay.volume.toFixed(3)} m³`)
+    console.log('Multipliers:')
+    console.log(`  Growth: ${info.growthMultiplier.toFixed(2)}× (${info.growthPercent.toFixed(0)}%)`)
+    console.log(`  Manual: ${info.manualScaleMultiplier.toFixed(2)}× (${(info.manualScaleMultiplier * 100).toFixed(0)}%)`)
+  } else {
+    console.log('No normalization data available')
+  }
+  
+  debugNormalScale()
+  console.groupEnd()
 }
 
 export let player = null

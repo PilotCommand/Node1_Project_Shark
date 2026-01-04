@@ -92,7 +92,7 @@ export const CreatureType = {
 const CREATURE_TYPE_META = {
   [CreatureType.FISH]: {
     name: 'Fish',
-    emoji: '🐟',
+    emoji: 'ðŸŸ',
     order: 10,
     classes: FishClass,
     generator: generateFish,
@@ -104,7 +104,7 @@ const CREATURE_TYPE_META = {
   },
   [CreatureType.MAMMAL]: {
     name: 'Marine Mammal',
-    emoji: '🐬',
+    emoji: 'ðŸ¬',
     order: 20,
     classes: MammalClass,
     generator: generateMammal,
@@ -116,7 +116,7 @@ const CREATURE_TYPE_META = {
   },
   [CreatureType.CRUSTACEAN]: {
     name: 'Crustacean',
-    emoji: '🦀',
+    emoji: 'ðŸ¦€',
     order: 30,
     classes: CrustaceanClass,
     generator: generateCrustacean,
@@ -128,7 +128,7 @@ const CREATURE_TYPE_META = {
   },
   [CreatureType.CEPHALOPOD]: {
     name: 'Cephalopod',
-    emoji: '🐙',
+    emoji: 'ðŸ™',
     order: 40,
     classes: CephalopodClass,
     generator: generateCephalopod,
@@ -140,7 +140,7 @@ const CREATURE_TYPE_META = {
   },
   [CreatureType.JELLY]: {
     name: 'Jellyfish',
-    emoji: '🪼',
+    emoji: 'ðŸª¼',
     order: 50,
     classes: JellyClass,
     generator: generateJelly,
@@ -152,7 +152,7 @@ const CREATURE_TYPE_META = {
   },
   [CreatureType.SEA_CUCUMBER]: {
     name: 'Sea Cucumber',
-    emoji: '🥒',
+    emoji: 'ðŸ¥’',
     order: 60,
     classes: SeaCucumberClass,
     generator: generateSeaCucumber,
@@ -173,18 +173,21 @@ const CREATURE_TYPE_META = {
  * @param {number} seed - Random seed
  * @param {string} creatureType - From CreatureType enum
  * @param {string} creatureClass - Class within that type (e.g., FishClass.SHARK)
+ * @param {number} variantIndex - Optional variant index (affects colors for some types)
  * @returns {object} Generated creature with mesh, parts, seed, etc.
  */
-export function generateCreature(seed, creatureType, creatureClass = null) {
+export function generateCreature(seed, creatureType, creatureClass = null, variantIndex = null) {
   const meta = CREATURE_TYPE_META[creatureType]
   if (!meta) {
     console.warn(`Unknown creature type: ${creatureType}`)
     return null
   }
   
-  const result = meta.generator(seed, creatureClass)
+  // Pass variantIndex to generator (fish supports it, others ignore extra params)
+  const result = meta.generator(seed, creatureClass, variantIndex)
   if (result) {
     result.creatureType = creatureType
+    result.variantIndex = variantIndex
   }
   return result
 }

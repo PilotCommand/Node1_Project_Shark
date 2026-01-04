@@ -236,16 +236,17 @@ export function removeTerrainCollider() {
 
 /**
  * Create player physics body from capsule params
+ * @param {object} [overrideCapsuleParams] - Optional override capsule params (for scale changes)
  * @returns {boolean} Success
  */
-export function createPlayerBody() {
+export function createPlayerBody(overrideCapsuleParams = null) {
   if (!physicsReady) {
     console.warn('[Physics] Not initialized')
     return false
   }
   
-  // Get capsule params from player module
-  const capsuleParams = getPlayerCapsuleParams()
+  // Get capsule params - use override if provided, otherwise get from player
+  const capsuleParams = overrideCapsuleParams || getPlayerCapsuleParams()
   if (!capsuleParams) {
     console.warn('[Physics] No player capsule params available')
     return false
@@ -442,7 +443,7 @@ export function updatePhysics(delta) {
 
 /**
  * Sync rigid body rotation to match mesh rotation
- * For player: combines mesh rotation with capsule's initial 90° X offset
+ * For player: combines mesh rotation with capsule's initial 90Â° X offset
  */
 function syncBodyRotation(body, mesh, isPlayer) {
   // Get mesh rotation as quaternion
@@ -450,7 +451,7 @@ function syncBodyRotation(body, mesh, isPlayer) {
   meshQuat.setFromEuler(mesh.rotation)
   
   if (isPlayer) {
-    // Player capsule has a 90° X rotation offset (capsule aligned to Z axis)
+    // Player capsule has a 90Â° X rotation offset (capsule aligned to Z axis)
     // We need to combine: meshRotation * capsuleOffset
     const capsuleOffset = new THREE.Quaternion()
     capsuleOffset.setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2)

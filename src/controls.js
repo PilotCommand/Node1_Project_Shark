@@ -7,8 +7,11 @@
  *   Shift       - Down
  *   Q (hold)    - Extra ability (see ExtraControls.js)
  *   
- *   R           - Mutate creature
+ *   R           - Decrease scale
+ *   T           - Increase scale
+ *   G           - Mutate creature (new random of same type)
  *   N / B       - Next / Previous species
+ *   Z           - Cycle variant (e.g., Yellowfin → Bluefin)
  *   M           - New map
  *   P           - Toggle wireframes
  *   V           - Toggle spawn visualization
@@ -20,9 +23,14 @@ import {
   regeneratePlayerCreature, 
   cyclePlayerClass,
   cyclePreviousClass,
+  cycleVariant,
   getCurrentIndex,
   getCreatureCatalog,
   toggleWireframe,
+  decreasePlayerScale,
+  increasePlayerScale,
+  debugPlayerScale,
+  getCurrentVariantCount,
 } from './player.js'
 import { 
   seedToString, 
@@ -202,8 +210,32 @@ export function initControls() {
         }
         break
       
-      // R = Mutate creature
+      // R = Decrease scale
       case 'KeyR':
+        const scaleDownResult = decreasePlayerScale()
+        if (scaleDownResult) {
+          rebuildPlayerPhysics()
+          showNotification(
+            `Scale: ${scaleDownResult.scalePercent.toFixed(0)}% | Vol: ${scaleDownResult.volume.toFixed(2)} m³`,
+            '#ff8888'
+          )
+        }
+        break
+      
+      // T = Increase scale
+      case 'KeyT':
+        const scaleUpResult = increasePlayerScale()
+        if (scaleUpResult) {
+          rebuildPlayerPhysics()
+          showNotification(
+            `Scale: ${scaleUpResult.scalePercent.toFixed(0)}% | Vol: ${scaleUpResult.volume.toFixed(2)} m³`,
+            '#88ff88'
+          )
+        }
+        break
+      
+      // G = Mutate creature (Generate new random of same type)
+      case 'KeyG':
         const result = regeneratePlayerCreature()
         if (result) {
           rebuildPlayerPhysics()
@@ -237,6 +269,26 @@ export function initControls() {
           const index = getCurrentIndex()
           const total = getCreatureCatalog().length
           showNotification(`${displayName} [${index + 1}/${total}]`, '#ffaa00')
+        }
+        break
+      
+      // Z = Cycle variant (e.g., Yellowfin Tuna → Bluefin Tuna)
+      case 'KeyZ':
+        const variantResult = cycleVariant()
+        if (variantResult.hasVariants) {
+          // Variant changes colors, need to rebuild physics
+          if (variantResult.regenerated) {
+            rebuildPlayerPhysics()
+          }
+          showNotification(
+            `${variantResult.displayName} [${variantResult.variantIndex + 1}/${variantResult.variantCount}]`,
+            '#88ddff'
+          )
+        } else {
+          showNotification(
+            `${variantResult.variantName} (no variants)`,
+            '#888888'
+          )
         }
         break
       
@@ -276,6 +328,7 @@ export function initControls() {
         debugPhysics()
         debugSwimming()
         debugExtra()
+        debugPlayerScale()
         SpawnFactory.debug()
         break
     }
