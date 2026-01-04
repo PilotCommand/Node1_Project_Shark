@@ -96,6 +96,9 @@ let playerCollider = null
 let physicsEnabled = false
 let physicsReady = false
 
+// Collision callbacks (for feeding system, etc.)
+const collisionCallbacks = []
+
 // ============================================================================
 // INITIALIZATION
 // ============================================================================
@@ -288,7 +291,7 @@ export function createPlayerBody(overrideCapsuleParams = null) {
       .setMass(CONFIG.player.mass)
       .setCollisionGroups(createCollisionGroups(CONFIG.groups.PLAYER, CONFIG.groups.TERRAIN | CONFIG.groups.NPC))
       // Rotate capsule to align with Z axis (fish forward direction)
-      .setRotation({ x: 0.7071068, y: 0, z: 0, w: 0.7071068 })  // 90° around X
+      .setRotation({ x: 0.7071068, y: 0, z: 0, w: 0.7071068 })  // 90Â° around X
       // Enable collision events for debugging
       .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS)
     
@@ -443,7 +446,7 @@ export function updatePhysics(delta) {
 
 /**
  * Sync rigid body rotation to match mesh rotation
- * For player: combines mesh rotation with capsule's initial 90Â° X offset
+ * For player: combines mesh rotation with capsule's initial 90Ã‚Â° X offset
  */
 function syncBodyRotation(body, mesh, isPlayer) {
   // Get mesh rotation as quaternion
@@ -451,7 +454,7 @@ function syncBodyRotation(body, mesh, isPlayer) {
   meshQuat.setFromEuler(mesh.rotation)
   
   if (isPlayer) {
-    // Player capsule has a 90Â° X rotation offset (capsule aligned to Z axis)
+    // Player capsule has a 90Ã‚Â° X rotation offset (capsule aligned to Z axis)
     // We need to combine: meshRotation * capsuleOffset
     const capsuleOffset = new THREE.Quaternion()
     capsuleOffset.setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2)
@@ -530,6 +533,17 @@ function onCollisionStart(creature1, creature2, collider1, collider2) {
       // Player hit terrain
       // Could trigger effects, sounds, etc.
     }
+  }
+  
+  // Fire registered collision callbacks (for feeding, etc.)
+  for (const callback of collisionCallbacks) {
+    callback({
+      type: 'start',
+      creature1,
+      creature2,
+      collider1,
+      collider2,
+    })
   }
 }
 
@@ -785,6 +799,33 @@ export function debugPhysics() {
 }
 
 // ============================================================================
+// COLLISION CALLBACKS
+// ============================================================================
+
+/**
+ * Register a callback for collision events
+ * Used by feeding system, sound effects, etc.
+ * 
+ * @param {function} callback - Called with { type, creature1, creature2, collider1, collider2 }
+ */
+export function onCollision(callback) {
+  if (typeof callback === 'function') {
+    collisionCallbacks.push(callback)
+  }
+}
+
+/**
+ * Unregister a collision callback
+ * @param {function} callback
+ */
+export function offCollision(callback) {
+  const index = collisionCallbacks.indexOf(callback)
+  if (index > -1) {
+    collisionCallbacks.splice(index, 1)
+  }
+}
+
+// ============================================================================
 // CLEANUP
 // ============================================================================
 
@@ -853,6 +894,10 @@ export default {
   // Queries
   raycast,
   isPointInsideCollider,
+  
+  // Collision callbacks
+  onCollision,
+  offCollision,
   
   // Debug
   debugPhysics,

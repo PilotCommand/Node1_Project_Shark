@@ -293,7 +293,7 @@ function getFishInNearbyCells(pos, rangeSq) {
 
 /**
  * Build adjacency map from SpawnFactory grid
- * Uses spatial hashing for O(k) neighbor lookup instead of O(nÃ‚Â²)
+ * Uses spatial hashing for O(k) neighbor lookup instead of O(nÃƒâ€šÃ‚Â²)
  */
 function buildAdjacencyMap() {
   gridPoints = SpawnFactory.playablePoints
@@ -315,7 +315,7 @@ function buildAdjacencyMap() {
   
   adjacencyMap.clear()
   
-  // Use spatial hash to find neighbors (much faster than O(nÃ‚Â²))
+  // Use spatial hash to find neighbors (much faster than O(nÃƒâ€šÃ‚Â²))
   for (let i = 0; i < gridPoints.length; i++) {
     const neighbors = []
     const p1 = gridPoints[i]
@@ -675,7 +675,7 @@ function spawnOneCreature(options = {}) {
   // Compute NATURAL visual volume at scale=1 (before any scaling)
   const naturalVisualVolume = computeGroupVolume(creatureData.mesh, false)
   
-  // Get normally distributed scale (volumes from 1 to 1000 mÂ³)
+  // Get normally distributed scale (volumes from 1 to 1000 mÃ‚Â³)
   const normalization = getNPCNormalDistributedScale(naturalVisualVolume)
   const finalScaleMultiplier = normalization.scaleFactor
   
@@ -1484,6 +1484,34 @@ function getFishLargerThan(minVolume) {
   return [...npcs.values()].filter(npc => npc.volume > minVolume)
 }
 
+/**
+ * Get NPCs near a position using spatial hash (O(1) lookup)
+ * Optimized for feeding system - returns full NPC data
+ * 
+ * @param {THREE.Vector3} position - Center position
+ * @param {number} range - Search radius
+ * @returns {Array} Array of NPC data objects within range
+ */
+function getNearbyNPCs(position, range) {
+  const rangeSq = range * range
+  const result = []
+  
+  // Use spatial hash for O(1) cell lookup
+  const nearbyIds = getFishInNearbyCells(position, rangeSq)
+  
+  for (const id of nearbyIds) {
+    const npc = npcs.get(id)
+    if (npc && npc.mesh) {
+      const distSq = position.distanceToSquared(npc.mesh.position)
+      if (distSq <= rangeSq) {
+        result.push(npc)
+      }
+    }
+  }
+  
+  return result
+}
+
 function isSchoolingSpecies(fishClass) { return SCHOOLING_SPECIES.has(fishClass) }
 function isSolitarySpecies(fishClass) { return SOLITARY_SPECIES.has(fishClass) }
 
@@ -1604,22 +1632,22 @@ function debugVolumes() {
   const mean = volumes.length > 0 ? totalVisual / volumes.length : 0
   
   console.log(`Total NPCs: ${npcs.size}`)
-  console.log(`Total Visual Volume: ${totalVisual.toFixed(3)} mÂ³`)
-  console.log(`Total Capsule Volume: ${totalCapsule.toFixed(3)} mÂ³`)
+  console.log(`Total Visual Volume: ${totalVisual.toFixed(3)} mÃ‚Â³`)
+  console.log(`Total Capsule Volume: ${totalCapsule.toFixed(3)} mÃ‚Â³`)
   console.log(`Total Meshes: ${totalMeshes}`)
-  console.log(`â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€`)
+  console.log(`Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬`)
   console.log(`Volume Distribution:`)
-  console.log(`  Min: ${minVolume.toFixed(2)} mÂ³`)
-  console.log(`  Max: ${maxVolume.toFixed(2)} mÂ³`)
-  console.log(`  Mean: ${mean.toFixed(2)} mÂ³`)
-  console.log(`  Median: ${median.toFixed(2)} mÂ³`)
+  console.log(`  Min: ${minVolume.toFixed(2)} mÃ‚Â³`)
+  console.log(`  Max: ${maxVolume.toFixed(2)} mÃ‚Â³`)
+  console.log(`  Mean: ${mean.toFixed(2)} mÃ‚Â³`)
+  console.log(`  Median: ${median.toFixed(2)} mÃ‚Â³`)
   
   console.group('By Species')
   const sortedClasses = [...byClass.entries()].sort((a, b) => b[1].visualVolume - a[1].visualVolume)
   for (const [className, data] of sortedClasses) {
     const avgVol = (data.visualVolume / data.count).toFixed(2)
     const avgMeshes = (data.meshCount / data.count).toFixed(1)
-    console.log(`${className}: ${data.count} creatures | avg: ${avgVol} mÂ³ | range: [${data.minVol.toFixed(1)}, ${data.maxVol.toFixed(1)}] | meshes: ${avgMeshes}`)
+    console.log(`${className}: ${data.count} creatures | avg: ${avgVol} mÃ‚Â³ | range: [${data.minVol.toFixed(1)}, ${data.maxVol.toFixed(1)}] | meshes: ${avgMeshes}`)
   }
   console.groupEnd()
   
@@ -2207,6 +2235,7 @@ export const FishAdder = {
   getFishNear,
   getFishSmallerThan,
   getFishLargerThan,
+  getNearbyNPCs,
   
   // Species checks
   isSchoolingSpecies,
