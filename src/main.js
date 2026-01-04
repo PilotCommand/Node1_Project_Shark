@@ -16,6 +16,7 @@ import {
   isPhysicsReady,
 } from './Physics.js'
 import { SpawnFactory } from './SpawnFactory.js'
+import { FishAdder } from './FishAdder.js'
 
 // Scene setup
 const scene = new THREE.Scene()
@@ -66,6 +67,11 @@ initCameraControls(renderer.domElement)
 initControls()
 initHUD()
 
+// Initialize NPC fish
+FishAdder.init(scene)
+FishAdder.spawnInitialFish(100)
+FishAdder.debug()
+
 // Build unified terrain collision mesh (after map is created)
 const terrainMeshData = buildTerrainMesh(scene)
 if (terrainMeshData) {
@@ -110,6 +116,9 @@ function animate() {
   // Update player movement (now applies forces instead of direct position)
   updateMovement(delta)
   
+  // Update NPC fish movement
+  FishAdder.update(delta)
+  
   updateCamera()
   updateHUD()
   
@@ -120,8 +129,8 @@ animate()
 
 // Controls documentation
 console.log(`
-🌊 OCEAN CREATURE SIMULATOR
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ðŸŒŠ OCEAN CREATURE SIMULATOR
+â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”
 
   MOVEMENT:
     WASD              - Swim
@@ -138,5 +147,5 @@ console.log(`
     V                 - Toggle spawn visualization
     F                 - Debug
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”
 `)
