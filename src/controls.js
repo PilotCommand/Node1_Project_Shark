@@ -11,10 +11,10 @@
  *   T           - Increase scale
  *   G           - Mutate creature (new random of same type)
  *   N / B       - Next / Previous species
- *   Z           - Cycle variant (e.g., Yellowfin â†’ Bluefin)
+ *   Z           - Cycle variant (e.g., Yellowfin Ã¢â€ â€™ Bluefin)
  *   M           - New map
  *   P           - Toggle debug overlays (wireframes + volume labels)
- *   V           - Toggle spawn visualization
+ *   V           - Toggle debug viz (spawn grid + fish paths)
  *   F           - Debug
  */
 
@@ -217,7 +217,7 @@ export function initControls() {
         if (scaleDownResult) {
           rebuildPlayerPhysics()
           showNotification(
-            `Scale: ${scaleDownResult.scalePercent.toFixed(0)}% | Vol: ${scaleDownResult.volume.toFixed(2)} mÂ³`,
+            `Scale: ${scaleDownResult.scalePercent.toFixed(0)}% | Vol: ${scaleDownResult.volume.toFixed(2)} mÃ‚Â³`,
             '#ff8888'
           )
         }
@@ -229,7 +229,7 @@ export function initControls() {
         if (scaleUpResult) {
           rebuildPlayerPhysics()
           showNotification(
-            `Scale: ${scaleUpResult.scalePercent.toFixed(0)}% | Vol: ${scaleUpResult.volume.toFixed(2)} mÂ³`,
+            `Scale: ${scaleUpResult.scalePercent.toFixed(0)}% | Vol: ${scaleUpResult.volume.toFixed(2)} mÃ‚Â³`,
             '#88ff88'
           )
         }
@@ -273,7 +273,7 @@ export function initControls() {
         }
         break
       
-      // Z = Cycle variant (e.g., Yellowfin Tuna â†’ Bluefin Tuna)
+      // Z = Cycle variant (e.g., Yellowfin Tuna Ã¢â€ â€™ Bluefin Tuna)
       case 'KeyZ':
         const variantResult = cycleVariant()
         if (variantResult.hasVariants) {
@@ -304,24 +304,27 @@ export function initControls() {
         )
         break
       
-      // V = Toggle spawn visualization
+      // V = Toggle spawn visualization + fish path ribbons
       // Shift+V = Show occupied points too (debug mode)
       case 'KeyV':
         const showOccupied = shiftHeld
         const vizOn = SpawnFactory.toggleVisualization({ showOccupied })
         
+        // Also toggle path ribbons with spawn viz
+        FishAdder.setPathRibbonsVisible(vizOn)
+        
         if (vizOn) {
           const stats = SpawnFactory.stats
           if (stats) {
             showNotification(
-              `Spawn viz ON | ${stats.playable} points (${stats.playablePercent}%)${showOccupied ? ' +occupied' : ''}`,
+              `Debug viz ON | ${stats.playable} grid points + fish paths${showOccupied ? ' +occupied' : ''}`,
               '#ff88ff'
             )
           } else {
-            showNotification('Spawn visualization ON', '#ff88ff')
+            showNotification('Debug visualization ON (grid + paths)', '#ff88ff')
           }
         } else {
-          showNotification('Spawn visualization OFF', '#888888')
+          showNotification('Debug visualization OFF', '#888888')
         }
         break
       

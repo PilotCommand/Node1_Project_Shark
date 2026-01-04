@@ -127,6 +127,10 @@ const CONFIG = {
   growthPerEat: 0.08,
   maxScale: 15.0,
   
+  // Volume labels (P key to toggle)
+  labelScale: 1,            // World size of labels (units)
+  labelOffset: 3,             // Height above fish (world units)
+  
   // Internal
   schoolPathOffset: 10,
 }
@@ -181,6 +185,18 @@ const activeChasers = new Set()
 // VOLUME LABELS
 let labelsVisible = false
 const labelSprites = new Map()  // npcId -> THREE.Sprite
+
+// PATH RIBBONS (debug visualization)
+let pathRibbonsVisible = false
+const pathRibbonLines = new Map()  // npcId -> THREE.Line
+
+// Colors for different AI states (use strings since State enum defined later)
+const PATH_COLORS = {
+  'wander': 0x00ff88,  // Green - wandering
+  'flee':   0xff4444,  // Red - fleeing
+  'chase':  0xffaa00,  // Orange - chasing
+  'school': 0x44aaff,  // Blue - schooling
+}
 
 // ============================================================================
 // SPATIAL HASH FUNCTIONS (optimized)
@@ -277,7 +293,7 @@ function getFishInNearbyCells(pos, rangeSq) {
 
 /**
  * Build adjacency map from SpawnFactory grid
- * Uses spatial hashing for O(k) neighbor lookup instead of O(nÂ²)
+ * Uses spatial hashing for O(k) neighbor lookup instead of O(nÃ‚Â²)
  */
 function buildAdjacencyMap() {
   gridPoints = SpawnFactory.playablePoints
@@ -299,7 +315,7 @@ function buildAdjacencyMap() {
   
   adjacencyMap.clear()
   
-  // Use spatial hash to find neighbors (much faster than O(nÂ²))
+  // Use spatial hash to find neighbors (much faster than O(nÃ‚Â²))
   for (let i = 0; i < gridPoints.length; i++) {
     const neighbors = []
     const p1 = gridPoints[i]
@@ -659,7 +675,7 @@ function spawnOneCreature(options = {}) {
   // Compute NATURAL visual volume at scale=1 (before any scaling)
   const naturalVisualVolume = computeGroupVolume(creatureData.mesh, false)
   
-  // Get normally distributed scale (volumes from 1 to 1000 m³)
+  // Get normally distributed scale (volumes from 1 to 1000 mÂ³)
   const normalization = getNPCNormalDistributedScale(naturalVisualVolume)
   const finalScaleMultiplier = normalization.scaleFactor
   
@@ -876,6 +892,9 @@ function removeFish(fishId, respawn = true) {
   // Remove volume label
   removeLabelForNPC(fishId)
   
+  // Remove path ribbon
+  removePathRibbonForNPC(fishId)
+  
   MeshRegistry.unregister(fishId)
   npcs.delete(fishId)
   
@@ -1018,6 +1037,9 @@ function planWanderPath(npc) {
   
   npc.path = path
   npc.pathIndex = 0
+  
+  // Create visualization if enabled
+  createPathRibbonForNPC(npc)
 }
 
 /**
@@ -1079,6 +1101,9 @@ function planFleePath(npc, threat) {
   
   npc.path = path
   npc.pathIndex = 0
+  
+  // Create visualization if enabled
+  createPathRibbonForNPC(npc)
 }
 
 /**
@@ -1146,6 +1171,9 @@ function planChasePath(npc, prey) {
   
   npc.path = path
   npc.pathIndex = 0
+  
+  // Create visualization if enabled
+  createPathRibbonForNPC(npc)
 }
 
 /**
@@ -1172,6 +1200,9 @@ function planSchoolFollowerPath(npc) {
   npc.path = [...leader.path]
   npc.pathIndex = Math.min(leader.pathIndex, npc.path.length - 1)
   npc.speed = leader.speed
+  
+  // Create visualization if enabled
+  createPathRibbonForNPC(npc)
 }
 
 // ============================================================================
@@ -1310,31 +1341,50 @@ function followGridPath(npc, deltaTime) {
   const dy = targetPos.y - pos.y
   const dz = targetPos.z - pos.z
   const distSq = dx * dx + dy * dy + dz * dz
+  const dist = Math.sqrt(distSq)
   
-  // Arrived at grid point? (use squared distance)
-  if (distSq < _arrivalDistSq) {
+  // Arrived at grid point?
+  if (dist < CONFIG.waypointArrivalDist) {
     npc.currentGridIdx = path[pathIndex]
     npc.pathIndex++
     
     if (npc.pathIndex >= path.length) {
       return false
     }
+    
+    // Get next target for smooth transition
+    const nextTarget = gridPoints[path[npc.pathIndex]]
+    if (nextTarget) {
+      _v1.subVectors(nextTarget, pos).normalize()
+      npc.direction.copy(_v1)
+    }
+    return true
   }
   
-  // Update direction (smooth turn toward target)
-  if (distSq > 0.01) {
-    const invDist = 1 / Math.sqrt(distSq)
-    _v1.set(dx * invDist, dy * invDist, dz * invDist)
-    npc.direction.lerp(_v1, 0.15).normalize()
-  }
-  
-  // Move
+  // Calculate move distance
   const moveDistance = npc.speed * deltaTime
-  pos.x += npc.direction.x * moveDistance
-  pos.y += npc.direction.y * moveDistance
-  pos.z += npc.direction.z * moveDistance
   
-  // Rotate to face direction
+  // IMPORTANT: Move DIRECTLY toward target, not in lerped direction
+  // This prevents drift and keeps fish on the grid path
+  if (dist > 0.01) {
+    // Normalize direction to target
+    const invDist = 1 / dist
+    _v1.set(dx * invDist, dy * invDist, dz * invDist)
+    
+    // Update stored direction for rotation (frame-rate independent lerp)
+    const lerpFactor = 1 - Math.pow(0.001, deltaTime)  // ~99.9% per second
+    npc.direction.lerp(_v1, lerpFactor).normalize()
+    
+    // Don't overshoot the target
+    const actualMove = Math.min(moveDistance, dist - 1)
+    
+    // Move directly toward target (not in lerped direction)
+    pos.x += _v1.x * actualMove
+    pos.y += _v1.y * actualMove
+    pos.z += _v1.z * actualMove
+  }
+  
+  // Rotate to face movement direction (visual only)
   const dir = npc.direction
   if (dir.x * dir.x + dir.z * dir.z > 0.001) {
     const targetRot = Math.atan2(dir.x, dir.z) + Math.PI
@@ -1554,22 +1604,22 @@ function debugVolumes() {
   const mean = volumes.length > 0 ? totalVisual / volumes.length : 0
   
   console.log(`Total NPCs: ${npcs.size}`)
-  console.log(`Total Visual Volume: ${totalVisual.toFixed(3)} m³`)
-  console.log(`Total Capsule Volume: ${totalCapsule.toFixed(3)} m³`)
+  console.log(`Total Visual Volume: ${totalVisual.toFixed(3)} mÂ³`)
+  console.log(`Total Capsule Volume: ${totalCapsule.toFixed(3)} mÂ³`)
   console.log(`Total Meshes: ${totalMeshes}`)
-  console.log(`─────────────────────────`)
+  console.log(`â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€`)
   console.log(`Volume Distribution:`)
-  console.log(`  Min: ${minVolume.toFixed(2)} m³`)
-  console.log(`  Max: ${maxVolume.toFixed(2)} m³`)
-  console.log(`  Mean: ${mean.toFixed(2)} m³`)
-  console.log(`  Median: ${median.toFixed(2)} m³`)
+  console.log(`  Min: ${minVolume.toFixed(2)} mÂ³`)
+  console.log(`  Max: ${maxVolume.toFixed(2)} mÂ³`)
+  console.log(`  Mean: ${mean.toFixed(2)} mÂ³`)
+  console.log(`  Median: ${median.toFixed(2)} mÂ³`)
   
   console.group('By Species')
   const sortedClasses = [...byClass.entries()].sort((a, b) => b[1].visualVolume - a[1].visualVolume)
   for (const [className, data] of sortedClasses) {
     const avgVol = (data.visualVolume / data.count).toFixed(2)
     const avgMeshes = (data.meshCount / data.count).toFixed(1)
-    console.log(`${className}: ${data.count} creatures | avg: ${avgVol} m³ | range: [${data.minVol.toFixed(1)}, ${data.maxVol.toFixed(1)}] | meshes: ${avgMeshes}`)
+    console.log(`${className}: ${data.count} creatures | avg: ${avgVol} mÂ³ | range: [${data.minVol.toFixed(1)}, ${data.maxVol.toFixed(1)}] | meshes: ${avgMeshes}`)
   }
   console.groupEnd()
   
@@ -1627,16 +1677,15 @@ function getAllVolumeStats() {
 /**
  * Create a text sprite for volume label
  * @param {string} text - Text to display
- * @param {number} [scale=1] - Scale multiplier for the label
  * @returns {THREE.Sprite}
  */
-function createTextSprite(text, scale = 1) {
+function createTextSprite(text) {
   const canvas = document.createElement('canvas')
   const context = canvas.getContext('2d')
   
-  // Base font size, will be used for measurement
-  const fontSize = 36
-  const padding = 16
+  // Small font for compact labels
+  const fontSize = 24
+  const padding = 8
   
   // Set font BEFORE measuring
   context.font = `bold ${fontSize}px Arial`
@@ -1658,20 +1707,14 @@ function createTextSprite(text, scale = 1) {
   context.font = `bold ${fontSize}px Arial`
   
   // Draw background pill
-  context.fillStyle = 'rgba(0, 0, 0, 0.75)'
-  roundRect(context, 2, 2, canvasWidth - 4, canvasHeight - 4, 10)
+  context.fillStyle = 'rgba(0, 0, 0, 0.7)'
+  roundRect(context, 1, 1, canvasWidth - 2, canvasHeight - 2, 6)
   context.fill()
-  
-  // Draw border
-  context.strokeStyle = 'rgba(0, 255, 170, 0.5)'
-  context.lineWidth = 2
-  roundRect(context, 2, 2, canvasWidth - 4, canvasHeight - 4, 10)
-  context.stroke()
   
   // Draw text
   context.textAlign = 'center'
   context.textBaseline = 'middle'
-  context.fillStyle = '#00ffaa'
+  context.fillStyle = '#88ffcc'
   context.fillText(text, canvasWidth / 2, canvasHeight / 2)
   
   // Create sprite
@@ -1687,11 +1730,10 @@ function createTextSprite(text, scale = 1) {
   
   const sprite = new THREE.Sprite(material)
   
-  // Scale sprite to maintain aspect ratio
-  // Base world size, then multiply by scale factor
-  const baseSize = 0.4  // Small base size for compact labels
+  // Use CONFIG for world size
+  const worldHeight = CONFIG.labelScale
   const aspect = canvasWidth / canvasHeight
-  sprite.scale.set(baseSize * aspect * scale, baseSize * scale, 1)
+  sprite.scale.set(worldHeight * aspect, worldHeight, 1)
   
   return sprite
 }
@@ -1714,41 +1756,26 @@ function roundRect(ctx, x, y, width, height, radius) {
 }
 
 /**
- * Compute label scale based on creature volume
- * Uses cube root to keep labels readable but proportional
- * @param {number} volume - Visual volume
- * @returns {number} Scale factor for label
- */
-function computeLabelScale(volume) {
-  // Cube root gives perceptually linear scaling
-  // Clamp to reasonable range - keep labels small
-  const minScale = 0.3
-  const maxScale = 1.5
-  
-  // Base scale on cube root of volume
-  // Small multiplier for compact labels
-  const scale = Math.cbrt(volume) * 0.15
-  
-  return Math.max(minScale, Math.min(maxScale, scale))
-}
-
-/**
  * Create label for an NPC
  * @param {object} npc - NPC data
  */
 function createLabelForNPC(npc) {
   if (!sceneRef || !npc.mesh) return
   
-  // Format volume text
-  const volText = `${npc.visualVolume.toFixed(2)} m³`
+  // Format volume text with proper superscript 3
+  const volText = `${npc.visualVolume.toFixed(1)} m\u00B3`
   
-  // Compute label scale based on volume
-  const labelScale = computeLabelScale(npc.visualVolume)
+  const sprite = createTextSprite(volText)
   
-  const sprite = createTextSprite(volText, labelScale)
+  // Position above creature (in local space, so divide by fish scale)
+  const fishScale = npc.scaleMultiplier || 1
+  sprite.position.set(0, CONFIG.labelOffset / fishScale, 0)
   
-  // Fixed offset above creature
-  sprite.position.set(0, 1, 0)
+  // Counter-scale to undo fish scale inheritance
+  // This keeps labels the same world size regardless of fish size
+  const counterScale = 1 / fishScale
+  sprite.scale.multiplyScalar(counterScale)
+  
   sprite.userData.isVolumeLabel = true
   
   npc.mesh.add(sprite)
@@ -1852,6 +1879,157 @@ function setLabelsVisible(visible) {
  */
 function areLabelsVisible() {
   return labelsVisible
+}
+
+// ============================================================================
+// PATH RIBBONS (debug visualization)
+// ============================================================================
+
+/**
+ * Create path ribbon for an NPC - called ONCE when path is planned
+ * Shows line through all waypoints with tetrahedron markers at start/end
+ * @param {object} npc - NPC data
+ */
+function createPathRibbonForNPC(npc) {
+  if (!pathRibbonsVisible || !sceneRef || !npc.path || npc.path.length === 0) {
+    return
+  }
+  
+  // Remove any existing ribbon first
+  removePathRibbonForNPC(npc.id)
+  
+  // Get color based on AI state
+  const color = PATH_COLORS[npc.state] || 0xffffff
+  
+  // Build points array from path grid indices
+  const points = []
+  for (let i = 0; i < npc.path.length; i++) {
+    const gridIdx = npc.path[i]
+    if (gridPoints[gridIdx]) {
+      points.push(gridPoints[gridIdx].clone())
+    }
+  }
+  
+  // Need at least 2 points to draw a line
+  if (points.length < 2) return
+  
+  // Create group to hold line + markers
+  const group = new THREE.Group()
+  group.userData.isPathRibbon = true
+  
+  // Create the line
+  const geometry = new THREE.BufferGeometry().setFromPoints(points)
+  const material = new THREE.LineBasicMaterial({ 
+    color: color,
+    transparent: true,
+    opacity: 0.7,
+  })
+  const line = new THREE.Line(geometry, material)
+  group.add(line)
+  
+  // Create tetrahedron markers at start and end
+  const tetraGeo = new THREE.TetrahedronGeometry(1.5)
+  
+  // Start marker (first point)
+  const startMat = new THREE.MeshBasicMaterial({ 
+    color: color, 
+    transparent: true, 
+    opacity: 0.9 
+  })
+  const startMarker = new THREE.Mesh(tetraGeo, startMat)
+  startMarker.position.copy(points[0])
+  group.add(startMarker)
+  
+  // End marker (last point) - slightly larger
+  const endGeo = new THREE.TetrahedronGeometry(2.0)
+  const endMat = new THREE.MeshBasicMaterial({ 
+    color: color, 
+    transparent: true, 
+    opacity: 0.9 
+  })
+  const endMarker = new THREE.Mesh(endGeo, endMat)
+  endMarker.position.copy(points[points.length - 1])
+  endMarker.rotation.set(Math.PI, 0, 0)  // Point down to distinguish from start
+  group.add(endMarker)
+  
+  sceneRef.add(group)
+  pathRibbonLines.set(npc.id, group)
+}
+
+/**
+ * Remove path ribbon for an NPC - called when path completes
+ * @param {string} npcId - NPC ID
+ */
+function removePathRibbonForNPC(npcId) {
+  const group = pathRibbonLines.get(npcId)
+  if (group) {
+    if (sceneRef) sceneRef.remove(group)
+    
+    // Dispose all children
+    group.traverse((child) => {
+      if (child.geometry) child.geometry.dispose()
+      if (child.material) child.material.dispose()
+    })
+    
+    pathRibbonLines.delete(npcId)
+  }
+}
+
+/**
+ * Remove all path ribbons
+ */
+function removeAllPathRibbons() {
+  for (const [id] of pathRibbonLines) {
+    removePathRibbonForNPC(id)
+  }
+}
+
+/**
+ * Create ribbons for all existing NPCs (when toggling on)
+ */
+function createAllPathRibbons() {
+  for (const [id, npc] of npcs) {
+    createPathRibbonForNPC(npc)
+  }
+}
+
+/**
+ * Toggle path ribbons on/off
+ * @returns {boolean} New visibility state
+ */
+function togglePathRibbons() {
+  pathRibbonsVisible = !pathRibbonsVisible
+  
+  if (pathRibbonsVisible) {
+    createAllPathRibbons()
+  } else {
+    removeAllPathRibbons()
+  }
+  
+  console.log(`[FishAdder] Path ribbons: ${pathRibbonsVisible ? 'ON' : 'OFF'}`)
+  return pathRibbonsVisible
+}
+
+/**
+ * Set path ribbons visibility explicitly
+ * @param {boolean} visible
+ */
+function setPathRibbonsVisible(visible) {
+  pathRibbonsVisible = visible
+  
+  if (visible) {
+    createAllPathRibbons()
+  } else {
+    removeAllPathRibbons()
+  }
+}
+
+/**
+ * Check if path ribbons are currently visible
+ * @returns {boolean}
+ */
+function arePathRibbonsVisible() {
+  return pathRibbonsVisible
 }
 
 // ============================================================================
@@ -2048,6 +2226,11 @@ export const FishAdder = {
   toggleLabels,
   setLabelsVisible,
   areLabelsVisible,
+  
+  // Path ribbons (debug visualization)
+  togglePathRibbons,
+  setPathRibbonsVisible,
+  arePathRibbonsVisible,
   
   // Direct access (advanced)
   get config() { return CONFIG },
