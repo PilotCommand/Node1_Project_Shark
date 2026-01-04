@@ -83,18 +83,18 @@ const DRIFTERS = new Set([
 ])
 
 // ============================================================================
-// CONFIGURATION
+// CONFIGURATION (edit these!)
 // ============================================================================
 
 const CONFIG = {
-  // Population
-  targetPopulation: 100,
+  // *** POPULATION - Change this to control how many creatures spawn ***
+  targetPopulation: 50,
   
-  // School spawning
-  schoolChance: 0.7,
+  // Schooling
+  schoolChance: 0.7,          // 0-1, chance to spawn as school
   schoolSize: { min: 4, max: 8 },
   
-  // Size distribution
+  // Size distribution (weights)
   sizeDistribution: {
     tiny:   { weight: 20, scale: [1.0, 2.0] },
     small:  { weight: 20, scale: [2.0, 4.0] },
@@ -108,29 +108,25 @@ const CONFIG = {
   speedVariation: 1.0,
   turnRate: 2.5,
   
-  // GRID-BASED PATHS
-  pathLength: 10,              // Exactly 10 grid steps
-  waypointArrivalDist: 5,      // Arrived at grid point
+  // Pathing
+  pathLength: 10,
+  waypointArrivalDist: 5,
+  forwardBias: 0,
+  targetBias: 3,
+  randomness: 0.5,
+  preferredDirBias: 2.5,
   
-  // DIRECTION BIAS (easy to edit!)
-  forwardBias: 0,              // 0 = no bias, 2 = strong forward preference
-  targetBias: 3,               // How strongly to chase/flee toward/away from target
-  randomness: 0.5,             // Random factor in direction choice
-  preferredDirBias: 2.5,       // How strongly fish stick to their preferred direction (0 = none)
-  
-  // Detection (checked when planning new path)
-  fleeRange: 75,               // ~3 grid units
-  chaseRange: 60,              // ~2.5 grid units
+  // Detection ranges
+  fleeRange: 75,
+  chaseRange: 60,
   eatRange: 10,
   
-  // Size thresholds
+  // Predation
   predatorSizeRatio: 1.3,
-  
-  // Growth
   growthPerEat: 0.08,
   maxScale: 15.0,
   
-  // Schooling
+  // Internal
   schoolPathOffset: 10,
 }
 
@@ -508,29 +504,18 @@ function init(scene) {
 // SPAWNING
 // ============================================================================
 
-function spawnInitialFish(count = CONFIG.targetPopulation) {
+function spawnInitialFish() {
   if (!isInitialized) {
     console.error('[FishAdder] Not initialized')
     return
   }
   
-  console.log(`[FishAdder] Spawning ~${count} creatures from ${allCreatures.length} species...`)
+  const count = CONFIG.targetPopulation
+  console.log(`[FishAdder] Spawning ${count} creatures from ${allCreatures.length} species...`)
   
-  // First, spawn at least one of each creature type to guarantee variety
-  const spawnedTypes = new Map() // creatureClass -> count
+  let spawned = 0
   
-  for (const creature of allCreatures) {
-    spawnOneCreature({
-      creatureType: creature.type,
-      creatureClass: creature.class,
-    })
-    spawnedTypes.set(creature.class, 1)
-  }
-  
-  let spawned = allCreatures.length
-  console.log(`[FishAdder] Guaranteed spawn: one of each ${spawned} species`)
-  
-  // Then fill rest with random mix (schools + individuals)
+  // Spawn mix of schools and individuals up to target
   while (spawned < count) {
     if (Math.random() < CONFIG.schoolChance && spawned + CONFIG.schoolSize.min <= count) {
       const schoolResult = spawnSchool()
@@ -1478,19 +1463,173 @@ function debug() {
 }
 
 // ============================================================================
+// CONFIG HELPERS (easy runtime control)
+// ============================================================================
+
+/**
+ * Set target population and adjust current population to match
+ * @param {number} count - New target population
+ */
+function setPopulation(count) {
+  CONFIG.targetPopulation = count
+  
+  const current = npcs.size
+  if (current < count) {
+    // Spawn more
+    const toSpawn = count - current
+    for (let i = 0; i < toSpawn; i++) {
+      if (Math.random() < CONFIG.schoolChance && npcs.size + CONFIG.schoolSize.min <= count) {
+        spawnSchool()
+      } else {
+        spawnOneCreature()
+      }
+    }
+    console.log(`[FishAdder] Spawned ${npcs.size - current} creatures (now ${npcs.size})`)
+  } else if (current > count) {
+    // Remove excess (random selection)
+    const toRemove = current - count
+    const ids = [...npcs.keys()]
+    for (let i = 0; i < toRemove && ids.length > 0; i++) {
+      const idx = Math.floor(Math.random() * ids.length)
+      removeFish(ids[idx], false)
+      ids.splice(idx, 1)
+    }
+    console.log(`[FishAdder] Removed ${current - npcs.size} creatures (now ${npcs.size})`)
+  }
+  
+  return npcs.size
+}
+
+/**
+ * Set a config value
+ * @param {string} key - Config key (e.g., 'baseSpeed', 'fleeRange')
+ * @param {*} value - New value
+ */
+function setConfig(key, value) {
+  if (!(key in CONFIG)) {
+    console.warn(`[FishAdder] Unknown config key: ${key}`)
+    return false
+  }
+  
+  CONFIG[key] = value
+  
+  // Update cached values if needed
+  if (key === 'waypointArrivalDist') _arrivalDistSq = value * value
+  if (key === 'fleeRange') _fleeRangeSq = value * value
+  if (key === 'chaseRange') _chaseRangeSq = value * value
+  if (key === 'eatRange') _eatRangeSq = value * value
+  
+  console.log(`[FishAdder] Set ${key} = ${value}`)
+  return true
+}
+
+/**
+ * Get a config value
+ * @param {string} key - Config key
+ */
+function getConfig(key) {
+  return CONFIG[key]
+}
+
+/**
+ * Set multiple config values at once
+ * @param {object} settings - Object with key-value pairs
+ */
+function configure(settings) {
+  for (const [key, value] of Object.entries(settings)) {
+    setConfig(key, value)
+  }
+}
+
+/**
+ * Reset config to defaults (keeps current population)
+ */
+function resetConfig() {
+  const currentPop = CONFIG.targetPopulation
+  Object.assign(CONFIG, {
+    targetPopulation: currentPop,  // Keep current
+    schoolChance: 0.7,
+    schoolSize: { min: 4, max: 8 },
+    baseSpeed: 4.0,
+    speedVariation: 1.0,
+    turnRate: 2.5,
+    pathLength: 10,
+    waypointArrivalDist: 5,
+    forwardBias: 0,
+    targetBias: 3,
+    randomness: 0.5,
+    preferredDirBias: 2.5,
+    fleeRange: 75,
+    chaseRange: 60,
+    eatRange: 10,
+    predatorSizeRatio: 1.3,
+    growthPerEat: 0.08,
+    maxScale: 15.0,
+    schoolPathOffset: 10,
+  })
+  
+  // Update cached values
+  _arrivalDistSq = 25
+  _fleeRangeSq = 5625
+  _chaseRangeSq = 3600
+  _eatRangeSq = 100
+  
+  console.log('[FishAdder] Config reset to defaults')
+}
+
+/**
+ * Remove all creatures
+ */
+function clear() {
+  const ids = [...npcs.keys()]
+  for (const id of ids) {
+    removeFish(id, false)
+  }
+  activeChasers.clear()
+  console.log('[FishAdder] Cleared all creatures')
+}
+
+/**
+ * Print current config
+ */
+function printConfig() {
+  console.log('[FishAdder] Current config:')
+  for (const [key, value] of Object.entries(CONFIG)) {
+    if (typeof value === 'object') {
+      console.log(`  ${key}:`, value)
+    } else {
+      console.log(`  ${key}: ${value}`)
+    }
+  }
+}
+
+// ============================================================================
 // EXPORT
 // ============================================================================
 
 export const FishAdder = {
+  // Lifecycle
   init,
+  update,
+  clear,
+  
+  // Spawning
   spawnInitialFish,
   spawnOneFish,
   spawnOneCreature,
   spawnSchool,
   removeFish,
   maintainPopulation,
-  update,
   
+  // Config (easy to use!)
+  setPopulation,
+  setConfig,
+  getConfig,
+  configure,
+  resetConfig,
+  printConfig,
+  
+  // Queries
   getAllFish,
   getFish,
   getCount,
@@ -1499,13 +1638,16 @@ export const FishAdder = {
   getFishSmallerThan,
   getFishLargerThan,
   
+  // Species checks
   isSchoolingSpecies,
   isSolitarySpecies,
   isBottomDweller: (c) => BOTTOM_DWELLERS.has(c),
   isDrifter: (c) => DRIFTERS.has(c),
   
+  // Debug
   debug,
   
+  // Direct access (advanced)
   get config() { return CONFIG },
   get State() { return State },
   get SCHOOLING_SPECIES() { return SCHOOLING_SPECIES },
@@ -1515,6 +1657,7 @@ export const FishAdder = {
   get allCreatures() { return allCreatures },
   get gridPoints() { return gridPoints },
   get adjacencyMap() { return adjacencyMap },
+  get activeChasers() { return activeChasers },
 }
 
 export default FishAdder

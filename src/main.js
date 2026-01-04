@@ -56,6 +56,10 @@ scene.add(map)
 SpawnFactory.init(scene)
 SpawnFactory.analyzePlayableSpace()
 
+// Initialize FishAdder (uses SpawnFactory grid)
+FishAdder.init(scene)
+FishAdder.spawnInitialFish()
+
 // Get a valid spawn point for player
 const spawnPoint = SpawnFactory.getRandomPlayablePoint()
 if (spawnPoint) {
@@ -66,11 +70,6 @@ initPlayer(scene, spawnPoint)
 initCameraControls(renderer.domElement)
 initControls()
 initHUD()
-
-// Initialize NPC fish
-FishAdder.init(scene)
-FishAdder.spawnInitialFish(100)
-FishAdder.debug()
 
 // Build unified terrain collision mesh (after map is created)
 const terrainMeshData = buildTerrainMesh(scene)
@@ -116,7 +115,7 @@ function animate() {
   // Update player movement (now applies forces instead of direct position)
   updateMovement(delta)
   
-  // Update NPC fish movement
+  // Update NPC creatures
   FishAdder.update(delta)
   
   updateCamera()
@@ -126,6 +125,9 @@ function animate() {
 }
 
 animate()
+
+// Expose FishAdder globally for console access
+window.FishAdder = FishAdder
 
 // Controls documentation
 console.log(`
