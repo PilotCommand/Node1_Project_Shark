@@ -16,10 +16,11 @@
 import * as THREE from 'three'
 import { 
   generateCreature,
-  getPlayableClasses,
+  getAllCreatureClasses,
   getVariantCount,
   randomSeed,
   CreatureType,
+  getTypeFromClass,
 } from './Encyclopedia.js'
 import { MeshRegistry, Category, Tag } from './MeshRegistry.js'
 import { SpawnFactory } from './SpawnFactory.js'
@@ -27,17 +28,58 @@ import { computeCapsuleParams } from './ScaleMesh.js'
 import { computeCapsuleVolume } from './NormalScale.js'
 
 // ============================================================================
-// SPECIES CLASSIFICATION
+// SPECIES BEHAVIOR CLASSIFICATION
 // ============================================================================
 
+// Species that school (swim in groups)
 const SCHOOLING_SPECIES = new Set([
+  // Fish
   'tuna', 'barracuda', 'tang', 'piranha', 'flyingfish', 'catfish', 'angelfish',
+  // Cephalopods
+  'squid', 'humboldt_squid', 'firefly_squid',
+  // Jellies (drift in groups)
+  'moon_jelly', 'crystal_jelly', 'sea_gooseberry',
 ])
 
+// Species that are solitary
 const SOLITARY_SPECIES = new Set([
+  // Fish
   'shark', 'hammerhead', 'ray', 'manta', 'eel', 'moray', 'grouper',
   'marlin', 'flounder', 'seahorse', 'sunfish', 'anglerfish', 'lionfish',
   'puffer', 'betta',
+  // Mammals (mostly solitary or small pods handled differently)
+  'blue_whale', 'humpback', 'sperm_whale', 'narwhal',
+  // Cephalopods
+  'octopus', 'giant_pacific_octopus', 'blue_ringed_octopus', 'dumbo_octopus', 'mimic_octopus',
+  'giant_squid', 'colossal_squid', 'cuttlefish', 'flamboyant_cuttlefish',
+  // Crustaceans
+  'lobster', 'king_crab', 'coconut_crab', 'mantis_shrimp',
+  // Jellies (large solitary)
+  'lions_mane', 'box_jelly', 'sea_wasp', 'portuguese_man_o_war',
+])
+
+// Bottom dwellers (spawn near floor, move slowly)
+const BOTTOM_DWELLERS = new Set([
+  // Crustaceans
+  'crab', 'king_crab', 'spider_crab', 'coconut_crab', 'fiddler_crab',
+  'lobster', 'crayfish', 'horseshoe_crab',
+  // Sea cucumbers
+  'sea_cucumber', 'giant_california', 'leopard_sea_cucumber',
+  'sea_apple', 'sea_pig', 'medusa_worm', 'sticky_snake', 'donkey_dung',
+  // Some cephalopods
+  'octopus', 'giant_pacific_octopus', 'blue_ringed_octopus', 'mimic_octopus',
+  // Fish
+  'flounder',
+])
+
+// Drifters (slow, passive movement)
+const DRIFTERS = new Set([
+  // Jellies
+  'moon_jelly', 'lions_mane', 'barrel_jelly', 'fried_egg_jelly', 'compass_jelly',
+  'box_jelly', 'sea_wasp', 'portuguese_man_o_war', 'by_the_wind_sailor',
+  'crystal_jelly', 'sea_gooseberry',
+  // Some fish
+  'sunfish',
 ])
 
 // ============================================================================
@@ -74,6 +116,7 @@ const CONFIG = {
   forwardBias: 0,              // 0 = no bias, 2 = strong forward preference
   targetBias: 3,               // How strongly to chase/flee toward/away from target
   randomness: 0.5,             // Random factor in direction choice
+  preferredDirBias: 2.5,       // How strongly fish stick to their preferred direction (0 = none)
   
   // Detection (checked when planning new path)
   fleeRange: 75,               // ~3 grid units
@@ -109,8 +152,9 @@ let isInitialized = false
 const npcs = new Map()
 const schools = new Map()
 
-let fishClasses = []
-let fishIdCounter = 0
+// All spawnable creatures: [{type, class, displayName, shortName}, ...]
+let allCreatures = []
+let npcIdCounter = 0
 let schoolIdCounter = 0
 
 // GRID DATA
@@ -120,27 +164,34 @@ let adjacencyMap = new Map()  // pointIndex -> [neighborIndices]
 
 // SPATIAL HASH (for O(1) lookups instead of O(n))
 const gridHash = new Map()    // "cellX,cellY,cellZ" -> [gridPointIndices]
-const fishHash = new Map()    // "cellX,cellY,cellZ" -> [fishIds]
-let hashCellSize = 50         // Size of spatial hash cells
+const fishHash = new Map()    // "cellX,cellY,cellZ" -> Set<fishId> for O(1) add/remove
+let hashCellSize = 50
+let invHashCellSize = 0.02    // 1/hashCellSize - precomputed for faster division
 
-// OBJECT POOL (avoid GC)
-const _tempVec = new THREE.Vector3()
-const _tempVec2 = new THREE.Vector3()
+// OBJECT POOL (avoid GC - reuse instead of new Vector3())
+const _v1 = new THREE.Vector3()
+const _v2 = new THREE.Vector3()
 
-// STAGGERED UPDATES
-let updateIndex = 0           // Which fish to update this frame
-const FISH_PER_FRAME = 10     // Only update N fish per frame
+// CACHED CONFIG (avoid property lookups in hot path)
+let _arrivalDistSq = 25       // waypointArrivalDist^2
+let _fleeRangeSq = 5625       // fleeRange^2
+let _chaseRangeSq = 3600      // chaseRange^2
+let _eatRangeSq = 100         // eatRange^2
+
+// ACTIVE CHASERS (only check predation for these)
+const activeChasers = new Set()
 
 // ============================================================================
-// SPATIAL HASH FUNCTIONS
+// SPATIAL HASH FUNCTIONS (optimized)
 // ============================================================================
 
+// Bitwise floor is faster than Math.floor for positive numbers
 function posToCell(x, y, z) {
-  return `${Math.floor(x / hashCellSize)},${Math.floor(y / hashCellSize)},${Math.floor(z / hashCellSize)}`
+  return `${(x * invHashCellSize) | 0},${(y * invHashCellSize) | 0},${(z * invHashCellSize) | 0}`
 }
 
-function posToVec3Cell(pos) {
-  return posToCell(pos.x, pos.y, pos.z)
+function posToCellFromVec(pos) {
+  return `${(pos.x * invHashCellSize) | 0},${(pos.y * invHashCellSize) | 0},${(pos.z * invHashCellSize) | 0}`
 }
 
 /**
@@ -149,66 +200,74 @@ function posToVec3Cell(pos) {
 function buildGridSpatialHash() {
   gridHash.clear()
   
-  for (let i = 0; i < gridPoints.length; i++) {
+  const len = gridPoints.length
+  for (let i = 0; i < len; i++) {
     const p = gridPoints[i]
-    const cell = posToVec3Cell(p)
+    const cell = posToCellFromVec(p)
     
-    if (!gridHash.has(cell)) {
-      gridHash.set(cell, [])
+    let bucket = gridHash.get(cell)
+    if (!bucket) {
+      bucket = []
+      gridHash.set(cell, bucket)
     }
-    gridHash.get(cell).push(i)
+    bucket.push(i)
   }
   
   console.log(`[FishAdder] Grid spatial hash: ${gridHash.size} cells`)
 }
 
 /**
- * Update fish's position in spatial hash
+ * Update fish's position in spatial hash (uses Set for O(1) operations)
  */
-function updateFishInHash(npc, oldPos = null) {
+function updateFishInHash(npc, oldCell = null) {
+  const id = npc.id
+  
   // Remove from old cell
-  if (oldPos) {
-    const oldCell = posToVec3Cell(oldPos)
-    const oldList = fishHash.get(oldCell)
-    if (oldList) {
-      const idx = oldList.indexOf(npc.id)
-      if (idx !== -1) oldList.splice(idx, 1)
-    }
+  if (oldCell) {
+    const oldSet = fishHash.get(oldCell)
+    if (oldSet) oldSet.delete(id)
   }
   
   // Add to new cell
-  const newCell = posToVec3Cell(npc.mesh.position)
-  if (!fishHash.has(newCell)) {
-    fishHash.set(newCell, [])
+  const newCell = posToCellFromVec(npc.mesh.position)
+  let bucket = fishHash.get(newCell)
+  if (!bucket) {
+    bucket = new Set()
+    fishHash.set(newCell, bucket)
   }
-  fishHash.get(newCell).push(npc.id)
+  bucket.add(id)
   npc._hashCell = newCell
 }
 
 /**
- * Get all fish IDs in nearby cells
+ * Get all fish IDs in nearby cells (reuses result array)
  */
-function getFishInNearbyCells(pos, radius) {
-  const result = []
-  const cellRadius = Math.ceil(radius / hashCellSize)
+const _nearbyFishResult = []
+function getFishInNearbyCells(pos, rangeSq) {
+  _nearbyFishResult.length = 0  // Clear without allocation
   
-  const cx = Math.floor(pos.x / hashCellSize)
-  const cy = Math.floor(pos.y / hashCellSize)
-  const cz = Math.floor(pos.z / hashCellSize)
+  // Only check 1 cell radius for most cases (range < cellSize)
+  const cellRadius = rangeSq > 2500 ? 2 : 1  // sqrt(2500) = 50 = cellSize
+  
+  const cx = (pos.x * invHashCellSize) | 0
+  const cy = (pos.y * invHashCellSize) | 0
+  const cz = (pos.z * invHashCellSize) | 0
   
   for (let dx = -cellRadius; dx <= cellRadius; dx++) {
     for (let dy = -cellRadius; dy <= cellRadius; dy++) {
       for (let dz = -cellRadius; dz <= cellRadius; dz++) {
         const cell = `${cx + dx},${cy + dy},${cz + dz}`
-        const fishInCell = fishHash.get(cell)
-        if (fishInCell) {
-          result.push(...fishInCell)
+        const fishSet = fishHash.get(cell)
+        if (fishSet) {
+          for (const id of fishSet) {
+            _nearbyFishResult.push(id)
+          }
         }
       }
     }
   }
   
-  return result
+  return _nearbyFishResult
 }
 
 // ============================================================================
@@ -294,30 +353,32 @@ function buildAdjacencyMap() {
  * Uses spatial hash for O(k) lookup instead of O(n)
  */
 function findNearestGridIndex(position) {
-  // Check nearby cells first
-  const cx = Math.floor(position.x / hashCellSize)
-  const cy = Math.floor(position.y / hashCellSize)
-  const cz = Math.floor(position.z / hashCellSize)
+  const cx = (position.x * invHashCellSize) | 0
+  const cy = (position.y * invHashCellSize) | 0
+  const cz = (position.z * invHashCellSize) | 0
   
   let nearestIdx = -1
   let nearestDistSq = Infinity
   
-  // Expand search radius until we find something
+  // Check expanding shells until we find something
   for (let radius = 0; radius <= 3; radius++) {
     for (let dx = -radius; dx <= radius; dx++) {
       for (let dy = -radius; dy <= radius; dy++) {
         for (let dz = -radius; dz <= radius; dz++) {
-          // Only check shell (skip interior on larger radii)
-          if (radius > 0 && 
-              Math.abs(dx) < radius && 
-              Math.abs(dy) < radius && 
-              Math.abs(dz) < radius) continue
+          // Only check shell on radius > 0
+          if (radius > 0) {
+            const adx = dx < 0 ? -dx : dx
+            const ady = dy < 0 ? -dy : dy
+            const adz = dz < 0 ? -dz : dz
+            if (adx < radius && ady < radius && adz < radius) continue
+          }
           
           const cell = `${cx + dx},${cy + dy},${cz + dz}`
           const pointsInCell = gridHash.get(cell)
           
           if (pointsInCell) {
-            for (const idx of pointsInCell) {
+            for (let i = 0, len = pointsInCell.length; i < len; i++) {
+              const idx = pointsInCell[i]
               const distSq = position.distanceToSquared(gridPoints[idx])
               if (distSq < nearestDistSq) {
                 nearestDistSq = distSq
@@ -329,11 +390,9 @@ function findNearestGridIndex(position) {
       }
     }
     
-    // Found something in this radius? Done.
     if (nearestIdx !== -1) break
   }
   
-  // Fallback to random if nothing found (shouldn't happen)
   return nearestIdx !== -1 ? nearestIdx : getRandomGridIndex()
 }
 
@@ -351,7 +410,7 @@ function getRandomGridIndex() {
  * @param {THREE.Vector3} [biasTarget] - Optional target to bias toward
  * @param {boolean} [avoidTarget] - If true, bias away from biasTarget
  */
-function pickNextGridStep(currentIdx, forwardDir, biasTarget = null, avoidTarget = false) {
+function pickNextGridStep(currentIdx, forwardDir, biasTarget = null, avoidTarget = false, preferredDir = null) {
   const neighbors = adjacencyMap.get(currentIdx)
   if (!neighbors || neighbors.length === 0) {
     return getRandomGridIndex()
@@ -362,7 +421,7 @@ function pickNextGridStep(currentIdx, forwardDir, biasTarget = null, avoidTarget
   // Pre-compute target direction if needed
   let targetDir = null
   if (biasTarget && CONFIG.targetBias > 0) {
-    targetDir = _tempVec2.subVectors(biasTarget, currentPos).normalize()
+    targetDir = _v2.subVectors(biasTarget, currentPos).normalize()
   }
   
   let bestIdx = neighbors[0]
@@ -371,20 +430,25 @@ function pickNextGridStep(currentIdx, forwardDir, biasTarget = null, avoidTarget
   for (const neighborIdx of neighbors) {
     const neighborPos = gridPoints[neighborIdx]
     
-    // Reuse _tempVec for direction calculation
-    _tempVec.subVectors(neighborPos, currentPos).normalize()
+    // Reuse _v1 for direction calculation
+    _v1.subVectors(neighborPos, currentPos).normalize()
     
     // Start with zero score
     let score = 0
     
+    // Preferred direction bias (creature's personal tendency - makes them turn less)
+    if (preferredDir && CONFIG.preferredDirBias > 0) {
+      score += preferredDir.dot(_v1) * CONFIG.preferredDirBias
+    }
+    
     // Forward bias (configurable, 0 = disabled)
     if (CONFIG.forwardBias > 0) {
-      score += forwardDir.dot(_tempVec) * CONFIG.forwardBias
+      score += forwardDir.dot(_v1) * CONFIG.forwardBias
     }
     
     // Target bias (chase/flee)
     if (targetDir && CONFIG.targetBias > 0) {
-      const targetDot = _tempVec.dot(targetDir)
+      const targetDot = _v1.dot(targetDir)
       score += avoidTarget ? -targetDot * CONFIG.targetBias : targetDot * CONFIG.targetBias
     }
     
@@ -413,13 +477,31 @@ function init(scene) {
   }
   
   sceneRef = scene
-  fishClasses = getPlayableClasses()
+  
+  // Cache squared distances for hot path
+  _arrivalDistSq = CONFIG.waypointArrivalDist * CONFIG.waypointArrivalDist
+  _fleeRangeSq = CONFIG.fleeRange * CONFIG.fleeRange
+  _chaseRangeSq = CONFIG.chaseRange * CONFIG.chaseRange
+  _eatRangeSq = CONFIG.eatRange * CONFIG.eatRange
+  
+  // Get ALL creature classes (fish, mammals, crustaceans, cephalopods, jellies, sea cucumbers)
+  allCreatures = getAllCreatureClasses().filter(c => c.class !== 'starter')
   
   // Build adjacency map from SpawnFactory grid
   buildAdjacencyMap()
   
+  // Update hash cell inverse
+  invHashCellSize = 1 / hashCellSize
+  
   isInitialized = true
-  console.log(`[FishAdder] Initialized with ${fishClasses.length} fish classes, ${gridPoints.length} grid points`)
+  
+  // Log creature breakdown
+  const byType = {}
+  for (const c of allCreatures) {
+    byType[c.type] = (byType[c.type] || 0) + 1
+  }
+  console.log(`[FishAdder] Initialized with ${allCreatures.length} creature types:`, byType)
+  console.log(`[FishAdder] Grid: ${gridPoints.length} points`)
 }
 
 // ============================================================================
@@ -432,36 +514,57 @@ function spawnInitialFish(count = CONFIG.targetPopulation) {
     return
   }
   
-  console.log(`[FishAdder] Spawning ~${count} fish...`)
+  console.log(`[FishAdder] Spawning ~${count} creatures from ${allCreatures.length} species...`)
   
-  let spawned = 0
+  // First, spawn at least one of each creature type to guarantee variety
+  const spawnedTypes = new Map() // creatureClass -> count
   
+  for (const creature of allCreatures) {
+    spawnOneCreature({
+      creatureType: creature.type,
+      creatureClass: creature.class,
+    })
+    spawnedTypes.set(creature.class, 1)
+  }
+  
+  let spawned = allCreatures.length
+  console.log(`[FishAdder] Guaranteed spawn: one of each ${spawned} species`)
+  
+  // Then fill rest with random mix (schools + individuals)
   while (spawned < count) {
     if (Math.random() < CONFIG.schoolChance && spawned + CONFIG.schoolSize.min <= count) {
       const schoolResult = spawnSchool()
       if (schoolResult) spawned += schoolResult.count
     } else {
-      if (spawnOneFish()) spawned++
+      if (spawnOneCreature()) spawned++
     }
   }
   
-  console.log(`[FishAdder] Spawned ${spawned} fish in ${schools.size} schools`)
-  return { spawned, schools: schools.size }
+  // Log breakdown by type
+  const byType = {}
+  for (const [, npc] of npcs) {
+    byType[npc.creatureType] = (byType[npc.creatureType] || 0) + 1
+  }
+  
+  console.log(`[FishAdder] Spawned ${spawned} total:`, byType)
+  console.log(`[FishAdder] Schools: ${schools.size}`)
+  
+  return { spawned, schools: schools.size, byType }
 }
 
 function spawnSchool() {
   if (gridPoints.length === 0) return null
   
   const startIdx = getRandomGridIndex()
-  const position = gridPoints[startIdx].clone()
   
-  const schoolingClasses = fishClasses.filter(fc => SCHOOLING_SPECIES.has(fc))
-  if (schoolingClasses.length === 0) return null
+  // Filter to only schooling species from all creature types
+  const schoolingCreatures = allCreatures.filter(c => SCHOOLING_SPECIES.has(c.class))
+  if (schoolingCreatures.length === 0) return null
   
-  const fishClass = schoolingClasses[Math.floor(Math.random() * schoolingClasses.length)]
-  const variantCount = getVariantCount(fishClass)
+  const creature = schoolingCreatures[Math.floor(Math.random() * schoolingCreatures.length)]
+  const variantCount = getVariantCount(creature.class)
   const variantIndex = Math.floor(Math.random() * variantCount)
-  const scaleMultiplier = pickRandomSize()
+  const scaleMultiplier = pickRandomSize(creature.class)
   
   const schoolSize = CONFIG.schoolSize.min + 
     Math.floor(Math.random() * (CONFIG.schoolSize.max - CONFIG.schoolSize.min + 1))
@@ -470,56 +573,101 @@ function spawnSchool() {
   const memberIds = []
   let leaderId = null
   
-  for (let i = 0; i < schoolSize; i++) {
-    const offset = new THREE.Vector3(
-      (Math.random() - 0.5) * 15,
-      (Math.random() - 0.5) * 5,
-      (Math.random() - 0.5) * 15
-    )
-    const spawnPos = position.clone().add(offset)
+  // Get nearby grid points for school members (all MUST be valid grid points)
+  const usedIndices = new Set([startIdx])
+  const nearbyIndices = [startIdx]
+  
+  // Collect nearby grid points for school members
+  const neighbors = adjacencyMap.get(startIdx) || []
+  for (const neighborIdx of neighbors) {
+    if (nearbyIndices.length >= schoolSize) break
+    nearbyIndices.push(neighborIdx)
+    usedIndices.add(neighborIdx)
     
-    const fish = spawnOneFish({
+    // Also add neighbors of neighbors for larger schools
+    const secondNeighbors = adjacencyMap.get(neighborIdx) || []
+    for (const secondIdx of secondNeighbors) {
+      if (nearbyIndices.length >= schoolSize) break
+      if (!usedIndices.has(secondIdx)) {
+        nearbyIndices.push(secondIdx)
+        usedIndices.add(secondIdx)
+      }
+    }
+  }
+  
+  for (let i = 0; i < schoolSize && i < nearbyIndices.length; i++) {
+    // Spawn at VALID grid point only
+    const gridIdx = nearbyIndices[i]
+    const spawnPos = gridPoints[gridIdx].clone()
+    
+    const npc = spawnOneCreature({
       position: spawnPos,
-      fishClass,
+      creatureType: creature.type,
+      creatureClass: creature.class,
       variantIndex,
       scaleMultiplier: scaleMultiplier * (0.9 + Math.random() * 0.2),
       schoolId,
       isLeader: i === 0,
     })
     
-    if (fish) {
-      memberIds.push(fish.id)
-      if (i === 0) leaderId = fish.id
+    if (npc) {
+      memberIds.push(npc.id)
+      if (i === 0) leaderId = npc.id
     }
   }
   
   if (leaderId && memberIds.length > 1) {
-    schools.set(schoolId, { leaderId, memberIds, fishClass })
-    console.log(`[FishAdder] Spawned school of ${memberIds.length} ${fishClass}`)
+    schools.set(schoolId, { leaderId, memberIds, creatureClass: creature.class })
+    console.log(`[FishAdder] Spawned school of ${memberIds.length} ${creature.displayName}`)
   }
   
   return { count: memberIds.length, schoolId }
 }
 
-function spawnOneFish(options = {}) {
+/**
+ * Spawn a single creature of any type
+ * ALWAYS spawns at a valid grid point
+ */
+function spawnOneCreature(options = {}) {
   if (gridPoints.length === 0) return null
   
+  // Pick random creature if not specified
+  let creature = null
+  if (!options.creatureClass) {
+    creature = allCreatures[Math.floor(Math.random() * allCreatures.length)]
+  } else {
+    creature = allCreatures.find(c => c.class === options.creatureClass)
+  }
+  
+  if (!creature) return null
+  
   const {
-    position = gridPoints[getRandomGridIndex()].clone(),
-    fishClass = fishClasses[Math.floor(Math.random() * fishClasses.length)],
-    variantIndex = Math.floor(Math.random() * getVariantCount(fishClass)),
-    scaleMultiplier = pickRandomSize(),
+    creatureType = creature.type,
+    creatureClass = creature.class,
+    variantIndex = Math.floor(Math.random() * getVariantCount(creatureClass)),
+    scaleMultiplier = pickRandomSize(creatureClass),
     schoolId = null,
     isLeader = false,
   } = options
   
+  // ALWAYS use a valid grid point - either find nearest to requested position or pick random
+  let gridIdx
+  if (options.position) {
+    gridIdx = findNearestGridIndex(options.position)
+  } else {
+    gridIdx = getRandomGridIndex()
+  }
+  
+  // Spawn position is ALWAYS a grid point
+  const spawnPosition = gridPoints[gridIdx].clone()
+  
   const seed = randomSeed()
-  const creatureData = generateCreature(seed, CreatureType.FISH, fishClass, variantIndex)
+  const creatureData = generateCreature(seed, creatureType, creatureClass, variantIndex)
   
   if (!creatureData?.mesh) return null
   
   creatureData.mesh.scale.setScalar(scaleMultiplier)
-  creatureData.mesh.position.copy(position)
+  creatureData.mesh.position.copy(spawnPosition)  // Always at grid point
   creatureData.mesh.rotation.y = Math.random() * Math.PI * 2
   
   sceneRef.add(creatureData.mesh)
@@ -527,21 +675,25 @@ function spawnOneFish(options = {}) {
   const capsuleParams = computeCapsuleParams(creatureData.mesh, creatureData)
   const volume = computeCapsuleVolume(capsuleParams.radius, capsuleParams.halfHeight)
   
-  const fishId = `npc_fish_${fishIdCounter++}`
+  const npcId = `npc_${creatureType}_${npcIdCounter++}`
   
-  // Find starting grid index
-  const currentGridIdx = findNearestGridIndex(position)
+  // Determine base speed based on creature type
+  let speedMult = 1.0
+  if (BOTTOM_DWELLERS.has(creatureClass)) speedMult = 0.3
+  else if (DRIFTERS.has(creatureClass)) speedMult = 0.4
   
   const npcData = {
-    id: fishId,
+    id: npcId,
     mesh: creatureData.mesh,
     seed,
-    fishClass,
+    creatureType,
+    creatureClass,
     variantIndex,
     scaleMultiplier,
     capsuleParams,
     volume,
     traits: creatureData.traits,
+    displayName: creature.displayName,
     
     // AI state
     state: schoolId && !isLeader ? State.SCHOOL : State.WANDER,
@@ -550,13 +702,24 @@ function spawnOneFish(options = {}) {
     
     // Movement
     direction: new THREE.Vector3(0, 0, 1),
-    speed: CONFIG.baseSpeed * (0.7 + Math.random() * CONFIG.speedVariation),
-    baseSpeed: CONFIG.baseSpeed * (0.7 + Math.random() * CONFIG.speedVariation),
+    speed: CONFIG.baseSpeed * speedMult * (0.7 + Math.random() * CONFIG.speedVariation),
+    baseSpeed: CONFIG.baseSpeed * speedMult * (0.7 + Math.random() * CONFIG.speedVariation),
+    
+    // Preferred direction (each creature has its own bias - makes them turn less)
+    preferredDirection: new THREE.Vector3(
+      Math.random() - 0.5,
+      (Math.random() - 0.5) * 0.3,  // Less vertical bias
+      Math.random() - 0.5
+    ).normalize(),
+    
+    // Behavior flags
+    isBottomDweller: BOTTOM_DWELLERS.has(creatureClass),
+    isDrifter: DRIFTERS.has(creatureClass),
     
     // GRID-BASED PATH (array of grid indices)
-    path: [],           // Array of grid point indices
-    pathIndex: 0,       // Current step in path
-    currentGridIdx,     // Current grid position
+    path: [],
+    pathIndex: 0,
+    currentGridIdx: gridIdx,  // Start at the grid point we spawned at
     
     // Targets (set during planning)
     threatId: null,
@@ -566,35 +729,61 @@ function spawnOneFish(options = {}) {
   // Generate initial path
   planGridPath(npcData)
   
-  npcs.set(fishId, npcData)
+  npcs.set(npcId, npcData)
   
   // Add to spatial hash
   updateFishInHash(npcData)
   
-  MeshRegistry.register(fishId, {
+  MeshRegistry.register(npcId, {
     mesh: creatureData.mesh,
     body: null,
     category: Category.NPC,
     tags: [Tag.ANIMATED],
-    metadata: { fishClass, variantIndex, scaleMultiplier, volume, seed, schoolId }
+    metadata: { creatureType, creatureClass, variantIndex, scaleMultiplier, volume, seed, schoolId }
   }, true)
   
   return npcData
 }
 
-function pickRandomSize() {
+// Alias for backwards compatibility
+function spawnOneFish(options = {}) {
+  return spawnOneCreature(options)
+}
+
+function pickRandomSize(creatureClass = null) {
   const dist = CONFIG.sizeDistribution
   const totalWeight = Object.values(dist).reduce((sum, d) => sum + d.weight, 0)
   let roll = Math.random() * totalWeight
   
+  let baseScale = 1.0
   for (const [, data] of Object.entries(dist)) {
     roll -= data.weight
     if (roll <= 0) {
       const [min, max] = data.scale
-      return min + Math.random() * (max - min)
+      baseScale = min + Math.random() * (max - min)
+      break
     }
   }
-  return 1.0
+  
+  // Adjust scale for specific creature types
+  if (creatureClass) {
+    // Large creatures
+    if (['blue_whale', 'humpback', 'sperm_whale', 'giant_squid', 'colossal_squid', 
+         'giant_pacific_octopus', 'lions_mane', 'whale_shark'].includes(creatureClass)) {
+      baseScale *= 2.0
+    }
+    // Medium-large creatures
+    else if (['orca', 'manta', 'hammerhead', 'king_crab', 'walrus'].includes(creatureClass)) {
+      baseScale *= 1.5
+    }
+    // Small creatures
+    else if (['shrimp', 'fiddler_crab', 'seahorse', 'blue_ringed_octopus', 
+              'firefly_squid', 'sea_gooseberry'].includes(creatureClass)) {
+      baseScale *= 0.5
+    }
+  }
+  
+  return baseScale
 }
 
 // ============================================================================
@@ -605,14 +794,14 @@ function removeFish(fishId, respawn = true) {
   const npc = npcs.get(fishId)
   if (!npc) return null
   
-  // Remove from spatial hash
+  // Remove from spatial hash (O(1) with Set)
   if (npc._hashCell) {
-    const cellList = fishHash.get(npc._hashCell)
-    if (cellList) {
-      const idx = cellList.indexOf(fishId)
-      if (idx !== -1) cellList.splice(idx, 1)
-    }
+    const cellSet = fishHash.get(npc._hashCell)
+    if (cellSet) cellSet.delete(fishId)
   }
+  
+  // Remove from active chasers
+  activeChasers.delete(fishId)
   
   // Remove from school
   if (npc.schoolId) {
@@ -711,6 +900,7 @@ function planGridPath(npc) {
     npc.threatId = threat.id
     npc.preyId = null
     npc.speed = npc.baseSpeed * 1.5
+    activeChasers.delete(npc.id)  // Not chasing anymore
     planFleePath(npc, threat)
     return
   }
@@ -721,6 +911,7 @@ function planGridPath(npc) {
     npc.preyId = prey.id
     npc.threatId = null
     npc.speed = npc.baseSpeed * 1.3
+    activeChasers.add(npc.id)  // Track as chaser
     planChasePath(npc, prey)
     return
   }
@@ -730,6 +921,7 @@ function planGridPath(npc) {
   npc.threatId = null
   npc.preyId = null
   npc.speed = npc.baseSpeed
+  activeChasers.delete(npc.id)  // Not chasing
   planWanderPath(npc)
 }
 
@@ -738,18 +930,58 @@ function planGridPath(npc) {
  */
 function planWanderPath(npc) {
   const path = []
-  let currentIdx = npc.currentGridIdx
+  
+  // Find nearest grid point to current position
+  let currentIdx = findNearestGridIndex(npc.mesh.position)
+  npc.currentGridIdx = currentIdx
+  
   let forwardDir = npc.direction.clone()
   
   if (forwardDir.lengthSq() < 0.01) {
     forwardDir.set(Math.random() - 0.5, 0, Math.random() - 0.5).normalize()
   }
   
-  for (let i = 0; i < CONFIG.pathLength; i++) {
-    const nextIdx = pickNextGridStep(currentIdx, forwardDir)
+  // For FIRST step, pick neighbor that's in front of the fish's ACTUAL position
+  // (not relative to grid point, which might be behind the fish)
+  const neighbors = adjacencyMap.get(currentIdx)
+  if (neighbors && neighbors.length > 0) {
+    let bestIdx = neighbors[0]
+    let bestScore = -Infinity
+    
+    for (const neighborIdx of neighbors) {
+      const neighborPos = gridPoints[neighborIdx]
+      // Direction from FISH to neighbor (not from grid point)
+      _v1.subVectors(neighborPos, npc.mesh.position).normalize()
+      
+      // Prefer neighbors in front of fish
+      let score = forwardDir.dot(_v1) * 3
+      
+      // Add preferred direction bias
+      if (npc.preferredDirection && CONFIG.preferredDirBias > 0) {
+        score += npc.preferredDirection.dot(_v1) * CONFIG.preferredDirBias
+      }
+      
+      score += Math.random() * CONFIG.randomness
+      
+      if (score > bestScore) {
+        bestScore = score
+        bestIdx = neighborIdx
+      }
+    }
+    path.push(bestIdx)
+    
+    // Update for next iterations
+    const currentPos = gridPoints[currentIdx]
+    const nextPos = gridPoints[bestIdx]
+    forwardDir.subVectors(nextPos, currentPos).normalize()
+    currentIdx = bestIdx
+  }
+  
+  // Build rest of path normally
+  for (let i = path.length; i < CONFIG.pathLength; i++) {
+    const nextIdx = pickNextGridStep(currentIdx, forwardDir, null, false, npc.preferredDirection)
     path.push(nextIdx)
     
-    // Update forward direction
     const currentPos = gridPoints[currentIdx]
     const nextPos = gridPoints[nextIdx]
     forwardDir.subVectors(nextPos, currentPos).normalize()
@@ -766,13 +998,49 @@ function planWanderPath(npc) {
  */
 function planFleePath(npc, threat) {
   const path = []
-  let currentIdx = npc.currentGridIdx
-  let forwardDir = npc.direction.clone()
   
+  // Find nearest grid point to current position
+  let currentIdx = findNearestGridIndex(npc.mesh.position)
+  npc.currentGridIdx = currentIdx
+  
+  let forwardDir = npc.direction.clone()
   const threatPos = threat.mesh.position
   
-  for (let i = 0; i < CONFIG.pathLength; i++) {
-    const nextIdx = pickNextGridStep(currentIdx, forwardDir, threatPos, true) // avoidTarget = true
+  // For FIRST step, pick neighbor relative to fish's ACTUAL position
+  const neighbors = adjacencyMap.get(currentIdx)
+  if (neighbors && neighbors.length > 0) {
+    let bestIdx = neighbors[0]
+    let bestScore = -Infinity
+    
+    // Direction away from threat
+    _v2.subVectors(npc.mesh.position, threatPos).normalize()
+    
+    for (const neighborIdx of neighbors) {
+      const neighborPos = gridPoints[neighborIdx]
+      _v1.subVectors(neighborPos, npc.mesh.position).normalize()
+      
+      // Prefer neighbors AWAY from threat
+      let score = _v1.dot(_v2) * CONFIG.targetBias
+      // Also prefer forward momentum
+      score += forwardDir.dot(_v1) * 2
+      score += Math.random() * CONFIG.randomness
+      
+      if (score > bestScore) {
+        bestScore = score
+        bestIdx = neighborIdx
+      }
+    }
+    path.push(bestIdx)
+    
+    const currentPos = gridPoints[currentIdx]
+    const nextPos = gridPoints[bestIdx]
+    forwardDir.subVectors(nextPos, currentPos).normalize()
+    currentIdx = bestIdx
+  }
+  
+  // Build rest of path
+  for (let i = path.length; i < CONFIG.pathLength; i++) {
+    const nextIdx = pickNextGridStep(currentIdx, forwardDir, threatPos, true, npc.preferredDirection)
     path.push(nextIdx)
     
     const currentPos = gridPoints[currentIdx]
@@ -791,7 +1059,11 @@ function planFleePath(npc, threat) {
  */
 function planChasePath(npc, prey) {
   const path = []
-  let currentIdx = npc.currentGridIdx
+  
+  // Find nearest grid point to current position
+  let currentIdx = findNearestGridIndex(npc.mesh.position)
+  npc.currentGridIdx = currentIdx
+  
   let forwardDir = npc.direction.clone()
   
   // Predict where prey will be
@@ -801,8 +1073,41 @@ function planChasePath(npc, prey) {
     targetPos = gridPoints[prey.path[futureIdx]].clone()
   }
   
-  for (let i = 0; i < CONFIG.pathLength; i++) {
-    const nextIdx = pickNextGridStep(currentIdx, forwardDir, targetPos, false) // toward target
+  // For FIRST step, pick neighbor relative to fish's ACTUAL position
+  const neighbors = adjacencyMap.get(currentIdx)
+  if (neighbors && neighbors.length > 0) {
+    let bestIdx = neighbors[0]
+    let bestScore = -Infinity
+    
+    // Direction toward prey
+    _v2.subVectors(targetPos, npc.mesh.position).normalize()
+    
+    for (const neighborIdx of neighbors) {
+      const neighborPos = gridPoints[neighborIdx]
+      _v1.subVectors(neighborPos, npc.mesh.position).normalize()
+      
+      // Prefer neighbors TOWARD prey
+      let score = _v1.dot(_v2) * CONFIG.targetBias
+      // Also prefer forward momentum
+      score += forwardDir.dot(_v1) * 2
+      score += Math.random() * CONFIG.randomness
+      
+      if (score > bestScore) {
+        bestScore = score
+        bestIdx = neighborIdx
+      }
+    }
+    path.push(bestIdx)
+    
+    const currentPos = gridPoints[currentIdx]
+    const nextPos = gridPoints[bestIdx]
+    forwardDir.subVectors(nextPos, currentPos).normalize()
+    currentIdx = bestIdx
+  }
+  
+  // Build rest of path
+  for (let i = path.length; i < CONFIG.pathLength; i++) {
+    const nextIdx = pickNextGridStep(currentIdx, forwardDir, targetPos, false, npc.preferredDirection)
     path.push(nextIdx)
     
     const currentPos = gridPoints[currentIdx]
@@ -848,18 +1153,21 @@ function planSchoolFollowerPath(npc) {
 
 function findNearestThreat(npc) {
   const pos = npc.mesh.position
+  const npcVol = npc.volume
+  const sizeRatio = CONFIG.predatorSizeRatio
   let nearest = null
-  let nearestDistSq = CONFIG.fleeRange * CONFIG.fleeRange
+  let nearestDistSq = _fleeRangeSq
   
-  // Only check fish in nearby cells (O(k) instead of O(n))
-  const nearbyFishIds = getFishInNearbyCells(pos, CONFIG.fleeRange)
+  // Only check fish in nearby cells
+  const nearbyFishIds = getFishInNearbyCells(pos, _fleeRangeSq)
+  const len = nearbyFishIds.length
   
-  for (const otherId of nearbyFishIds) {
+  for (let i = 0; i < len; i++) {
+    const otherId = nearbyFishIds[i]
     if (otherId === npc.id) continue
     
     const other = npcs.get(otherId)
-    if (!other) continue
-    if (other.volume < npc.volume * CONFIG.predatorSizeRatio) continue
+    if (!other || other.volume < npcVol * sizeRatio) continue
     
     const distSq = pos.distanceToSquared(other.mesh.position)
     if (distSq < nearestDistSq) {
@@ -868,11 +1176,11 @@ function findNearestThreat(npc) {
     }
   }
   
-  // Check player (always check, not in hash)
+  // Check player (not in hash)
   const player = MeshRegistry.get('player')
   if (player?.mesh) {
     const playerVolume = player.metadata?.volume || 1
-    if (playerVolume > npc.volume * CONFIG.predatorSizeRatio) {
+    if (playerVolume > npcVol * sizeRatio) {
       const distSq = pos.distanceToSquared(player.mesh.position)
       if (distSq < nearestDistSq) {
         nearest = { mesh: player.mesh, volume: playerVolume, id: 'player' }
@@ -885,18 +1193,20 @@ function findNearestThreat(npc) {
 
 function findNearestPrey(npc) {
   const pos = npc.mesh.position
+  const npcVol = npc.volume
+  const sizeRatio = CONFIG.predatorSizeRatio
   let nearest = null
-  let nearestDistSq = CONFIG.chaseRange * CONFIG.chaseRange
+  let nearestDistSq = _chaseRangeSq
   
-  // Only check fish in nearby cells
-  const nearbyFishIds = getFishInNearbyCells(pos, CONFIG.chaseRange)
+  const nearbyFishIds = getFishInNearbyCells(pos, _chaseRangeSq)
+  const len = nearbyFishIds.length
   
-  for (const otherId of nearbyFishIds) {
+  for (let i = 0; i < len; i++) {
+    const otherId = nearbyFishIds[i]
     if (otherId === npc.id) continue
     
     const other = npcs.get(otherId)
-    if (!other) continue
-    if (npc.volume < other.volume * CONFIG.predatorSizeRatio) continue
+    if (!other || npcVol < other.volume * sizeRatio) continue
     
     const distSq = pos.distanceToSquared(other.mesh.position)
     if (distSq < nearestDistSq) {
@@ -909,52 +1219,38 @@ function findNearestPrey(npc) {
 }
 
 // ============================================================================
-// UPDATE LOOP (staggered for performance)
+// UPDATE LOOP (optimized)
 // ============================================================================
 
 function update(deltaTime) {
   if (!isInitialized) return
   
-  const fishArray = [...npcs.values()]
-  const fishCount = fishArray.length
-  
-  if (fishCount === 0) return
-  
-  // STAGGERED: Only process FISH_PER_FRAME fish for path completion
-  // But ALL fish get movement updates (cheap)
-  const startIdx = updateIndex % fishCount
-  let processed = 0
-  
-  for (let i = 0; i < fishCount; i++) {
-    const npc = fishArray[i]
-    
-    // Movement update for ALL fish (cheap)
+  // Iterate directly over Map (no array allocation)
+  for (const [, npc] of npcs) {
+    // Movement update
     const moved = followGridPath(npc, deltaTime)
     
     // Update spatial hash if moved to new cell
-    if (moved && npc._hashCell) {
-      const newCell = posToVec3Cell(npc.mesh.position)
+    if (moved) {
+      const newCell = posToCellFromVec(npc.mesh.position)
       if (newCell !== npc._hashCell) {
-        // Remove from old cell
-        const oldList = fishHash.get(npc._hashCell)
-        if (oldList) {
-          const idx = oldList.indexOf(npc.id)
-          if (idx !== -1) oldList.splice(idx, 1)
-        }
+        // Remove from old cell (O(1) with Set)
+        const oldSet = fishHash.get(npc._hashCell)
+        if (oldSet) oldSet.delete(npc.id)
+        
         // Add to new cell
-        if (!fishHash.has(newCell)) fishHash.set(newCell, [])
-        fishHash.get(newCell).push(npc.id)
+        let newSet = fishHash.get(newCell)
+        if (!newSet) {
+          newSet = new Set()
+          fishHash.set(newCell, newSet)
+        }
+        newSet.add(npc.id)
         npc._hashCell = newCell
       }
     }
-    
-    // Path planning only for subset (expensive, but fish won't replan
-    // until their path is done anyway, so this just staggers the load)
   }
   
-  updateIndex += FISH_PER_FRAME
-  
-  // Check for eating (only fish in CHASE state)
+  // Check for eating (only active chasers)
   checkPredation()
 }
 
@@ -963,84 +1259,103 @@ function update(deltaTime) {
  * Returns true if fish moved
  */
 function followGridPath(npc, deltaTime) {
-  const { mesh, path, pathIndex } = npc
+  const path = npc.path
+  const pathIndex = npc.pathIndex
   
   // No path or path complete? Plan new one
-  if (!path || path.length === 0 || pathIndex >= path.length) {
+  if (!path || pathIndex >= path.length) {
     planGridPath(npc)
     return false
   }
   
   // Get current target grid point
-  const targetIdx = path[pathIndex]
-  const targetPos = gridPoints[targetIdx]
-  
+  const targetPos = gridPoints[path[pathIndex]]
   if (!targetPos) {
     planGridPath(npc)
     return false
   }
   
-  // Direction to target (use pooled vector)
-  _tempVec.subVectors(targetPos, mesh.position)
-  const dist = _tempVec.length()
+  const mesh = npc.mesh
+  const pos = mesh.position
   
-  // Arrived at grid point?
-  if (dist < CONFIG.waypointArrivalDist) {
-    npc.currentGridIdx = targetIdx
+  // Direction to target (inline for speed)
+  const dx = targetPos.x - pos.x
+  const dy = targetPos.y - pos.y
+  const dz = targetPos.z - pos.z
+  const distSq = dx * dx + dy * dy + dz * dz
+  
+  // Arrived at grid point? (use squared distance)
+  if (distSq < _arrivalDistSq) {
+    npc.currentGridIdx = path[pathIndex]
     npc.pathIndex++
     
-    // Path complete? Will plan new one next frame
     if (npc.pathIndex >= path.length) {
       return false
     }
   }
   
-  // Update direction
-  if (dist > 0.1) {
-    _tempVec.normalize()
-    npc.direction.lerp(_tempVec, 0.2).normalize()
+  // Update direction (smooth turn toward target)
+  if (distSq > 0.01) {
+    const invDist = 1 / Math.sqrt(distSq)
+    _v1.set(dx * invDist, dy * invDist, dz * invDist)
+    npc.direction.lerp(_v1, 0.15).normalize()
   }
   
   // Move
   const moveDistance = npc.speed * deltaTime
-  mesh.position.addScaledVector(npc.direction, moveDistance)
+  pos.x += npc.direction.x * moveDistance
+  pos.y += npc.direction.y * moveDistance
+  pos.z += npc.direction.z * moveDistance
   
   // Rotate to face direction
-  if (npc.direction.lengthSq() > 0.001) {
-    const targetRotation = Math.atan2(npc.direction.x, npc.direction.z) + Math.PI
+  const dir = npc.direction
+  if (dir.x * dir.x + dir.z * dir.z > 0.001) {
+    const targetRot = Math.atan2(dir.x, dir.z) + Math.PI
+    let angleDiff = targetRot - mesh.rotation.y
     
-    let angleDiff = targetRotation - mesh.rotation.y
-    while (angleDiff > Math.PI) angleDiff -= Math.PI * 2
-    while (angleDiff < -Math.PI) angleDiff += Math.PI * 2
+    // Normalize angle
+    if (angleDiff > 3.14159) angleDiff -= 6.28318
+    else if (angleDiff < -3.14159) angleDiff += 6.28318
     
     const maxTurn = CONFIG.turnRate * deltaTime
-    mesh.rotation.y += Math.max(-maxTurn, Math.min(maxTurn, angleDiff))
+    if (angleDiff > maxTurn) angleDiff = maxTurn
+    else if (angleDiff < -maxTurn) angleDiff = -maxTurn
+    
+    mesh.rotation.y += angleDiff
   }
   
   return true
 }
 
 // ============================================================================
-// PREDATION
+// PREDATION (only checks active chasers)
 // ============================================================================
 
 function checkPredation() {
+  if (activeChasers.size === 0) return
+  
   const toRemove = []
   
-  for (const [predatorId, predator] of npcs) {
-    if (predator.state !== State.CHASE || !predator.preyId) continue
+  for (const predatorId of activeChasers) {
+    const predator = npcs.get(predatorId)
+    if (!predator || !predator.preyId) continue
     
     const prey = npcs.get(predator.preyId)
-    if (!prey) continue
+    if (!prey) {
+      predator.preyId = null
+      continue
+    }
     
-    const dist = predator.mesh.position.distanceTo(prey.mesh.position)
+    // Use squared distance (faster)
+    const distSq = predator.mesh.position.distanceToSquared(prey.mesh.position)
     
-    if (dist < CONFIG.eatRange) {
+    if (distSq < _eatRangeSq) {
       toRemove.push({ preyId: prey.id, predatorId })
     }
   }
   
-  for (const { preyId, predatorId } of toRemove) {
+  for (let i = 0; i < toRemove.length; i++) {
+    const { preyId, predatorId } = toRemove[i]
     const predator = npcs.get(predatorId)
     if (!predator) continue
     
@@ -1058,7 +1373,6 @@ function checkPredation() {
     }
     
     predator.preyId = null
-    // Path continues - no forced replan until path complete
   }
 }
 
@@ -1103,9 +1417,18 @@ function isSolitarySpecies(fishClass) { return SOLITARY_SPECIES.has(fishClass) }
 function debug() {
   console.log('[FishAdder] Debug:')
   console.log(`  Grid: ${gridPoints.length} points, ${gridHash.size} hash cells`)
-  console.log(`  Fish hash: ${fishHash.size} cells, cell size: ${hashCellSize}`)
+  console.log(`  Fish hash: ${fishHash.size} cells (Sets), cell size: ${hashCellSize}`)
   console.log(`  Population: ${npcs.size} / ${CONFIG.targetPopulation}`)
+  console.log(`  Active chasers: ${activeChasers.size}`)
+  console.log(`  Available species: ${allCreatures.length}`)
   console.log(`  Schools: ${schools.size}`)
+  
+  // Count by creature type
+  const byType = {}
+  for (const [, npc] of npcs) {
+    byType[npc.creatureType] = (byType[npc.creatureType] || 0) + 1
+  }
+  console.log(`  By type:`, byType)
   
   const stateCounts = { wander: 0, flee: 0, chase: 0, school: 0 }
   for (const [, npc] of npcs) {
@@ -1124,6 +1447,15 @@ function debug() {
   }
   console.log(`  Sizes:`, sizeCounts)
   
+  // Behavior breakdown
+  let bottomDwellers = 0, drifters = 0, swimmers = 0
+  for (const [, npc] of npcs) {
+    if (npc.isBottomDweller) bottomDwellers++
+    else if (npc.isDrifter) drifters++
+    else swimmers++
+  }
+  console.log(`  Behavior: ${swimmers} swimmers, ${drifters} drifters, ${bottomDwellers} bottom-dwellers`)
+  
   // Path progress
   let avgProgress = 0
   let count = 0
@@ -1140,7 +1472,7 @@ function debug() {
   if (schools.size > 0) {
     console.log(`  Active schools:`)
     for (const [schoolId, school] of schools) {
-      console.log(`    ${schoolId}: ${school.fishClass} (${school.memberIds.length} fish)`)
+      console.log(`    ${schoolId}: ${school.creatureClass} (${school.memberIds.length} members)`)
     }
   }
 }
@@ -1153,6 +1485,7 @@ export const FishAdder = {
   init,
   spawnInitialFish,
   spawnOneFish,
+  spawnOneCreature,
   spawnSchool,
   removeFish,
   maintainPopulation,
@@ -1168,6 +1501,8 @@ export const FishAdder = {
   
   isSchoolingSpecies,
   isSolitarySpecies,
+  isBottomDweller: (c) => BOTTOM_DWELLERS.has(c),
+  isDrifter: (c) => DRIFTERS.has(c),
   
   debug,
   
@@ -1175,6 +1510,9 @@ export const FishAdder = {
   get State() { return State },
   get SCHOOLING_SPECIES() { return SCHOOLING_SPECIES },
   get SOLITARY_SPECIES() { return SOLITARY_SPECIES },
+  get BOTTOM_DWELLERS() { return BOTTOM_DWELLERS },
+  get DRIFTERS() { return DRIFTERS },
+  get allCreatures() { return allCreatures },
   get gridPoints() { return gridPoints },
   get adjacencyMap() { return adjacencyMap },
 }
