@@ -25,7 +25,8 @@ import {
 import { MeshRegistry, Category, Tag } from './MeshRegistry.js'
 import { SpawnFactory } from './SpawnFactory.js'
 import { computeCapsuleParams } from './ScaleMesh.js'
-import { computeCapsuleVolume } from './NormalScale.js'
+import { computeCapsuleVolume, getNPCNormalDistributedScale } from './NormalScale.js'
+import { computeGroupVolume, getMeshVolumeBreakdown } from './MeshVolume.js'
 
 // ============================================================================
 // SPECIES BEHAVIOR CLASSIFICATION
@@ -177,6 +178,10 @@ let _eatRangeSq = 100         // eatRange^2
 // ACTIVE CHASERS (only check predation for these)
 const activeChasers = new Set()
 
+// VOLUME LABELS
+let labelsVisible = false
+const labelSprites = new Map()  // npcId -> THREE.Sprite
+
 // ============================================================================
 // SPATIAL HASH FUNCTIONS (optimized)
 // ============================================================================
@@ -272,7 +277,7 @@ function getFishInNearbyCells(pos, rangeSq) {
 
 /**
  * Build adjacency map from SpawnFactory grid
- * Uses spatial hashing for O(k) neighbor lookup instead of O(n²)
+ * Uses spatial hashing for O(k) neighbor lookup instead of O(nÂ²)
  */
 function buildAdjacencyMap() {
   gridPoints = SpawnFactory.playablePoints
@@ -294,7 +299,7 @@ function buildAdjacencyMap() {
   
   adjacencyMap.clear()
   
-  // Use spatial hash to find neighbors (much faster than O(n²))
+  // Use spatial hash to find neighbors (much faster than O(nÂ²))
   for (let i = 0; i < gridPoints.length; i++) {
     const neighbors = []
     const p1 = gridPoints[i]
@@ -651,14 +656,28 @@ function spawnOneCreature(options = {}) {
   
   if (!creatureData?.mesh) return null
   
-  creatureData.mesh.scale.setScalar(scaleMultiplier)
+  // Compute NATURAL visual volume at scale=1 (before any scaling)
+  const naturalVisualVolume = computeGroupVolume(creatureData.mesh, false)
+  
+  // Get normally distributed scale (volumes from 1 to 1000 m³)
+  const normalization = getNPCNormalDistributedScale(naturalVisualVolume)
+  const finalScaleMultiplier = normalization.scaleFactor
+  
+  // Apply normalized scale
+  creatureData.mesh.scale.setScalar(finalScaleMultiplier)
   creatureData.mesh.position.copy(spawnPosition)  // Always at grid point
   creatureData.mesh.rotation.y = Math.random() * Math.PI * 2
   
   sceneRef.add(creatureData.mesh)
   
+  // Compute capsule volume (for physics/AI) - after scaling
   const capsuleParams = computeCapsuleParams(creatureData.mesh, creatureData)
-  const volume = computeCapsuleVolume(capsuleParams.radius, capsuleParams.halfHeight)
+  const capsuleVolume = computeCapsuleVolume(capsuleParams.radius, capsuleParams.halfHeight)
+  
+  // Final visual volume is the target volume from normal distribution
+  const visualVolume = normalization.targetVolume
+  const visualVolumeBreakdown = getMeshVolumeBreakdown(creatureData.mesh, true)
+  const meshCount = visualVolumeBreakdown.meshCount
   
   const npcId = `npc_${creatureType}_${npcIdCounter++}`
   
@@ -674,9 +693,13 @@ function spawnOneCreature(options = {}) {
     creatureType,
     creatureClass,
     variantIndex,
-    scaleMultiplier,
+    scaleMultiplier: finalScaleMultiplier,  // Use normalized scale
     capsuleParams,
-    volume,
+    volume: capsuleVolume,           // Capsule volume (for AI predation)
+    visualVolume,                    // True mesh volume (from distribution)
+    naturalVisualVolume,             // Volume at scale=1 (before normalization)
+    meshCount,                       // Number of meshes in creature
+    volumeBreakdown: visualVolumeBreakdown,  // Per-part breakdown
     traits: creatureData.traits,
     displayName: creature.displayName,
     
@@ -724,8 +747,24 @@ function spawnOneCreature(options = {}) {
     body: null,
     category: Category.NPC,
     tags: [Tag.ANIMATED],
-    metadata: { creatureType, creatureClass, variantIndex, scaleMultiplier, volume, seed, schoolId }
+    metadata: { 
+      creatureType, 
+      creatureClass, 
+      variantIndex, 
+      scaleMultiplier: finalScaleMultiplier, 
+      capsuleVolume,
+      visualVolume,
+      naturalVisualVolume,
+      meshCount,
+      seed, 
+      schoolId 
+    }
   }, true)
+  
+  // Create volume label if labels are enabled
+  if (labelsVisible) {
+    createLabelForNPC(npcData)
+  }
   
   return npcData
 }
@@ -833,6 +872,9 @@ function removeFish(fishId, respawn = true) {
       }
     })
   }
+  
+  // Remove volume label
+  removeLabelForNPC(fishId)
   
   MeshRegistry.unregister(fishId)
   npcs.delete(fishId)
@@ -1462,6 +1504,356 @@ function debug() {
   }
 }
 
+/**
+ * Debug volumes for all NPCs
+ * Shows visual volume distribution stats
+ */
+function debugVolumes() {
+  console.group('[FishAdder] Volume Analysis')
+  
+  let totalVisual = 0
+  let totalCapsule = 0
+  let totalMeshes = 0
+  let minVolume = Infinity
+  let maxVolume = 0
+  const volumes = []
+  const byClass = new Map()
+  
+  for (const [id, npc] of npcs) {
+    const vol = npc.visualVolume || 0
+    totalVisual += vol
+    totalCapsule += npc.volume || 0
+    totalMeshes += npc.meshCount || 0
+    volumes.push(vol)
+    
+    if (vol < minVolume) minVolume = vol
+    if (vol > maxVolume) maxVolume = vol
+    
+    if (!byClass.has(npc.creatureClass)) {
+      byClass.set(npc.creatureClass, { 
+        count: 0, 
+        visualVolume: 0, 
+        capsuleVolume: 0,
+        meshCount: 0,
+        minVol: Infinity,
+        maxVol: 0
+      })
+    }
+    const classData = byClass.get(npc.creatureClass)
+    classData.count++
+    classData.visualVolume += vol
+    classData.capsuleVolume += npc.volume || 0
+    classData.meshCount += npc.meshCount || 0
+    if (vol < classData.minVol) classData.minVol = vol
+    if (vol > classData.maxVol) classData.maxVol = vol
+  }
+  
+  // Compute median
+  volumes.sort((a, b) => a - b)
+  const median = volumes.length > 0 ? volumes[Math.floor(volumes.length / 2)] : 0
+  const mean = volumes.length > 0 ? totalVisual / volumes.length : 0
+  
+  console.log(`Total NPCs: ${npcs.size}`)
+  console.log(`Total Visual Volume: ${totalVisual.toFixed(3)} m³`)
+  console.log(`Total Capsule Volume: ${totalCapsule.toFixed(3)} m³`)
+  console.log(`Total Meshes: ${totalMeshes}`)
+  console.log(`─────────────────────────`)
+  console.log(`Volume Distribution:`)
+  console.log(`  Min: ${minVolume.toFixed(2)} m³`)
+  console.log(`  Max: ${maxVolume.toFixed(2)} m³`)
+  console.log(`  Mean: ${mean.toFixed(2)} m³`)
+  console.log(`  Median: ${median.toFixed(2)} m³`)
+  
+  console.group('By Species')
+  const sortedClasses = [...byClass.entries()].sort((a, b) => b[1].visualVolume - a[1].visualVolume)
+  for (const [className, data] of sortedClasses) {
+    const avgVol = (data.visualVolume / data.count).toFixed(2)
+    const avgMeshes = (data.meshCount / data.count).toFixed(1)
+    console.log(`${className}: ${data.count} creatures | avg: ${avgVol} m³ | range: [${data.minVol.toFixed(1)}, ${data.maxVol.toFixed(1)}] | meshes: ${avgMeshes}`)
+  }
+  console.groupEnd()
+  
+  console.groupEnd()
+}
+
+/**
+ * Get volume stats for a specific fish
+ * @param {string} fishId - NPC ID
+ * @returns {object|null} Volume data
+ */
+function getVolumeStats(fishId) {
+  const npc = npcs.get(fishId)
+  if (!npc) return null
+  
+  return {
+    id: npc.id,
+    creatureClass: npc.creatureClass,
+    visualVolume: npc.visualVolume,
+    naturalVisualVolume: npc.naturalVisualVolume,
+    capsuleVolume: npc.volume,
+    ratio: npc.volume > 0 ? npc.visualVolume / npc.volume : 0,
+    meshCount: npc.meshCount,
+    breakdown: npc.volumeBreakdown,
+    scaleMultiplier: npc.scaleMultiplier,
+  }
+}
+
+/**
+ * Get all volume data as array (for export/analysis)
+ * @returns {Array} Volume stats for all NPCs
+ */
+function getAllVolumeStats() {
+  const stats = []
+  for (const [id, npc] of npcs) {
+    stats.push({
+      id,
+      creatureType: npc.creatureType,
+      creatureClass: npc.creatureClass,
+      visualVolume: npc.visualVolume,
+      naturalVisualVolume: npc.naturalVisualVolume,
+      capsuleVolume: npc.volume,
+      ratio: npc.volume > 0 ? npc.visualVolume / npc.volume : 0,
+      meshCount: npc.meshCount,
+      scaleMultiplier: npc.scaleMultiplier,
+    })
+  }
+  return stats
+}
+
+// ============================================================================
+// VOLUME LABELS (3D floating labels above creatures)
+// ============================================================================
+
+/**
+ * Create a text sprite for volume label
+ * @param {string} text - Text to display
+ * @param {number} [scale=1] - Scale multiplier for the label
+ * @returns {THREE.Sprite}
+ */
+function createTextSprite(text, scale = 1) {
+  const canvas = document.createElement('canvas')
+  const context = canvas.getContext('2d')
+  
+  // Base font size, will be used for measurement
+  const fontSize = 36
+  const padding = 16
+  
+  // Set font BEFORE measuring
+  context.font = `bold ${fontSize}px Arial`
+  const metrics = context.measureText(text)
+  const textWidth = metrics.width
+  
+  // Size canvas to fit text with padding
+  const canvasWidth = Math.ceil(textWidth + padding * 2)
+  const canvasHeight = Math.ceil(fontSize + padding * 2)
+  
+  // Resize canvas (must re-set font after resize)
+  canvas.width = canvasWidth
+  canvas.height = canvasHeight
+  
+  // Clear
+  context.clearRect(0, 0, canvas.width, canvas.height)
+  
+  // Re-set font after canvas resize
+  context.font = `bold ${fontSize}px Arial`
+  
+  // Draw background pill
+  context.fillStyle = 'rgba(0, 0, 0, 0.75)'
+  roundRect(context, 2, 2, canvasWidth - 4, canvasHeight - 4, 10)
+  context.fill()
+  
+  // Draw border
+  context.strokeStyle = 'rgba(0, 255, 170, 0.5)'
+  context.lineWidth = 2
+  roundRect(context, 2, 2, canvasWidth - 4, canvasHeight - 4, 10)
+  context.stroke()
+  
+  // Draw text
+  context.textAlign = 'center'
+  context.textBaseline = 'middle'
+  context.fillStyle = '#00ffaa'
+  context.fillText(text, canvasWidth / 2, canvasHeight / 2)
+  
+  // Create sprite
+  const texture = new THREE.CanvasTexture(canvas)
+  texture.needsUpdate = true
+  
+  const material = new THREE.SpriteMaterial({ 
+    map: texture,
+    transparent: true,
+    depthTest: false,
+    depthWrite: false,
+  })
+  
+  const sprite = new THREE.Sprite(material)
+  
+  // Scale sprite to maintain aspect ratio
+  // Base world size, then multiply by scale factor
+  const baseSize = 0.4  // Small base size for compact labels
+  const aspect = canvasWidth / canvasHeight
+  sprite.scale.set(baseSize * aspect * scale, baseSize * scale, 1)
+  
+  return sprite
+}
+
+/**
+ * Helper to draw rounded rectangle
+ */
+function roundRect(ctx, x, y, width, height, radius) {
+  ctx.beginPath()
+  ctx.moveTo(x + radius, y)
+  ctx.lineTo(x + width - radius, y)
+  ctx.quadraticCurveTo(x + width, y, x + width, y + radius)
+  ctx.lineTo(x + width, y + height - radius)
+  ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height)
+  ctx.lineTo(x + radius, y + height)
+  ctx.quadraticCurveTo(x, y + height, x, y + height - radius)
+  ctx.lineTo(x, y + radius)
+  ctx.quadraticCurveTo(x, y, x + radius, y)
+  ctx.closePath()
+}
+
+/**
+ * Compute label scale based on creature volume
+ * Uses cube root to keep labels readable but proportional
+ * @param {number} volume - Visual volume
+ * @returns {number} Scale factor for label
+ */
+function computeLabelScale(volume) {
+  // Cube root gives perceptually linear scaling
+  // Clamp to reasonable range - keep labels small
+  const minScale = 0.3
+  const maxScale = 1.5
+  
+  // Base scale on cube root of volume
+  // Small multiplier for compact labels
+  const scale = Math.cbrt(volume) * 0.15
+  
+  return Math.max(minScale, Math.min(maxScale, scale))
+}
+
+/**
+ * Create label for an NPC
+ * @param {object} npc - NPC data
+ */
+function createLabelForNPC(npc) {
+  if (!sceneRef || !npc.mesh) return
+  
+  // Format volume text
+  const volText = `${npc.visualVolume.toFixed(2)} m³`
+  
+  // Compute label scale based on volume
+  const labelScale = computeLabelScale(npc.visualVolume)
+  
+  const sprite = createTextSprite(volText, labelScale)
+  
+  // Fixed offset above creature
+  sprite.position.set(0, 1, 0)
+  sprite.userData.isVolumeLabel = true
+  
+  npc.mesh.add(sprite)
+  labelSprites.set(npc.id, sprite)
+  
+  // Set initial visibility
+  sprite.visible = labelsVisible
+}
+
+/**
+ * Remove label for an NPC
+ * @param {string} npcId - NPC ID
+ */
+function removeLabelForNPC(npcId) {
+  const sprite = labelSprites.get(npcId)
+  if (sprite) {
+    if (sprite.parent) {
+      sprite.parent.remove(sprite)
+    }
+    sprite.material.map?.dispose()
+    sprite.material.dispose()
+    labelSprites.delete(npcId)
+  }
+}
+
+/**
+ * Update label text for an NPC (e.g., after eating/growing)
+ * @param {string} npcId - NPC ID
+ */
+function updateLabelForNPC(npcId) {
+  const npc = npcs.get(npcId)
+  const sprite = labelSprites.get(npcId)
+  
+  if (!npc || !sprite) return
+  
+  // Remove old label and create new one with updated text
+  removeLabelForNPC(npcId)
+  createLabelForNPC(npc)
+}
+
+/**
+ * Create labels for all existing NPCs
+ */
+function createAllLabels() {
+  for (const [id, npc] of npcs) {
+    if (!labelSprites.has(id)) {
+      createLabelForNPC(npc)
+    }
+  }
+}
+
+/**
+ * Remove all labels
+ */
+function removeAllLabels() {
+  for (const [id] of labelSprites) {
+    removeLabelForNPC(id)
+  }
+}
+
+/**
+ * Toggle volume labels on/off
+ * @returns {boolean} New visibility state
+ */
+function toggleLabels() {
+  labelsVisible = !labelsVisible
+  
+  if (labelsVisible) {
+    // Create labels for any NPCs that don't have them
+    createAllLabels()
+  }
+  
+  // Update visibility of all labels
+  for (const [, sprite] of labelSprites) {
+    sprite.visible = labelsVisible
+  }
+  
+  console.log(`[FishAdder] Volume labels: ${labelsVisible ? 'ON' : 'OFF'}`)
+  return labelsVisible
+}
+
+/**
+ * Set labels visibility explicitly
+ * @param {boolean} visible
+ */
+function setLabelsVisible(visible) {
+  labelsVisible = visible
+  
+  if (visible) {
+    createAllLabels()
+  }
+  
+  for (const [, sprite] of labelSprites) {
+    sprite.visible = visible
+  }
+}
+
+/**
+ * Check if labels are currently visible
+ * @returns {boolean}
+ */
+function areLabelsVisible() {
+  return labelsVisible
+}
+
 // ============================================================================
 // CONFIG HELPERS (easy runtime control)
 // ============================================================================
@@ -1646,6 +2038,16 @@ export const FishAdder = {
   
   // Debug
   debug,
+  
+  // Volume analysis
+  debugVolumes,
+  getVolumeStats,
+  getAllVolumeStats,
+  
+  // Volume labels
+  toggleLabels,
+  setLabelsVisible,
+  areLabelsVisible,
   
   // Direct access (advanced)
   get config() { return CONFIG },

@@ -11,9 +11,9 @@
  *   T           - Increase scale
  *   G           - Mutate creature (new random of same type)
  *   N / B       - Next / Previous species
- *   Z           - Cycle variant (e.g., Yellowfin → Bluefin)
+ *   Z           - Cycle variant (e.g., Yellowfin â†’ Bluefin)
  *   M           - New map
- *   P           - Toggle wireframes
+ *   P           - Toggle debug overlays (wireframes + volume labels)
  *   V           - Toggle spawn visualization
  *   F           - Debug
  */
@@ -67,6 +67,7 @@ import {
   debugExtra,
 } from './ExtraControls.js'
 import { SpawnFactory } from './SpawnFactory.js'
+import { FishAdder } from './FishAdder.js'
 
 // ============================================================================
 // STATE
@@ -216,7 +217,7 @@ export function initControls() {
         if (scaleDownResult) {
           rebuildPlayerPhysics()
           showNotification(
-            `Scale: ${scaleDownResult.scalePercent.toFixed(0)}% | Vol: ${scaleDownResult.volume.toFixed(2)} m³`,
+            `Scale: ${scaleDownResult.scalePercent.toFixed(0)}% | Vol: ${scaleDownResult.volume.toFixed(2)} mÂ³`,
             '#ff8888'
           )
         }
@@ -228,7 +229,7 @@ export function initControls() {
         if (scaleUpResult) {
           rebuildPlayerPhysics()
           showNotification(
-            `Scale: ${scaleUpResult.scalePercent.toFixed(0)}% | Vol: ${scaleUpResult.volume.toFixed(2)} m³`,
+            `Scale: ${scaleUpResult.scalePercent.toFixed(0)}% | Vol: ${scaleUpResult.volume.toFixed(2)} mÂ³`,
             '#88ff88'
           )
         }
@@ -272,7 +273,7 @@ export function initControls() {
         }
         break
       
-      // Z = Cycle variant (e.g., Yellowfin Tuna → Bluefin Tuna)
+      // Z = Cycle variant (e.g., Yellowfin Tuna â†’ Bluefin Tuna)
       case 'KeyZ':
         const variantResult = cycleVariant()
         if (variantResult.hasVariants) {
@@ -292,12 +293,13 @@ export function initControls() {
         }
         break
       
-      // P = Toggle wireframes
+      // P = Toggle wireframes + volume labels
       case 'KeyP':
         const wireframeOn = toggleWireframe()
         toggleTerrainWireframe()
+        FishAdder.toggleLabels()
         showNotification(
-          `Collision wireframes: ${wireframeOn ? 'ON' : 'OFF'}`,
+          `Debug overlays: ${wireframeOn ? 'ON' : 'OFF'}`,
           wireframeOn ? '#00ff00' : '#ff6600'
         )
         break
@@ -330,6 +332,7 @@ export function initControls() {
         debugExtra()
         debugPlayerScale()
         SpawnFactory.debug()
+        FishAdder.debugVolumes()
         break
     }
   })
