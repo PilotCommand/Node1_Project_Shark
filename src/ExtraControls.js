@@ -36,32 +36,50 @@ import { getPlayer } from './player.js'
 const ACTIVE_EXTRA = 'boost'
 
 // ============================================================================
-// TRAIL RIBBON SYSTEM
+// TRAIL RIBBON CONFIG - Easy to edit!
 // ============================================================================
 
 const TRAIL_CONFIG = {
-  maxPoints: 80,           // Maximum ribbon length (number of segments)
-  minDistance: 0.5,        // Minimum distance between points
-  width: 2.0,              // Ribbon width (make it visible!)
-  color: 0x00ffaa,         // Ribbon color
-  opacity: 0.8,
+  // === RIBBON SIZE ===
+  maxPointsPerSegment: 100, // Max points per segment (oldest drop off after this)
+  width: 1.5,               // Ribbon width (thickness)
+  taper: 0.25,               // Taper amount (0=no taper, 1=full taper to point, 0.5=half taper)
   
-  // Delays
-  deployDelay: 0.1,        // Seconds before ribbon starts appearing behind fish
-  deleteDelay: 1.5,        // Seconds ribbon persists after releasing Q
-  fadeSpeed: 1.5,          // How fast ribbon fades during deletion
+  // === POINT SPACING ===
+  minDistance: 1,         // Min distance between points (smaller = more dense)
+  deployDelay: 0.05,        // Seconds before ribbon starts after pressing Q
+  behindOffset: 3,        // How far behind the fish points spawn
+  
+  // === APPEARANCE ===
+  color: 0x00ffaa,          // Ribbon color (hex)
+  opacity: 0.8,             // Ribbon opacity (0-1)
+  orientation: 90,           // Ribbon rotation in degrees (0=horizontal, 90=vertical, 45=diagonal)
+  
+  // === FADE OUT ===
+  fadeDelay: 0.5,           // Seconds after releasing Q before fade starts
+  fadeSpeed: 0.3,           // Opacity reduction per second (lower = slower fade)
 }
 
-let ribbonMesh = null
-let ribbonPoints = []      // Array of {position, time}
-let ribbonGeometry = null
-let ribbonMaterial = null
-let sceneRef = null
+// ============================================================================
+// TRAIL RIBBON SYSTEM (airplane smoke trail style)
+// ============================================================================
 
+let sceneRef = null
+let allSegments = []       // Array of segment objects
+let activeSegment = null   // Segment currently being drawn
 let isDeploying = false
 let deployTimer = 0
-let isDeleting = false
-let deleteTimer = 0
+
+/**
+ * Segment structure:
+ * {
+ *   mesh: THREE.Mesh,
+ *   points: [{position, right}, ...],
+ *   state: 'active' | 'fading',
+ *   fadeTimer: number,
+ *   opacity: number
+ * }
+ */
 
 /**
  * Initialize trail system with scene reference
@@ -71,242 +89,243 @@ export function initTrail(scene) {
 }
 
 /**
- * Create the ribbon mesh
+ * Build ribbon mesh from points array
  */
-function createRibbonMesh() {
-  if (!sceneRef) return
+function buildRibbonMesh(points, opacity) {
+  if (points.length < 2) return null
   
-  // Dispose old ribbon if exists
-  disposeRibbon()
+  const baseHalfWidth = TRAIL_CONFIG.width / 2
+  const numPoints = points.length
+  const taper = TRAIL_CONFIG.taper
   
-  ribbonPoints = []
+  const vertices = []
+  const indices = []
   
-  // Create geometry (will be populated with vertices)
-  ribbonGeometry = new THREE.BufferGeometry()
+  for (let i = 0; i < numPoints; i++) {
+    const p = points[i]
+    
+    // Calculate taper: 0 at tail (oldest), 1 at head (newest)
+    const t = i / (numPoints - 1)
+    const taperMultiplier = (1 - taper) + taper * t
+    const halfWidth = baseHalfWidth * taperMultiplier
+    
+    vertices.push(
+      p.position.x - p.right.x * halfWidth,
+      p.position.y - p.right.y * halfWidth,
+      p.position.z - p.right.z * halfWidth
+    )
+    vertices.push(
+      p.position.x + p.right.x * halfWidth,
+      p.position.y + p.right.y * halfWidth,
+      p.position.z + p.right.z * halfWidth
+    )
+  }
   
-  // Pre-allocate buffers for max points
-  // Each segment needs 2 triangles (6 vertices), but we share vertices
-  // For N points, we need N*2 vertices (left and right edge)
-  const maxVerts = TRAIL_CONFIG.maxPoints * 2
-  const positions = new Float32Array(maxVerts * 3)
-  const uvs = new Float32Array(maxVerts * 2)
+  for (let i = 0; i < numPoints - 1; i++) {
+    const bl = i * 2
+    const br = i * 2 + 1
+    const tl = (i + 1) * 2
+    const tr = (i + 1) * 2 + 1
+    
+    indices.push(bl, br, tr)
+    indices.push(bl, tr, tl)
+  }
   
-  ribbonGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
-  ribbonGeometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2))
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3))
+  geometry.setIndex(indices)
+  geometry.computeVertexNormals()
   
-  // Create index buffer for triangles
-  const maxIndices = (TRAIL_CONFIG.maxPoints - 1) * 6
-  const indices = new Uint16Array(maxIndices)
-  ribbonGeometry.setIndex(new THREE.BufferAttribute(indices, 1))
-  
-  ribbonMaterial = new THREE.MeshBasicMaterial({
+  const material = new THREE.MeshBasicMaterial({
     color: TRAIL_CONFIG.color,
     transparent: true,
-    opacity: TRAIL_CONFIG.opacity,
+    opacity: opacity,
     side: THREE.DoubleSide,
     depthWrite: false,
   })
   
-  ribbonMesh = new THREE.Mesh(ribbonGeometry, ribbonMaterial)
-  ribbonMesh.frustumCulled = false
-  sceneRef.add(ribbonMesh)
+  const mesh = new THREE.Mesh(geometry, material)
+  mesh.frustumCulled = false
   
-  isDeleting = false
-  deleteTimer = 0
+  return mesh
 }
 
 /**
- * Add a point to the ribbon
+ * Update a segment's mesh (rebuild geometry)
  */
-function addRibbonPoint(position, direction) {
-  if (!ribbonMesh) return
-  
-  // Check minimum distance from last point
-  if (ribbonPoints.length > 0) {
-    const last = ribbonPoints[ribbonPoints.length - 1]
-    const dist = position.distanceTo(last.position)
-    if (dist < TRAIL_CONFIG.minDistance) return
+function rebuildSegmentMesh(segment) {
+  if (!segment || segment.points.length < 2) {
+    if (segment && segment.mesh) {
+      segment.mesh.visible = false
+    }
+    return
   }
   
-  // Calculate perpendicular direction for ribbon width
-  // Cross product of direction with up vector
+  // Remove old mesh
+  if (segment.mesh && sceneRef) {
+    sceneRef.remove(segment.mesh)
+    segment.mesh.geometry.dispose()
+    segment.mesh.material.dispose()
+  }
+  
+  // Build new mesh
+  segment.mesh = buildRibbonMesh(segment.points, segment.opacity)
+  if (segment.mesh && sceneRef) {
+    sceneRef.add(segment.mesh)
+  }
+}
+
+/**
+ * Dispose a single segment
+ */
+function disposeSegment(segment) {
+  if (!segment) return
+  if (segment.mesh && sceneRef) {
+    sceneRef.remove(segment.mesh)
+    segment.mesh.geometry.dispose()
+    segment.mesh.material.dispose()
+    segment.mesh = null
+  }
+}
+
+/**
+ * Add point to active segment
+ */
+function addPoint(position, direction) {
+  if (!activeSegment) return
+  
+  const points = activeSegment.points
+  
+  // Check min distance
+  if (points.length > 0) {
+    const last = points[points.length - 1]
+    if (position.distanceTo(last.position) < TRAIL_CONFIG.minDistance) {
+      return
+    }
+  }
+  
+  // Calculate perpendicular for ribbon width
   const up = new THREE.Vector3(0, 1, 0)
   const right = new THREE.Vector3().crossVectors(direction, up).normalize()
-  
-  // If direction is nearly vertical, use different reference
   if (right.lengthSq() < 0.01) {
     right.crossVectors(direction, new THREE.Vector3(1, 0, 0)).normalize()
   }
   
-  // Add new point with perpendicular
-  ribbonPoints.push({
+  // Apply orientation rotation around the direction axis
+  if (TRAIL_CONFIG.orientation !== 0) {
+    const angle = TRAIL_CONFIG.orientation * Math.PI / 180
+    right.applyAxisAngle(direction, angle)
+  }
+  
+  points.push({
     position: position.clone(),
-    right: right.clone(),
-    time: performance.now()
+    right: right.clone()
   })
   
-  // Limit ribbon length
-  if (ribbonPoints.length > TRAIL_CONFIG.maxPoints) {
-    ribbonPoints.shift()
+  // Remove oldest points if over max (FIFO - trail follows you)
+  while (points.length > TRAIL_CONFIG.maxPointsPerSegment) {
+    points.shift()
   }
   
-  // Update geometry
-  updateRibbonGeometry()
+  // Rebuild mesh
+  rebuildSegmentMesh(activeSegment)
 }
 
 /**
- * Update the ribbon mesh geometry
- */
-function updateRibbonGeometry() {
-  if (!ribbonGeometry || ribbonPoints.length < 2) {
-    // Hide mesh if not enough points
-    if (ribbonMesh) ribbonMesh.visible = false
-    return
-  }
-  
-  ribbonMesh.visible = true
-  
-  const posAttr = ribbonGeometry.attributes.position
-  const uvAttr = ribbonGeometry.attributes.uv
-  const indexAttr = ribbonGeometry.index
-  
-  const halfWidth = TRAIL_CONFIG.width / 2
-  const numPoints = ribbonPoints.length
-  
-  // Build vertices (2 per point - left and right edge)
-  for (let i = 0; i < numPoints; i++) {
-    const point = ribbonPoints[i]
-    const pos = point.position
-    const right = point.right
-    
-    // Left vertex
-    const li = i * 2
-    posAttr.setXYZ(li, 
-      pos.x - right.x * halfWidth,
-      pos.y - right.y * halfWidth,
-      pos.z - right.z * halfWidth
-    )
-    
-    // Right vertex
-    const ri = i * 2 + 1
-    posAttr.setXYZ(ri,
-      pos.x + right.x * halfWidth,
-      pos.y + right.y * halfWidth,
-      pos.z + right.z * halfWidth
-    )
-    
-    // UVs (v goes from 0 at start to 1 at end)
-    const v = i / (numPoints - 1)
-    uvAttr.setXY(li, 0, v)
-    uvAttr.setXY(ri, 1, v)
-  }
-  
-  // Build indices (2 triangles per segment)
-  let idx = 0
-  for (let i = 0; i < numPoints - 1; i++) {
-    const bl = i * 2       // bottom left
-    const br = i * 2 + 1   // bottom right
-    const tl = (i + 1) * 2     // top left
-    const tr = (i + 1) * 2 + 1 // top right
-    
-    // Triangle 1
-    indexAttr.setX(idx++, bl)
-    indexAttr.setX(idx++, br)
-    indexAttr.setX(idx++, tr)
-    
-    // Triangle 2
-    indexAttr.setX(idx++, bl)
-    indexAttr.setX(idx++, tr)
-    indexAttr.setX(idx++, tl)
-  }
-  
-  // Update draw range
-  ribbonGeometry.setDrawRange(0, (numPoints - 1) * 6)
-  
-  // Mark buffers as needing update
-  posAttr.needsUpdate = true
-  uvAttr.needsUpdate = true
-  indexAttr.needsUpdate = true
-  ribbonGeometry.computeBoundingSphere()
-}
-
-/**
- * Start the ribbon (called when Q pressed)
+ * Start new segment (Q pressed)
  */
 function startRibbon() {
-  console.log('[Ribbon] Starting ribbon')
-  createRibbonMesh()
-  // Set flags AFTER createRibbonMesh (which calls disposeRibbon that resets flags)
+  activeSegment = {
+    mesh: null,
+    points: [],
+    state: 'active',
+    fadeTimer: 0,
+    opacity: TRAIL_CONFIG.opacity
+  }
+  allSegments.push(activeSegment)
+  
   isDeploying = true
   deployTimer = 0
-  isDeleting = false
-  deleteTimer = 0
 }
 
 /**
- * Stop adding to ribbon, start delete timer (called when Q released)
+ * Stop segment (Q released) - segment will start fading
  */
 function stopRibbon() {
-  console.log('[Ribbon] Stopping, points:', ribbonPoints.length)
+  if (activeSegment) {
+    activeSegment.state = 'fading'
+    activeSegment.fadeTimer = 0
+  }
+  activeSegment = null
   isDeploying = false
   deployTimer = 0
-  isDeleting = true
-  deleteTimer = 0
 }
 
 /**
- * Update ribbon (call each frame)
+ * Update active ribbon (call each frame)
  */
 function updateRibbon(delta, playerPosition, playerDirection) {
-  // Handle deploy delay
-  if (isDeploying) {
+  // Update active segment (add points)
+  if (isDeploying && activeSegment) {
     deployTimer += delta
     
-    // Only add points after deploy delay
     if (deployTimer >= TRAIL_CONFIG.deployDelay && playerPosition && playerDirection) {
-      // Offset position slightly behind the fish
-      const offsetPos = playerPosition.clone().addScaledVector(playerDirection, -1.5)
-      addRibbonPoint(offsetPos, playerDirection)
+      const offsetPos = playerPosition.clone().addScaledVector(playerDirection, -TRAIL_CONFIG.behindOffset)
+      addPoint(offsetPos, playerDirection)
     }
   }
   
-  // Handle delete delay and fade
-  if (isDeleting) {
-    deleteTimer += delta
-    
-    if (deleteTimer >= TRAIL_CONFIG.deleteDelay) {
-      // Start fading
-      if (ribbonMaterial) {
-        ribbonMaterial.opacity -= TRAIL_CONFIG.fadeSpeed * delta
+  // Update all fading segments
+  const toRemove = []
+  
+  for (const segment of allSegments) {
+    if (segment.state === 'fading') {
+      segment.fadeTimer += delta
+      
+      // Start fading after delay
+      if (segment.fadeTimer >= TRAIL_CONFIG.fadeDelay) {
+        segment.opacity -= TRAIL_CONFIG.fadeSpeed * delta
         
-        if (ribbonMaterial.opacity <= 0) {
-          disposeRibbon()
-          isDeleting = false
+        // Update material opacity
+        if (segment.mesh && segment.mesh.material) {
+          segment.mesh.material.opacity = Math.max(0, segment.opacity)
+        }
+        
+        // Mark for removal when fully faded
+        if (segment.opacity <= 0) {
+          toRemove.push(segment)
         }
       }
     }
   }
+  
+  // Remove fully faded segments
+  for (const segment of toRemove) {
+    disposeSegment(segment)
+    const idx = allSegments.indexOf(segment)
+    if (idx !== -1) {
+      allSegments.splice(idx, 1)
+    }
+  }
 }
 
 /**
- * Dispose ribbon and clean up
+ * Clear all ribbons
  */
-function disposeRibbon() {
-  if (ribbonMesh && sceneRef) {
-    sceneRef.remove(ribbonMesh)
+export function clearRibbon() {
+  for (const seg of allSegments) {
+    disposeSegment(seg)
   }
-  if (ribbonGeometry) {
-    ribbonGeometry.dispose()
-    ribbonGeometry = null
-  }
-  if (ribbonMaterial) {
-    ribbonMaterial.dispose()
-    ribbonMaterial = null
-  }
-  ribbonMesh = null
-  ribbonPoints = []
+  allSegments = []
+  activeSegment = null
   isDeploying = false
-  isDeleting = false
+}
+
+/**
+ * Get total point count (for debug)
+ */
+function getTotalPointCount() {
+  return allSegments.reduce((sum, seg) => sum + seg.points.length, 0)
 }
 
 
@@ -473,13 +492,11 @@ export function deactivateExtra() {
 }
 
 /**
- * Called every frame (handles both active extra and ribbon fade)
+ * Called every frame
  */
 export function updateExtra(delta) {
-  // Always update ribbon deletion/fade (even when not active)
-  if (isDeleting) {
-    updateRibbon(delta, null, null)
-  }
+  // Always update ribbon fading (even when Q not held)
+  updateRibbon(delta, null, null)
   
   if (!isActive) return
   
@@ -513,9 +530,10 @@ export function debugExtra() {
   console.log('Name:', extra.name)
   console.log('Description:', extra.description)
   console.log('Is Active:', isActive)
-  console.log('Ribbon Points:', ribbonPoints.length)
+  console.log('Ribbon Segments:', allSegments.length)
+  console.log('Total Points:', getTotalPointCount())
+  console.log('Max Points:', TRAIL_CONFIG.maxPoints)
   console.log('Is Deploying:', isDeploying)
-  console.log('Is Deleting:', isDeleting)
   console.log('Available:', getAvailableExtras())
   console.groupEnd()
 }
