@@ -38,6 +38,7 @@ export const CONFIG = {
   prismFinalOpacity: 1.0,           // Placed prism transparency
   maxPrisms: 5,                     // Maximum number of prisms (oldest removed when exceeded)
   colorBlendRatio: 0.5,             // How much to blend end color (0 = start only, 1 = end only, 0.5 = 50/50)
+  flatShading: true,                // Use flat shading (hard edges) vs smooth shading
 }
 
 // ============================================================================
@@ -102,6 +103,7 @@ let startNormal = null
 let sampledColor = null       // Color sampled from the surface we're building from
 let sampledRoughness = 0.5    // Roughness sampled from surface
 let sampledMetalness = 0.0    // Metalness sampled from surface
+let sampledEmissive = null    // Emissive color sampled from surface
 
 // All placed prisms (for cleanup/debug)
 let placedPrisms = []
@@ -150,6 +152,8 @@ function extractBlendedColorFromMesh(mesh) {
   const colors = []
   let totalRoughness = 0
   let totalMetalness = 0
+  let totalEmissiveR = 0, totalEmissiveG = 0, totalEmissiveB = 0
+  let hasEmissive = false
   let count = 0
   
   mesh.traverse((child) => {
@@ -161,6 +165,17 @@ function extractBlendedColorFromMesh(mesh) {
           colors.push(mat.color.clone())
           totalRoughness += mat.roughness !== undefined ? mat.roughness : 0.5
           totalMetalness += mat.metalness !== undefined ? mat.metalness : 0.0
+          
+          // Sample emissive if present
+          if (mat.emissive && mat.emissive instanceof THREE.Color) {
+            totalEmissiveR += mat.emissive.r
+            totalEmissiveG += mat.emissive.g
+            totalEmissiveB += mat.emissive.b
+            if (mat.emissive.r > 0 || mat.emissive.g > 0 || mat.emissive.b > 0) {
+              hasEmissive = true
+            }
+          }
+          
           count++
         }
       }
@@ -168,7 +183,12 @@ function extractBlendedColorFromMesh(mesh) {
   })
   
   if (colors.length === 0) {
-    return { color: new THREE.Color(CONFIG.prismFinalColor), roughness: 0.5, metalness: 0.0 }
+    return { 
+      color: new THREE.Color(CONFIG.prismFinalColor), 
+      roughness: 0.5, 
+      metalness: 0.0,
+      emissive: null,
+    }
   }
   
   // Blend all colors together
@@ -183,6 +203,7 @@ function extractBlendedColorFromMesh(mesh) {
     color: new THREE.Color(r / colors.length, g / colors.length, b / colors.length),
     roughness: totalRoughness / count,
     metalness: totalMetalness / count,
+    emissive: hasEmissive ? new THREE.Color(totalEmissiveR / count, totalEmissiveG / count, totalEmissiveB / count) : null,
   }
 }
 
@@ -464,14 +485,22 @@ function createPreviewPrism() {
   const prismColor = sampledColor ? sampledColor.clone() : new THREE.Color(CONFIG.prismColor)
   
   const geometry = createPentagonalPrismGeometry(CONFIG.prismRadius, 1)
-  const material = new THREE.MeshStandardMaterial({
+  const materialProps = {
     color: prismColor,
     transparent: true,
     opacity: CONFIG.prismOpacity,
     side: THREE.DoubleSide,
     roughness: sampledRoughness,
     metalness: sampledMetalness,
-  })
+    flatShading: CONFIG.flatShading,
+  }
+  
+  // Add emissive if sampled
+  if (sampledEmissive) {
+    materialProps.emissive = sampledEmissive
+  }
+  
+  const material = new THREE.MeshStandardMaterial(materialProps)
   
   previewPrism = new THREE.Mesh(geometry, material)
   previewPrism.frustumCulled = false
@@ -548,7 +577,7 @@ function finalizePrism() {
   }
   
   // Determine final color - blend start and end if end hit a mesh
-  let finalColor, finalRoughness, finalMetalness
+  let finalColor, finalRoughness, finalMetalness, finalEmissive
   
   if (result.hit && result.object) {
     // End point hit a mesh - blend colors from both points
@@ -561,30 +590,47 @@ function finalizePrism() {
       finalRoughness = sampledRoughness + (endExtracted.roughness - sampledRoughness) * blendRatio
       finalMetalness = sampledMetalness + (endExtracted.metalness - sampledMetalness) * blendRatio
       
+      // Blend emissive if either has it
+      if (sampledEmissive || endExtracted.emissive) {
+        const startEmissive = sampledEmissive || new THREE.Color(0, 0, 0)
+        const endEmissive = endExtracted.emissive || new THREE.Color(0, 0, 0)
+        finalEmissive = startEmissive.clone().lerp(endEmissive, blendRatio)
+      }
+      
       console.log(`[Stacker] Blending colors: #${sampledColor.getHexString()} + #${endExtracted.color.getHexString()} = #${finalColor.getHexString()}`)
     } else {
       // Fallback to sampled color
       finalColor = sampledColor ? sampledColor.clone() : new THREE.Color(CONFIG.prismFinalColor)
       finalRoughness = sampledRoughness
       finalMetalness = sampledMetalness
+      finalEmissive = sampledEmissive
     }
   } else {
     // End point didn't hit a mesh - use start point color only
     finalColor = sampledColor ? sampledColor.clone() : new THREE.Color(CONFIG.prismFinalColor)
     finalRoughness = sampledRoughness
     finalMetalness = sampledMetalness
+    finalEmissive = sampledEmissive
   }
   
   // Create final prism mesh with blended material properties
   const geometry = createPentagonalPrismGeometry(CONFIG.prismRadius, length)
-  const material = new THREE.MeshStandardMaterial({
+  const materialProps = {
     color: finalColor,
     transparent: false,
     opacity: CONFIG.prismFinalOpacity,
     side: THREE.DoubleSide,
     roughness: finalRoughness,
     metalness: finalMetalness,
-  })
+    flatShading: CONFIG.flatShading,
+  }
+  
+  // Add emissive if present
+  if (finalEmissive) {
+    materialProps.emissive = finalEmissive
+  }
+  
+  const material = new THREE.MeshStandardMaterial(materialProps)
   
   const finalPrism = new THREE.Mesh(geometry, material)
   finalPrism.position.copy(startPoint)
@@ -743,6 +789,7 @@ function exitPlacing() {
   sampledColor = null
   sampledRoughness = 0.5
   sampledMetalness = 0.0
+  sampledEmissive = null
   state = 'idle'
 }
 
@@ -771,8 +818,9 @@ export default {
         sampledColor = extracted.color
         sampledRoughness = extracted.roughness
         sampledMetalness = extracted.metalness
+        sampledEmissive = extracted.emissive
         
-        console.log(`[Stacker] Sampled color: #${sampledColor.getHexString()}`)
+        console.log(`[Stacker] Sampled color: #${sampledColor.getHexString()}${sampledEmissive ? ' (with emissive)' : ''}`)
         
         hideRayVisuals()
         enterPlacing()
