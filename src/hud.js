@@ -43,6 +43,8 @@ function createStyles() {
       font-size: 12px;
       backdrop-filter: blur(4px);
       pointer-events: auto;
+      min-width: 100px;
+      min-height: 60px;
     }
     
     .hud-title {
@@ -52,32 +54,98 @@ function createStyles() {
       text-transform: uppercase;
       letter-spacing: 1px;
       border-bottom: 1px solid rgba(0, 255, 200, 0.2);
+      cursor: move;
+      user-select: none;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    
+    .hud-title::after {
+      content: '::';
+      opacity: 0.4;
+      font-size: 10px;
+      letter-spacing: 1px;
+    }
+    
+    /* Resize handle - default bottom-right */
+    .resize-handle {
+      position: absolute;
+      width: 12px;
+      height: 12px;
+      bottom: 0;
+      right: 0;
+      cursor: nwse-resize;
+      opacity: 0.4;
+      transition: opacity 0.2s;
+    }
+    
+    .resize-handle::before {
+      content: '';
+      position: absolute;
+      right: 2px;
+      bottom: 2px;
+      width: 8px;
+      height: 8px;
+      border-right: 2px solid #00ffc8;
+      border-bottom: 2px solid #00ffc8;
+    }
+    
+    .hud-panel:hover .resize-handle {
+      opacity: 0.8;
+    }
+    
+    /* Info Panel - resize handle on bottom-left (inner corner) */
+    #info-panel .resize-handle {
+      right: auto;
+      left: 0;
+      cursor: nesw-resize;
+    }
+    
+    #info-panel .resize-handle::before {
+      right: auto;
+      left: 2px;
+      border-right: none;
+      border-left: 2px solid #00ffc8;
+    }
+    
+    /* Minimap - resize handle on top-left (inner corner) */
+    #minimap-container .resize-handle {
+      bottom: auto;
+      top: 0;
+      right: auto;
+      left: 0;
+      cursor: nwse-resize;
+    }
+    
+    #minimap-container .resize-handle::before {
+      bottom: auto;
+      top: 2px;
+      right: auto;
+      left: 2px;
+      border-right: none;
+      border-bottom: none;
+      border-left: 2px solid #00ffc8;
+      border-top: 2px solid #00ffc8;
     }
     
     /* Minimap - Lower Right */
     #minimap-container {
-      right: 0;
-      bottom: 0;
+      right: 10px;
+      bottom: 10px;
       padding: 0;
-      border-radius: 4px 0 0 0;
-      border-right: none;
-      border-bottom: none;
     }
     
     #minimap-canvas {
       display: block;
-      border-radius: 0 0 0 4px;
     }
     
     /* Info Panel - Upper Right */
     #info-panel {
-      right: 0;
-      top: 0;
+      right: 10px;
+      top: 10px;
       width: 200px;
       min-height: 120px;
-      border-radius: 0 0 0 4px;
-      border-right: none;
-      border-top: none;
     }
     
     #info-panel .info-content {
@@ -106,15 +174,12 @@ function createStyles() {
     
     /* Chat Panel - Upper Left */
     #chat-panel {
-      left: 0;
-      top: 0;
+      left: 10px;
+      top: 10px;
       width: 280px;
       height: 180px;
       display: flex;
       flex-direction: column;
-      border-radius: 0 0 4px 0;
-      border-left: none;
-      border-top: none;
     }
     
     #chat-messages {
@@ -183,8 +248,135 @@ function createStyles() {
     #chat-input::placeholder {
       color: rgba(0, 255, 200, 0.3);
     }
+    
+    .hud-panel.dragging {
+      opacity: 0.8;
+      z-index: 1000;
+    }
+    
+    .hud-panel.resizing {
+      opacity: 0.9;
+    }
   `
   document.head.appendChild(style)
+}
+
+// ============================================================================
+// DRAG & RESIZE FUNCTIONALITY
+// ============================================================================
+
+function makeDraggable(panel) {
+  const titleBar = panel.querySelector('.hud-title')
+  if (!titleBar) return
+  
+  let isDragging = false
+  let startX, startY, startLeft, startTop
+  
+  titleBar.addEventListener('mousedown', (e) => {
+    if (e.target.tagName === 'INPUT') return
+    
+    isDragging = true
+    panel.classList.add('dragging')
+    
+    // Get current position
+    const rect = panel.getBoundingClientRect()
+    startX = e.clientX
+    startY = e.clientY
+    startLeft = rect.left
+    startTop = rect.top
+    
+    // Clear any right/bottom positioning and switch to left/top
+    panel.style.right = 'auto'
+    panel.style.bottom = 'auto'
+    panel.style.left = startLeft + 'px'
+    panel.style.top = startTop + 'px'
+    
+    e.preventDefault()
+  })
+  
+  document.addEventListener('mousemove', (e) => {
+    if (!isDragging) return
+    
+    const dx = e.clientX - startX
+    const dy = e.clientY - startY
+    
+    let newLeft = startLeft + dx
+    let newTop = startTop + dy
+    
+    // Constrain to viewport
+    newLeft = Math.max(0, Math.min(newLeft, window.innerWidth - panel.offsetWidth))
+    newTop = Math.max(0, Math.min(newTop, window.innerHeight - panel.offsetHeight))
+    
+    panel.style.left = newLeft + 'px'
+    panel.style.top = newTop + 'px'
+  })
+  
+  document.addEventListener('mouseup', () => {
+    if (isDragging) {
+      isDragging = false
+      panel.classList.remove('dragging')
+    }
+  })
+}
+
+function makeResizable(panel, onResize, corner = 'bottom-right') {
+  const handle = document.createElement('div')
+  handle.className = 'resize-handle'
+  panel.appendChild(handle)
+  
+  let isResizing = false
+  let startX, startY, startWidth, startHeight
+  
+  handle.addEventListener('mousedown', (e) => {
+    isResizing = true
+    panel.classList.add('resizing')
+    
+    startX = e.clientX
+    startY = e.clientY
+    startWidth = panel.offsetWidth
+    startHeight = panel.offsetHeight
+    
+    e.preventDefault()
+    e.stopPropagation()
+  })
+  
+  document.addEventListener('mousemove', (e) => {
+    if (!isResizing) return
+    
+    const dx = e.clientX - startX
+    const dy = e.clientY - startY
+    
+    let newWidth, newHeight
+    
+    // Handle different corner directions
+    if (corner === 'bottom-left') {
+      // Dragging left increases width, dragging down increases height
+      newWidth = Math.max(100, startWidth - dx)
+      newHeight = Math.max(60, startHeight + dy)
+    } else if (corner === 'top-left') {
+      // Dragging left increases width, dragging up increases height
+      newWidth = Math.max(100, startWidth - dx)
+      newHeight = Math.max(60, startHeight - dy)
+    } else {
+      // Default bottom-right: dragging right increases width, dragging down increases height
+      newWidth = Math.max(100, startWidth + dx)
+      newHeight = Math.max(60, startHeight + dy)
+    }
+    
+    panel.style.width = newWidth + 'px'
+    panel.style.height = newHeight + 'px'
+    
+    if (onResize) {
+      onResize(newWidth, newHeight)
+    }
+  })
+  
+  document.addEventListener('mouseup', () => {
+    if (isResizing) {
+      isResizing = false
+      panel.classList.remove('resizing')
+    }
+  })
 }
 
 function createFPSCounter() {
@@ -219,6 +411,18 @@ function createMinimap() {
   document.body.appendChild(minimapContainer)
   
   minimapCtx = minimapCanvas.getContext('2d')
+  
+  // Make draggable and resizable
+  makeDraggable(minimapContainer)
+  makeResizable(minimapContainer, (width, height) => {
+    // Resize canvas to match panel (minus title bar height)
+    const titleHeight = title.offsetHeight
+    const newSize = Math.min(width - 2, height - titleHeight - 2)
+    if (newSize > 50) {
+      minimapCanvas.width = newSize
+      minimapCanvas.height = newSize
+    }
+  }, 'top-left')
 }
 
 function createInfoPanel() {
@@ -258,6 +462,10 @@ function createInfoPanel() {
   `
   
   document.body.appendChild(infoPanel)
+  
+  // Make draggable and resizable
+  makeDraggable(infoPanel)
+  makeResizable(infoPanel, null, 'bottom-left')
 }
 
 function createChatPanel() {
@@ -297,6 +505,10 @@ function createChatPanel() {
   
   // Welcome message
   addChatMessage('Welcome to the ocean!', 'system')
+  
+  // Make draggable and resizable
+  makeDraggable(chatPanel)
+  makeResizable(chatPanel)
 }
 
 export function addChatMessage(text, type = 'player') {
@@ -315,21 +527,21 @@ export function addChatMessage(text, type = 'player') {
   
   if (chatMessages) {
     const msgEl = document.createElement('div')
-    msgEl.className = `chat-message ${type}`
-    msgEl.innerHTML = `<span class="timestamp">${timestamp}</span>${text}`
+    msgEl.className = 'chat-message ' + type
+    msgEl.innerHTML = '<span class="timestamp">' + timestamp + '</span>' + text
     chatMessages.appendChild(msgEl)
     chatMessages.scrollTop = chatMessages.scrollHeight
   }
 }
 
 function updateMinimap() {
-  if (!minimapCtx) return
+  if (!minimapCtx || !minimapCanvas) return
   
   const player = getPlayer()
   if (!player) return
   
   const ctx = minimapCtx
-  const size = MINIMAP_SIZE
+  const size = minimapCanvas.width
   const halfSize = size / 2
   const scale = size / (MINIMAP_RANGE * 2)
   
@@ -441,7 +653,7 @@ function updateInfoPanel() {
   if (sizeEl) {
     const normInfo = getPlayerNormalizationInfo()
     if (normInfo) {
-      sizeEl.textContent = `${normInfo.gameplay.volume.toFixed(1)} m³`
+      sizeEl.textContent = normInfo.gameplay.volume.toFixed(1) + ' m3'
     }
   }
   
@@ -449,7 +661,7 @@ function updateInfoPanel() {
   const depthEl = document.getElementById('info-depth')
   if (depthEl) {
     const depth = Math.max(0, -player.position.y)
-    depthEl.textContent = `${depth.toFixed(0)} m`
+    depthEl.textContent = depth.toFixed(0) + ' m'
   }
   
   // Feeding stats
