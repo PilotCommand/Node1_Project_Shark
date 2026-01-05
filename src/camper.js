@@ -1,8 +1,9 @@
 /**
  * camper.js - Camouflage Ability
  * 
- * Press Q to scan nearby meshes and blend into the environment.
+ * Tap Q to scan nearby meshes and blend into the environment.
  * The fish changes color to match surrounding objects.
+ * Color stays until the fish moves.
  */
 
 import * as THREE from 'three'
@@ -23,6 +24,20 @@ const CAMPER_CONFIG = {
   
   // Visual feedback
   transitionSpeed: 3.0,     // How fast to transition to new color (per second)
+  
+  // Visualization timing (one-tap sequence)
+  vizFadeInSpeed: 4.0,      // How fast viz fades in
+  vizHoldDuration: 0.8,     // How long to hold at full opacity
+  vizFadeOutSpeed: 2.5,     // How fast viz fades out
+  
+  // Movement detection
+  movementThreshold: 0.05,  // How far fish must move to break camo
+  
+  // Detector mesh color (matches sprinter trail)
+  detectorColor: 0x00ffaa,
+  
+  // Fish camouflage opacity (1% = nearly invisible)
+  fishCamoOpacity: 0.3,
 }
 
 // ============================================================================
@@ -32,7 +47,6 @@ const CAMPER_CONFIG = {
 let originalColors = new Map()  // Store original material colors for restoration
 let targetColor = null          // Color we're blending towards
 let currentBlend = 0            // 0 = original, 1 = camouflaged
-let isActive = false
 let lastSampledColors = []      // For debug display
 
 // Visualization state
@@ -40,7 +54,13 @@ let sceneRef = null
 let vizGroup = null             // Group containing all visualization objects
 let lastSampledEntities = []    // Store entities for visualization
 let vizOpacity = 0              // Current visualization opacity (0-1)
-const VIZ_FADE_SPEED = 4.0      // How fast viz fades in/out per second
+
+// One-tap state machine
+// States: 'idle' | 'fading_in' | 'holding' | 'fading_out' | 'camouflaged'
+let camoState = 'idle'
+let holdTimer = 0               // Timer for hold duration
+let lastPosition = null         // Track position for movement detection
+let isCamouflaged = false       // Whether color is currently applied and should stay
 
 // ============================================================================
 // COLOR UTILITIES
@@ -105,10 +125,12 @@ function blendColors(colorData) {
 }
 
 /**
- * Store original colors of player mesh
+ * Store original colors and opacity of player mesh
  */
 function storeOriginalColors(playerMesh) {
   originalColors.clear()
+  
+  let materialCount = 0
   
   playerMesh.traverse((child) => {
     if (child.material) {
@@ -116,37 +138,63 @@ function storeOriginalColors(playerMesh) {
       
       for (let i = 0; i < materials.length; i++) {
         const mat = materials[i]
-        if (mat.color && mat.color instanceof THREE.Color) {
-          const key = `${child.uuid}_${i}`
-          originalColors.set(key, {
-            child,
-            materialIndex: i,
-            color: mat.color.clone(),
-          })
-        }
+        const key = `${child.uuid}_${i}`
+        
+        // Store for ANY material, not just ones with color
+        originalColors.set(key, {
+          child,
+          material: mat,
+          materialIndex: i,
+          color: mat.color ? mat.color.clone() : null,
+          opacity: mat.opacity !== undefined ? mat.opacity : 1,
+          transparent: mat.transparent || false,
+          depthWrite: mat.depthWrite !== undefined ? mat.depthWrite : true,
+        })
+        
+        // Enable transparency for opacity changes
+        mat.transparent = true
+        mat.depthWrite = false  // Required for proper transparency
+        materialCount++
       }
     }
+    
+    // Also handle child render order for transparency
+    if (child.isMesh) {
+      child.renderOrder = 1
+    }
   })
+  
+  console.log(`[Camper] Stored ${materialCount} materials from player mesh`)
 }
 
 /**
- * Apply a color to all player materials (with blend factor)
+ * Apply a color and opacity to all player materials (with blend factor)
  */
 function applyColorToPlayer(playerMesh, newColor, blendFactor) {
+  let updatedCount = 0
+  
   playerMesh.traverse((child) => {
     if (child.material) {
       const materials = Array.isArray(child.material) ? child.material : [child.material]
       
       for (let i = 0; i < materials.length; i++) {
         const mat = materials[i]
-        if (mat.color && mat.color instanceof THREE.Color) {
-          const key = `${child.uuid}_${i}`
-          const original = originalColors.get(key)
-          
-          if (original) {
-            // Lerp between original and target color
+        const key = `${child.uuid}_${i}`
+        const original = originalColors.get(key)
+        
+        if (original) {
+          // Lerp color if material has color
+          if (mat.color && original.color) {
             mat.color.copy(original.color).lerp(newColor, blendFactor)
           }
+          
+          // Lerp opacity towards camouflage opacity (1%)
+          const targetOpacity = CAMPER_CONFIG.fishCamoOpacity
+          mat.opacity = original.opacity + (targetOpacity - original.opacity) * blendFactor
+          mat.transparent = true
+          mat.depthWrite = false  // Required for proper transparency
+          mat.needsUpdate = true
+          updatedCount++
         }
       }
     }
@@ -154,26 +202,40 @@ function applyColorToPlayer(playerMesh, newColor, blendFactor) {
 }
 
 /**
- * Restore original colors to player
+ * Restore original colors and opacity to player
  */
 function restoreOriginalColors(playerMesh) {
+  let restoredCount = 0
+  
   playerMesh.traverse((child) => {
     if (child.material) {
       const materials = Array.isArray(child.material) ? child.material : [child.material]
       
       for (let i = 0; i < materials.length; i++) {
         const mat = materials[i]
-        if (mat.color) {
-          const key = `${child.uuid}_${i}`
-          const original = originalColors.get(key)
-          
-          if (original) {
+        const key = `${child.uuid}_${i}`
+        const original = originalColors.get(key)
+        
+        if (original) {
+          if (mat.color && original.color) {
             mat.color.copy(original.color)
           }
+          mat.opacity = original.opacity
+          mat.transparent = original.transparent
+          mat.depthWrite = original.depthWrite
+          mat.needsUpdate = true
+          restoredCount++
         }
       }
     }
+    
+    // Restore render order
+    if (child.isMesh) {
+      child.renderOrder = 0
+    }
   })
+  
+  console.log(`[Camper] Restored ${restoredCount} materials to original state`)
 }
 
 // ============================================================================
@@ -338,8 +400,9 @@ function createDiagonalSphereWireframe(radius, widthSegments, heightSegments) {
   const geometry = new THREE.BufferGeometry()
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3))
   
+  // Use the same color as sprinter trail
   const material = new THREE.LineBasicMaterial({
-    color: 0x00ffff,
+    color: CAMPER_CONFIG.detectorColor,
     transparent: true,
     opacity: 0.25 * vizOpacity,
     depthWrite: false,
@@ -422,14 +485,13 @@ function closestPointOnTriangle(point, a, b, c, target) {
   
   // Point is inside face region
   const denom = 1 / (va + vb + vc)
-  const v = vb * denom
-  const w = vc * denom
-  return target.copy(a).addScaledVector(ab, v).addScaledVector(ac, w)
+  const vFace = vb * denom
+  const wFace = vc * denom
+  return target.copy(a).addScaledVector(ab, vFace).addScaledVector(ac, wFace)
 }
 
 /**
- * Find the nearest point on a mesh to a given world position
- * Returns { point: Vector3, distance: number } or null if mesh has no geometry
+ * Find the nearest point on a mesh's surface to a given world point
  */
 function findNearestPointOnMesh(mesh, worldPoint) {
   if (!mesh.geometry) return null
@@ -439,32 +501,26 @@ function findNearestPointOnMesh(mesh, worldPoint) {
   if (!position) return null
   
   // Transform world point to local space
-  const localPoint = worldPoint.clone()
-  mesh.worldToLocal(localPoint)
+  const inverseMatrix = new THREE.Matrix4().copy(mesh.matrixWorld).invert()
+  const localPoint = worldPoint.clone().applyMatrix4(inverseMatrix)
   
-  let nearestPoint = new THREE.Vector3()
   let nearestDistSq = Infinity
-  
-  const vA = new THREE.Vector3()
-  const vB = new THREE.Vector3()
-  const vC = new THREE.Vector3()
+  const nearestPoint = new THREE.Vector3()
   const closestOnTri = new THREE.Vector3()
   
-  // Check if indexed geometry
   const index = geometry.index
+  const a = new THREE.Vector3()
+  const b = new THREE.Vector3()
+  const c = new THREE.Vector3()
   
   if (index) {
-    // Indexed geometry - iterate triangles
+    // Indexed geometry
     for (let i = 0; i < index.count; i += 3) {
-      const iA = index.getX(i)
-      const iB = index.getX(i + 1)
-      const iC = index.getX(i + 2)
+      a.fromBufferAttribute(position, index.getX(i))
+      b.fromBufferAttribute(position, index.getX(i + 1))
+      c.fromBufferAttribute(position, index.getX(i + 2))
       
-      vA.fromBufferAttribute(position, iA)
-      vB.fromBufferAttribute(position, iB)
-      vC.fromBufferAttribute(position, iC)
-      
-      closestPointOnTriangle(localPoint, vA, vB, vC, closestOnTri)
+      closestPointOnTriangle(localPoint, a, b, c, closestOnTri)
       
       const distSq = localPoint.distanceToSquared(closestOnTri)
       if (distSq < nearestDistSq) {
@@ -475,11 +531,11 @@ function findNearestPointOnMesh(mesh, worldPoint) {
   } else {
     // Non-indexed geometry
     for (let i = 0; i < position.count; i += 3) {
-      vA.fromBufferAttribute(position, i)
-      vB.fromBufferAttribute(position, i + 1)
-      vC.fromBufferAttribute(position, i + 2)
+      a.fromBufferAttribute(position, i)
+      b.fromBufferAttribute(position, i + 1)
+      c.fromBufferAttribute(position, i + 2)
       
-      closestPointOnTriangle(localPoint, vA, vB, vC, closestOnTri)
+      closestPointOnTriangle(localPoint, a, b, c, closestOnTri)
       
       const distSq = localPoint.distanceToSquared(closestOnTri)
       if (distSq < nearestDistSq) {
@@ -606,19 +662,66 @@ function scanEnvironment(playerPosition) {
 }
 
 // ============================================================================
+// MOVEMENT DETECTION
+// ============================================================================
+
+/**
+ * Check if player has moved significantly
+ */
+function hasPlayerMoved(player) {
+  if (!lastPosition) return false
+  
+  const distance = player.position.distanceTo(lastPosition)
+  return distance > CAMPER_CONFIG.movementThreshold
+}
+
+/**
+ * Store current position for movement tracking
+ */
+function storePosition(player) {
+  if (!lastPosition) {
+    lastPosition = new THREE.Vector3()
+  }
+  lastPosition.copy(player.position)
+}
+
+/**
+ * Break camouflage and start fading back to original
+ */
+function breakCamouflage() {
+  console.log('[Camper] Movement detected - breaking camouflage')
+  camoState = 'idle'
+  isCamouflaged = false
+  // Color will fade out in onPassiveUpdate
+}
+
+// ============================================================================
 // ABILITY EXPORT
 // ============================================================================
 
 export default {
   name: 'Camper',
-  description: 'Blend into your surroundings',
+  description: 'Tap to blend into surroundings (stay still to keep camo)',
   
+  // One-tap activation
   onActivate: () => {
     const player = getPlayer()
     if (!player) return
     
-    isActive = true
-    vizOpacity = 0  // Start faded out, will fade in
+    // If already in a camo sequence, ignore
+    if (camoState !== 'idle' && camoState !== 'camouflaged') {
+      return
+    }
+    
+    // If already camouflaged, re-scan
+    if (camoState === 'camouflaged') {
+      console.log('[Camper] Re-scanning while camouflaged')
+    }
+    
+    // Start the sequence
+    camoState = 'fading_in'
+    vizOpacity = 0
+    holdTimer = 0
     
     // Store original colors on first activation
     if (originalColors.size === 0) {
@@ -628,67 +731,124 @@ export default {
     // Scan environment and set target color
     targetColor = scanEnvironment(player.position)
     
+    // Store position for movement tracking
+    storePosition(player)
+    
     // Show visualization (starts invisible, fades in)
     updateVisualization(player.position, lastSampledEntities, targetColor)
     
+    console.log(`[Camper] Tap activated - starting camo sequence`)
     console.log(`[Camper] Found ${lastSampledEntities.length} meshes, ${lastSampledColors.length} colors`)
     console.log(`[Camper] Target color: #${targetColor.getHexString()}`)
   },
   
+  // For one-tap, we don't use onDeactivate for the main logic
+  // The key release is ignored - state machine handles everything
   onDeactivate: () => {
-    isActive = false
-    // Don't clear visualization - let it fade out in onPassiveUpdate
-    console.log('[Camper] Deactivated - fading out...')
+    // Do nothing - one-tap mode
   },
   
+  // Called while ability key is held (not used in one-tap mode, but still called)
   onUpdate: (delta) => {
-    const player = getPlayer()
-    if (!player || !targetColor) return
-    
-    // Fade in visualization
-    if (vizOpacity < 1) {
-      vizOpacity = Math.min(1, vizOpacity + delta * VIZ_FADE_SPEED)
-      updateVizOpacity()
-    }
-    
-    // Smoothly transition towards camouflage color
-    if (currentBlend < 1) {
-      currentBlend = Math.min(1, currentBlend + delta * CAMPER_CONFIG.transitionSpeed)
-      applyColorToPlayer(player, targetColor, currentBlend)
-    }
+    // State machine handles updates in onPassiveUpdate
   },
   
+  // Called every frame regardless of key state
   onPassiveUpdate: (delta) => {
     const player = getPlayer()
     if (!player) return
     
-    // When not active, fade out visualization and restore colors
-    if (!isActive) {
-      // Fade out visualization
-      if (vizOpacity > 0) {
-        vizOpacity = Math.max(0, vizOpacity - delta * VIZ_FADE_SPEED)
+    // State machine for one-tap camo sequence
+    switch (camoState) {
+      case 'fading_in':
+        // Fade in visualization
+        vizOpacity = Math.min(1, vizOpacity + delta * CAMPER_CONFIG.vizFadeInSpeed)
         updateVizOpacity()
         
-        // Clear visualization when fully faded
-        if (vizOpacity <= 0) {
-          clearVisualization()
-        }
-      }
-      
-      // Fade out camouflage color
-      if (currentBlend > 0) {
-        currentBlend = Math.max(0, currentBlend - delta * CAMPER_CONFIG.transitionSpeed)
-        
-        if (targetColor) {
+        // Transition color towards camo
+        if (targetColor && currentBlend < 1) {
+          currentBlend = Math.min(1, currentBlend + delta * CAMPER_CONFIG.transitionSpeed)
           applyColorToPlayer(player, targetColor, currentBlend)
         }
         
-        if (currentBlend <= 0) {
-          restoreOriginalColors(player)
-          targetColor = null
-          lastSampledEntities = []
+        // When fully faded in, start hold timer
+        if (vizOpacity >= 1) {
+          camoState = 'holding'
+          holdTimer = 0
+          console.log('[Camper] Visualization at full - holding')
         }
-      }
+        break
+        
+      case 'holding':
+        // Keep updating color if not fully blended
+        if (targetColor && currentBlend < 1) {
+          currentBlend = Math.min(1, currentBlend + delta * CAMPER_CONFIG.transitionSpeed)
+          applyColorToPlayer(player, targetColor, currentBlend)
+        }
+        
+        // Wait for hold duration
+        holdTimer += delta
+        if (holdTimer >= CAMPER_CONFIG.vizHoldDuration) {
+          camoState = 'fading_out'
+          console.log('[Camper] Hold complete - fading out viz')
+        }
+        break
+        
+      case 'fading_out':
+        // Fade out visualization only (color stays!)
+        vizOpacity = Math.max(0, vizOpacity - delta * CAMPER_CONFIG.vizFadeOutSpeed)
+        updateVizOpacity()
+        
+        // Ensure color is fully blended
+        if (targetColor && currentBlend < 1) {
+          currentBlend = Math.min(1, currentBlend + delta * CAMPER_CONFIG.transitionSpeed)
+          applyColorToPlayer(player, targetColor, currentBlend)
+        }
+        
+        // When viz fully faded, enter camouflaged state
+        if (vizOpacity <= 0) {
+          clearVisualization()
+          camoState = 'camouflaged'
+          isCamouflaged = true
+          storePosition(player)  // Store position to track movement
+          console.log('[Camper] Camouflaged! Stay still to maintain')
+        }
+        break
+        
+      case 'camouflaged':
+        // Check for movement
+        if (hasPlayerMoved(player)) {
+          breakCamouflage()
+        }
+        break
+        
+      case 'idle':
+      default:
+        // Fade out any remaining visualization
+        if (vizOpacity > 0) {
+          vizOpacity = Math.max(0, vizOpacity - delta * CAMPER_CONFIG.vizFadeOutSpeed)
+          updateVizOpacity()
+          
+          if (vizOpacity <= 0) {
+            clearVisualization()
+          }
+        }
+        
+        // Fade out camouflage color if not camouflaged
+        if (!isCamouflaged && currentBlend > 0) {
+          currentBlend = Math.max(0, currentBlend - delta * CAMPER_CONFIG.transitionSpeed)
+          
+          if (targetColor) {
+            applyColorToPlayer(player, targetColor, currentBlend)
+          }
+          
+          if (currentBlend <= 0) {
+            restoreOriginalColors(player)
+            targetColor = null
+            lastSampledEntities = []
+          }
+        }
+        break
     }
   },
 }
@@ -700,14 +860,18 @@ export default {
 export function debugCamper() {
   const scanRadius = getScanRadius()
   console.group('[Camper] Debug')
+  console.log('Mode: One-tap (stay still to keep camo)')
   console.log('Detection Method: Nearest point on mesh surface')
   console.log('Base Scan Radius:', CAMPER_CONFIG.baseScanRadius, 'units')
   console.log('Current Scan Radius:', scanRadius.toFixed(2), 'units (scales with fish)')
   console.log('Max Samples:', CAMPER_CONFIG.maxSamples, 'meshes')
+  console.log('Movement Threshold:', CAMPER_CONFIG.movementThreshold, 'units')
   console.log('')
-  console.log('Active:', isActive)
+  console.log('State:', camoState)
+  console.log('Is Camouflaged:', isCamouflaged)
   console.log('Blend:', (currentBlend * 100).toFixed(0) + '%')
   console.log('Viz Opacity:', (vizOpacity * 100).toFixed(0) + '%')
+  console.log('Hold Timer:', holdTimer.toFixed(2) + 's')
   console.log('Target color:', targetColor ? `#${targetColor.getHexString()}` : 'none')
   console.log('Original colors stored:', originalColors.size)
   console.log('Sampled meshes:', lastSampledEntities.length)
@@ -724,11 +888,20 @@ export function getSampledColors() {
 
 export function getCamperState() {
   return {
-    isActive,
+    camoState,
+    isCamouflaged,
     currentBlend,
     vizOpacity,
+    holdTimer,
     targetColor: targetColor ? `#${targetColor.getHexString()}` : null,
     sampledMeshCount: lastSampledEntities.length,
     sampledColorCount: lastSampledColors.length,
+  }
+}
+
+// Manual break for testing
+export function manualBreakCamo() {
+  if (isCamouflaged) {
+    breakCamouflage()
   }
 }
