@@ -13,29 +13,71 @@ import { camera } from './camera.js'
 import { MeshRegistry, Category, Tag } from './MeshRegistry.js'
 
 // ============================================================================
-// CONFIG
+// CONFIG - Edit these values to customize the stacker!
 // ============================================================================
 
-const CONFIG = {
-  // Pentagon indicator
-  pentagonRadius: 0.5,
-  pentagonColor: 0x00ffaa,
-  pentagonOpacity: 0.6,
-  pentagonBorderColor: 0xffffff,
-  pentagonBorderWidth: 2,
-  pentagonSurfaceOffset: 0.15,  // Offset from surface to prevent z-fighting
+export const CONFIG = {
+  // === PENTAGON INDICATOR ===
+  pentagonRadius: 0.5,              // Size of the pentagon cursor
+  pentagonColor: 0x00ffaa,          // Default color (cyan)
+  pentagonOpacity: 0.6,             // Fill transparency
+  pentagonBorderColor: 0xffffff,    // Border color (white)
+  pentagonBorderWidth: 2,           // Border thickness
+  pentagonSurfaceOffset: 0.15,      // How far pentagon floats above surface
   
-  // Ray pointer
-  rayColor: 0x00ffaa,
-  rayOpacity: 0.6,
-  rayMaxDistance: 50,  // Max range for raycast
+  // === RAY POINTER ===
+  rayColor: 0x00ffaa,               // Color of the ray line
+  rayOpacity: 0.6,                  // Ray transparency
+  rayMaxDistance: 50,               // Maximum range for detecting surfaces
   
-  // Prism
-  prismRadius: 0.5,
-  prismColor: 0x44aaff,
-  prismOpacity: 0.7,
-  prismFinalColor: 0x2288dd,
-  prismFinalOpacity: 1.0,
+  // === PRISM ===
+  prismRadius: 0.5,                 // Cross-section size of placed prisms
+  prismColor: 0x44aaff,             // Preview prism color (blue)
+  prismOpacity: 0.7,                // Preview prism transparency
+  prismFinalColor: 0x2288dd,        // Placed prism color (fallback)
+  prismFinalOpacity: 1.0,           // Placed prism transparency
+  maxPrisms: 5,                     // Maximum number of prisms (oldest removed when exceeded)
+  colorBlendRatio: 0.5,             // How much to blend end color (0 = start only, 1 = end only, 0.5 = 50/50)
+}
+
+// ============================================================================
+// CONFIG HELPERS - Use these to change settings at runtime
+// ============================================================================
+
+export function setRange(distance) {
+  CONFIG.rayMaxDistance = distance
+  console.log(`[Stacker] Range set to ${distance}`)
+}
+
+export function setPrismRadius(radius) {
+  CONFIG.prismRadius = radius
+  CONFIG.pentagonRadius = radius
+  console.log(`[Stacker] Prism radius set to ${radius}`)
+}
+
+export function setPrismColor(hex) {
+  CONFIG.prismFinalColor = hex
+  console.log(`[Stacker] Prism color set to 0x${hex.toString(16)}`)
+}
+
+export function setPreviewColor(hex) {
+  CONFIG.prismColor = hex
+  console.log(`[Stacker] Preview color set to 0x${hex.toString(16)}`)
+}
+
+export function setMaxPrisms(count) {
+  CONFIG.maxPrisms = count
+  console.log(`[Stacker] Max prisms set to ${count}`)
+  
+  // Remove excess prisms if current count exceeds new limit
+  while (placedPrisms.length > CONFIG.maxPrisms) {
+    removeOldestPrism()
+  }
+}
+
+export function setColorBlendRatio(ratio) {
+  CONFIG.colorBlendRatio = Math.max(0, Math.min(1, ratio))
+  console.log(`[Stacker] Color blend ratio set to ${CONFIG.colorBlendRatio} (0=start only, 1=end only)`)
 }
 
 // ============================================================================
@@ -57,9 +99,92 @@ let previewPrism = null
 // Placement data
 let startPoint = null
 let startNormal = null
+let sampledColor = null       // Color sampled from the surface we're building from
+let sampledRoughness = 0.5    // Roughness sampled from surface
+let sampledMetalness = 0.0    // Metalness sampled from surface
 
 // All placed prisms (for cleanup/debug)
 let placedPrisms = []
+let prismIdCounter = 0
+
+// ============================================================================
+// COLOR EXTRACTION (borrowed from camper.js)
+// ============================================================================
+
+/**
+ * Extract the primary color from a mesh (first color found)
+ * @param {THREE.Object3D} mesh 
+ * @returns {THREE.Color|null}
+ */
+function extractColorFromMesh(mesh) {
+  let foundColor = null
+  let foundRoughness = 0.5
+  let foundMetalness = 0.0
+  
+  mesh.traverse((child) => {
+    if (foundColor) return // Already found one
+    
+    if (child.material) {
+      const materials = Array.isArray(child.material) ? child.material : [child.material]
+      
+      for (const mat of materials) {
+        if (mat.color && mat.color instanceof THREE.Color) {
+          foundColor = mat.color.clone()
+          foundRoughness = mat.roughness !== undefined ? mat.roughness : 0.5
+          foundMetalness = mat.metalness !== undefined ? mat.metalness : 0.0
+          break
+        }
+      }
+    }
+  })
+  
+  return { color: foundColor, roughness: foundRoughness, metalness: foundMetalness }
+}
+
+/**
+ * Extract all colors from a mesh and blend them
+ * @param {THREE.Object3D} mesh 
+ * @returns {THREE.Color}
+ */
+function extractBlendedColorFromMesh(mesh) {
+  const colors = []
+  let totalRoughness = 0
+  let totalMetalness = 0
+  let count = 0
+  
+  mesh.traverse((child) => {
+    if (child.material) {
+      const materials = Array.isArray(child.material) ? child.material : [child.material]
+      
+      for (const mat of materials) {
+        if (mat.color && mat.color instanceof THREE.Color) {
+          colors.push(mat.color.clone())
+          totalRoughness += mat.roughness !== undefined ? mat.roughness : 0.5
+          totalMetalness += mat.metalness !== undefined ? mat.metalness : 0.0
+          count++
+        }
+      }
+    }
+  })
+  
+  if (colors.length === 0) {
+    return { color: new THREE.Color(CONFIG.prismFinalColor), roughness: 0.5, metalness: 0.0 }
+  }
+  
+  // Blend all colors together
+  let r = 0, g = 0, b = 0
+  for (const color of colors) {
+    r += color.r
+    g += color.g
+    b += color.b
+  }
+  
+  return {
+    color: new THREE.Color(r / colors.length, g / colors.length, b / colors.length),
+    roughness: totalRoughness / count,
+    metalness: totalMetalness / count,
+  }
+}
 
 // ============================================================================
 // INITIALIZATION
@@ -265,9 +390,6 @@ function updateRayVisuals() {
   const origin = camera.position.clone()
   const endPoint = result.hit ? result.point : result.farPoint
   
-  // Check if within range
-  const inRange = result.distance <= CONFIG.rayMaxDistance
-  
   // Update ray line
   const positions = rayLine.geometry.attributes.position.array
   positions[0] = origin.x
@@ -318,18 +440,14 @@ function updateRayVisuals() {
     pentagonBorder.lookAt(camera.position)
   }
   
-  if (result.hit && inRange) {
-    // Valid hit within range - green
+  if (result.hit) {
+    // Surface detected within range - green
     pentagonIndicator.material.color.setHex(0x00ff00)
     pentagonBorder.material.color.setHex(0x00ff00)
-  } else if (result.hit && !inRange) {
-    // Hit but out of range - orange/yellow
+  } else {
+    // No surface detected - orange
     pentagonIndicator.material.color.setHex(0xffaa00)
     pentagonBorder.material.color.setHex(0xffaa00)
-  } else {
-    // No hit - default color
-    pentagonIndicator.material.color.setHex(CONFIG.pentagonColor)
-    pentagonBorder.material.color.setHex(CONFIG.pentagonBorderColor)
   }
 }
 
@@ -342,12 +460,17 @@ function createPreviewPrism() {
     disposePreviewPrism()
   }
   
+  // Use sampled color if available, otherwise fall back to config
+  const prismColor = sampledColor ? sampledColor.clone() : new THREE.Color(CONFIG.prismColor)
+  
   const geometry = createPentagonalPrismGeometry(CONFIG.prismRadius, 1)
   const material = new THREE.MeshStandardMaterial({
-    color: CONFIG.prismColor,
+    color: prismColor,
     transparent: true,
     opacity: CONFIG.prismOpacity,
     side: THREE.DoubleSide,
+    roughness: sampledRoughness,
+    metalness: sampledMetalness,
   })
   
   previewPrism = new THREE.Mesh(geometry, material)
@@ -419,13 +542,48 @@ function finalizePrism() {
   
   direction.normalize()
   
-  // Create final prism mesh
+  // Remove oldest prism if we've hit the limit
+  if (placedPrisms.length >= CONFIG.maxPrisms) {
+    removeOldestPrism()
+  }
+  
+  // Determine final color - blend start and end if end hit a mesh
+  let finalColor, finalRoughness, finalMetalness
+  
+  if (result.hit && result.object) {
+    // End point hit a mesh - blend colors from both points
+    const endExtracted = extractBlendedColorFromMesh(result.object)
+    
+    if (sampledColor && endExtracted.color) {
+      // Blend the two colors using configured ratio
+      const blendRatio = CONFIG.colorBlendRatio
+      finalColor = sampledColor.clone().lerp(endExtracted.color, blendRatio)
+      finalRoughness = sampledRoughness + (endExtracted.roughness - sampledRoughness) * blendRatio
+      finalMetalness = sampledMetalness + (endExtracted.metalness - sampledMetalness) * blendRatio
+      
+      console.log(`[Stacker] Blending colors: #${sampledColor.getHexString()} + #${endExtracted.color.getHexString()} = #${finalColor.getHexString()}`)
+    } else {
+      // Fallback to sampled color
+      finalColor = sampledColor ? sampledColor.clone() : new THREE.Color(CONFIG.prismFinalColor)
+      finalRoughness = sampledRoughness
+      finalMetalness = sampledMetalness
+    }
+  } else {
+    // End point didn't hit a mesh - use start point color only
+    finalColor = sampledColor ? sampledColor.clone() : new THREE.Color(CONFIG.prismFinalColor)
+    finalRoughness = sampledRoughness
+    finalMetalness = sampledMetalness
+  }
+  
+  // Create final prism mesh with blended material properties
   const geometry = createPentagonalPrismGeometry(CONFIG.prismRadius, length)
   const material = new THREE.MeshStandardMaterial({
-    color: CONFIG.prismFinalColor,
+    color: finalColor,
     transparent: false,
     opacity: CONFIG.prismFinalOpacity,
     side: THREE.DoubleSide,
+    roughness: finalRoughness,
+    metalness: finalMetalness,
   })
   
   const finalPrism = new THREE.Mesh(geometry, material)
@@ -437,10 +595,14 @@ function finalizePrism() {
   finalPrism.setRotationFromQuaternion(quaternion)
   
   sceneRef.add(finalPrism)
+  
+  // Track with unique ID
+  prismIdCounter++
+  const prismId = `stacker-prism-${prismIdCounter}`
+  finalPrism.userData.prismId = prismId
   placedPrisms.push(finalPrism)
   
   // Register in MeshRegistry
-  const prismId = `stacker-prism-${placedPrisms.length}`
   MeshRegistry.register(prismId, {
     mesh: finalPrism,
     body: null,
@@ -451,12 +613,38 @@ function finalizePrism() {
       start: startPoint.clone(),
       end: endPoint.clone(),
       length: length,
+      color: finalColor.getHex(),
+      roughness: finalRoughness,
+      metalness: finalMetalness,
     }
   })
   
-  console.log(`[Stacker] Placed prism: ${length.toFixed(2)} units long`)
+  console.log(`[Stacker] Placed prism: ${length.toFixed(2)} units, color #${finalColor.getHexString()} (${placedPrisms.length}/${CONFIG.maxPrisms})`)
   
   return finalPrism
+}
+
+/**
+ * Remove the oldest placed prism
+ */
+function removeOldestPrism() {
+  if (placedPrisms.length === 0) return
+  
+  const oldest = placedPrisms.shift()
+  
+  // Unregister from MeshRegistry
+  if (oldest.userData.prismId) {
+    MeshRegistry.unregister(oldest.userData.prismId)
+  }
+  
+  // Remove from scene and dispose
+  if (oldest.parent) {
+    oldest.parent.remove(oldest)
+  }
+  oldest.geometry.dispose()
+  oldest.material.dispose()
+  
+  console.log('[Stacker] Removed oldest prism')
 }
 
 // ============================================================================
@@ -469,7 +657,7 @@ function doRaycast() {
   camera.getWorldDirection(direction)
   
   raycaster.set(camera.position, direction)
-  raycaster.far = CONFIG.rayMaxDistance * 2  // Cast further to detect out-of-range hits
+  raycaster.far = CONFIG.rayMaxDistance  // Only cast within max range
   
   // Get all meshes to test against (exclude our own visuals)
   const testObjects = []
@@ -496,6 +684,7 @@ function doRaycast() {
       normal: hit.face ? hit.face.normal.clone().transformDirection(hit.object.matrixWorld).normalize() : null,
       object: hit.object,
       distance: hit.distance,
+      farPoint: hit.point.clone(),  // Use hit point
     }
   }
   
@@ -527,15 +716,11 @@ function exitAiming() {
   // Check if we hit a surface within range
   const result = doRaycast()
   
-  if (result.hit && result.distance <= CONFIG.rayMaxDistance) {
+  if (result.hit) {
     startPoint = result.point.clone()
     startNormal = result.normal ? result.normal.clone() : new THREE.Vector3(0, 1, 0)
     
     enterPlacing()
-  } else if (result.hit) {
-    // Hit but out of range
-    state = 'idle'
-    console.log('[Stacker] Target out of range, cancelled')
   } else {
     // No hit - cancel
     state = 'idle'
@@ -555,6 +740,9 @@ function exitPlacing() {
   
   startPoint = null
   startNormal = null
+  sampledColor = null
+  sampledRoughness = 0.5
+  sampledMetalness = 0.0
   state = 'idle'
 }
 
@@ -573,15 +761,21 @@ export default {
     } else if (state === 'aiming') {
       // Second Q press - select start point
       const result = doRaycast()
-      const inRange = result.distance <= CONFIG.rayMaxDistance
       
-      if (result.hit && inRange) {
+      if (result.hit) {
         startPoint = result.point.clone()
         startNormal = result.normal ? result.normal.clone() : new THREE.Vector3(0, 1, 0)
+        
+        // Sample color from the hit mesh
+        const extracted = extractBlendedColorFromMesh(result.object)
+        sampledColor = extracted.color
+        sampledRoughness = extracted.roughness
+        sampledMetalness = extracted.metalness
+        
+        console.log(`[Stacker] Sampled color: #${sampledColor.getHexString()}`)
+        
         hideRayVisuals()
         enterPlacing()
-      } else if (result.hit) {
-        console.log('[Stacker] Target out of range')
       } else {
         console.log('[Stacker] No surface hit')
       }
@@ -615,6 +809,11 @@ export default {
 
 export function clearAllPrisms() {
   for (const prism of placedPrisms) {
+    // Unregister from MeshRegistry
+    if (prism.userData.prismId) {
+      MeshRegistry.unregister(prism.userData.prismId)
+    }
+    
     if (prism.parent) {
       prism.parent.remove(prism)
     }
@@ -631,5 +830,44 @@ export function debugStacker() {
   console.log('Start Point:', startPoint)
   console.log('Placed Prisms:', placedPrisms.length)
   console.log('Scene Ref:', !!sceneRef)
+  console.log('Sampled Color:', sampledColor ? '#' + sampledColor.getHexString() : 'none')
+  console.log('Sampled Roughness:', sampledRoughness)
+  console.log('Sampled Metalness:', sampledMetalness)
   console.groupEnd()
+  
+  console.group('[Stacker] Config')
+  console.log('Range:', CONFIG.rayMaxDistance)
+  console.log('Prism Radius:', CONFIG.prismRadius)
+  console.log('Max Prisms:', CONFIG.maxPrisms)
+  console.log('Color Blend Ratio:', CONFIG.colorBlendRatio, '(0=start, 1=end)')
+  console.log('Pentagon Offset:', CONFIG.pentagonSurfaceOffset)
+  console.log('Default Prism Color:', '0x' + CONFIG.prismFinalColor.toString(16))
+  console.groupEnd()
+}
+
+// ============================================================================
+// CONSOLE ACCESS - Use window.Stacker in browser console
+// ============================================================================
+
+if (typeof window !== 'undefined') {
+  window.Stacker = {
+    CONFIG,
+    setRange,
+    setPrismRadius,
+    setPrismColor,
+    setPreviewColor,
+    setMaxPrisms,
+    setColorBlendRatio,
+    clearAllPrisms,
+    debugStacker,
+  }
+  
+  console.log(`[Stacker] Console access enabled. Try:
+  - Stacker.CONFIG.rayMaxDistance = 100
+  - Stacker.setRange(75)
+  - Stacker.setPrismRadius(1.0)
+  - Stacker.setMaxPrisms(10)
+  - Stacker.setColorBlendRatio(0.5)
+  - Stacker.clearAllPrisms()
+  - Stacker.debugStacker()`)
 }
