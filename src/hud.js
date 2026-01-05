@@ -18,6 +18,10 @@ let chatInput = null
 const MINIMAP_SIZE = 160
 const MINIMAP_RANGE = 200 // World units to display
 
+// Sonar sweep
+let sonarAngle = 0
+const SONAR_SPEED = 0.5 // Radians per second
+
 // Chat message history
 const chatHistory = []
 const MAX_CHAT_MESSAGES = 50
@@ -625,13 +629,28 @@ function updateMinimap() {
   const ctx = minimapCtx
   const size = minimapCanvas.width
   const halfSize = size / 2
-  const scale = size / (MINIMAP_RANGE * 2)
+  const radarRadius = halfSize * 0.82 // Radar zone radius
+  const scale = (radarRadius * 2) / (MINIMAP_RANGE * 2) // Scale to fit radar zone
   
-  // Clear with dark blue background
-  ctx.fillStyle = 'rgba(0, 10, 30, 0.9)'
+  // ==========================================================================
+  // DRAW DARK NAVY BORDER (mask outside radar zone)
+  // ==========================================================================
+  ctx.fillStyle = 'rgba(5, 12, 25, 0.95)' // Darker navy border
   ctx.fillRect(0, 0, size, size)
   
-  // Draw grid
+  // ==========================================================================
+  // DRAW CIRCULAR RADAR ZONE
+  // ==========================================================================
+  ctx.save()
+  ctx.beginPath()
+  ctx.arc(halfSize, halfSize, radarRadius, 0, Math.PI * 2)
+  ctx.clip()
+  
+  // Fill radar zone with lighter background
+  ctx.fillStyle = 'rgba(0, 18, 40, 0.9)'
+  ctx.fillRect(0, 0, size, size)
+  
+  // Draw grid (inside radar zone only)
   ctx.strokeStyle = 'rgba(0, 255, 200, 0.1)'
   ctx.lineWidth = 1
   const gridStep = 50 * scale
@@ -646,21 +665,49 @@ function updateMinimap() {
     ctx.stroke()
   }
   
-  // Draw compass directions
-  ctx.fillStyle = 'rgba(0, 255, 200, 0.4)'
-  ctx.font = '8px monospace'
-  ctx.textAlign = 'center'
-  ctx.fillText('N', halfSize, 10)
-  ctx.fillText('S', halfSize, size - 4)
-  ctx.textAlign = 'left'
-  ctx.fillText('W', 4, halfSize + 3)
-  ctx.textAlign = 'right'
-  ctx.fillText('E', size - 4, halfSize + 3)
+  // ==========================================================================
+  // DRAW SONAR SWEEP (rotating dial with fading trail)
+  // ==========================================================================
+  sonarAngle -= SONAR_SPEED * 0.016 // Clockwise rotation (~60fps delta time)
+  if (sonarAngle < 0) sonarAngle += Math.PI * 2
+  
+  // Draw fading trail (gradient arc behind the sweep line)
+  const trailLength = Math.PI * 0.4 // ~72 degrees of trail
+  const trailSteps = 20
+  
+  for (let i = 0; i < trailSteps; i++) {
+    const t = i / trailSteps
+    const angle = sonarAngle + t * trailLength // Trail behind (clockwise = positive direction is behind)
+    const alpha = (1 - t) * 0.15 // Fade from 0.15 to 0
+    
+    ctx.strokeStyle = `rgba(0, 255, 200, ${alpha})`
+    ctx.lineWidth = 1
+    ctx.beginPath()
+    ctx.moveTo(halfSize, halfSize)
+    ctx.lineTo(
+      halfSize + Math.cos(angle) * radarRadius,
+      halfSize - Math.sin(angle) * radarRadius
+    )
+    ctx.stroke()
+  }
+  
+  // Draw main sweep line
+  ctx.strokeStyle = 'rgba(0, 255, 200, 0.6)'
+  ctx.lineWidth = 2
+  ctx.beginPath()
+  ctx.moveTo(halfSize, halfSize)
+  ctx.lineTo(
+    halfSize + Math.cos(sonarAngle) * radarRadius,
+    halfSize - Math.sin(sonarAngle) * radarRadius
+  )
+  ctx.stroke()
   
   // Get player position
   const playerPos = player.position
   
-  // Draw nearby NPCs
+  // ==========================================================================
+  // DRAW NEARBY NPCs (with sonar ping fade effect)
+  // ==========================================================================
   const nearbyNPCs = FishAdder.getNearbyNPCs(playerPos, MINIMAP_RANGE)
   if (nearbyNPCs) {
     for (const npc of nearbyNPCs) {
@@ -669,31 +716,53 @@ function updateMinimap() {
       const relX = (npc.mesh.position.x - playerPos.x) * scale
       const relZ = (npc.mesh.position.z - playerPos.z) * scale
       
+      // Check if within circular radar zone
+      const distFromCenter = Math.sqrt(relX * relX + relZ * relZ)
+      if (distFromCenter > radarRadius - 4) continue // Skip if outside radar zone
+      
       const screenX = halfSize + relX
       const screenZ = halfSize + relZ
       
-      // Skip if off minimap
-      if (screenX < 0 || screenX > size || screenZ < 0 || screenZ > size) continue
+      // Calculate NPC angle from center (matching sonar coordinate system)
+      const npcAngle = Math.atan2(-relZ, relX)
+      
+      // Calculate how long ago (in radians) the sonar passed over this NPC
+      // For clockwise rotation: time since ping = npcAngle - sonarAngle (normalized to 0-2π)
+      let angleSincePing = npcAngle - sonarAngle
+      while (angleSincePing < 0) angleSincePing += Math.PI * 2
+      while (angleSincePing > Math.PI * 2) angleSincePing -= Math.PI * 2
+      
+      // Fade based on time since ping (0 = just pinged = bright, 2π = about to ping = almost invisible)
+      const fadeRatio = 1 - (angleSincePing / (Math.PI * 2))
+      const pingAlpha = 0.2 + fadeRatio * 0.7 // Range from 0.2 (faded) to 0.9 (fresh ping)
       
       // Color based on size relative to player (green = smaller, red = larger)
       const playerVol = Feeding.getPlayerVisualVolume()
       const npcVol = npc.visualVolume || 0
       
+      let r, g, b
       if (npcVol < playerVol * 0.8) {
-        ctx.fillStyle = 'rgba(0, 255, 100, 0.7)' // Edible - green
+        r = 0; g = 255; b = 100 // Edible - green
       } else if (npcVol > playerVol * 1.2) {
-        ctx.fillStyle = 'rgba(255, 80, 80, 0.7)' // Danger - red
+        r = 255; g = 80; b = 80 // Danger - red
       } else {
-        ctx.fillStyle = 'rgba(255, 255, 0, 0.7)' // Similar size - yellow
+        r = 255; g = 255; b = 0 // Similar size - yellow
       }
       
+      ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${pingAlpha})`
+      
+      // Dot size also pulses slightly with ping freshness
+      const dotSize = 2 + fadeRatio * 1.5
+      
       ctx.beginPath()
-      ctx.arc(screenX, screenZ, 2, 0, Math.PI * 2)
+      ctx.arc(screenX, screenZ, dotSize, 0, Math.PI * 2)
       ctx.fill()
     }
   }
   
-  // Draw player (center, with direction indicator)
+  // ==========================================================================
+  // DRAW PLAYER (center, with direction indicator)
+  // ==========================================================================
   ctx.fillStyle = '#00ffc8'
   ctx.beginPath()
   ctx.arc(halfSize, halfSize, 4, 0, Math.PI * 2)
@@ -701,8 +770,8 @@ function updateMinimap() {
   
   // Player direction indicator
   const rotation = player.rotation.y
-  const dirX = -Math.sin(rotation) * 10
-  const dirZ = Math.cos(rotation) * 10
+  const dirX = -Math.sin(rotation) * 12
+  const dirZ = Math.cos(rotation) * 12
   
   ctx.strokeStyle = '#00ffc8'
   ctx.lineWidth = 2
@@ -711,12 +780,34 @@ function updateMinimap() {
   ctx.lineTo(halfSize + dirX, halfSize - dirZ)
   ctx.stroke()
   
-  // Range circle
-  ctx.strokeStyle = 'rgba(0, 255, 200, 0.2)'
-  ctx.lineWidth = 1
+  ctx.restore() // End radar zone clipping
+  
+  // ==========================================================================
+  // DRAW RADAR BORDER RING
+  // ==========================================================================
+  ctx.strokeStyle = 'rgba(0, 255, 200, 0.35)'
+  ctx.lineWidth = 2
   ctx.beginPath()
-  ctx.arc(halfSize, halfSize, halfSize * 0.8, 0, Math.PI * 2)
+  ctx.arc(halfSize, halfSize, radarRadius, 0, Math.PI * 2)
   ctx.stroke()
+  
+  // ==========================================================================
+  // DRAW COMPASS DIRECTIONS (N, E, S, W) on the border
+  // ==========================================================================
+  const compassRadius = radarRadius + 9 // Position outside the radar circle
+  ctx.fillStyle = 'rgba(0, 255, 200, 0.6)'
+  ctx.font = 'bold 9px monospace'
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  
+  // N - top
+  ctx.fillText('N', halfSize, halfSize - compassRadius)
+  // S - bottom
+  ctx.fillText('S', halfSize, halfSize + compassRadius)
+  // E - right
+  ctx.fillText('E', halfSize + compassRadius, halfSize)
+  // W - left
+  ctx.fillText('W', halfSize - compassRadius, halfSize)
 }
 
 function updateInfoPanel() {
