@@ -831,6 +831,7 @@ function updateMinimap() {
   const currentTime = performance.now()
   const fullRotationTime = (Math.PI * 2) / SONAR_SPEED * 1000 // ms for full rotation
   const fadeTime = fullRotationTime * 0.5 // Faster fade for independent pings
+  const fadeInTime = 150 // ms for dot to fade in after detection
   const pingWindow = 0.15 // Radians - how close sonar needs to be to "ping"
   
   // Get player volume for color calculation
@@ -912,15 +913,28 @@ function updateMinimap() {
       continue
     }
     
-    // Calculate fade
-    const fadeRatio = 1 - (timeSincePing / fadeTime)
-    const pingAlpha = fadeRatio * 0.9
+    // Calculate fade (with fade-in at start)
+    let pingAlpha
+    let sizeRatio
+    if (timeSincePing < fadeInTime) {
+      // Fade in phase - dot grows and becomes visible
+      const fadeInRatio = timeSincePing / fadeInTime
+      pingAlpha = fadeInRatio * 0.9
+      sizeRatio = fadeInRatio // Grow from small to full
+    } else {
+      // Fade out phase - dot shrinks and fades
+      const fadeOutTime = timeSincePing - fadeInTime
+      const fadeOutDuration = fadeTime - fadeInTime
+      const fadeOutRatio = 1 - (fadeOutTime / fadeOutDuration)
+      pingAlpha = fadeOutRatio * 0.9
+      sizeRatio = fadeOutRatio // Shrink as it fades
+    }
     
     if (pingAlpha < 0.05) continue
     
     // Draw the dot
     ctx.fillStyle = 'rgba(' + data.color.r + ',' + data.color.g + ',' + data.color.b + ',' + pingAlpha.toFixed(2) + ')'
-    const dotSize = 2 + fadeRatio * 1.5
+    const dotSize = 2 + sizeRatio * 1.5
     
     ctx.beginPath()
     ctx.arc(screenX, screenZ, dotSize, 0, Math.PI * 2)
