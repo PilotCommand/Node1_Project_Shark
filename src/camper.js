@@ -7,7 +7,6 @@
 
 import * as THREE from 'three'
 import { getPlayer } from './player.js'
-import { MeshRegistry, Category } from './MeshRegistry.js'
 
 // ============================================================================
 // CONFIGURATION
@@ -15,7 +14,7 @@ import { MeshRegistry, Category } from './MeshRegistry.js'
 
 const CAMPER_CONFIG = {
   // Detection
-  baseScanRadius: 4.2,      // Base radius (will scale with fish)
+  baseScanRadius: 8,        // Base radius (will scale with fish)
   maxSamples: 10,           // Max meshes to sample colors from
   
   // Color blending
@@ -24,12 +23,6 @@ const CAMPER_CONFIG = {
   
   // Visual feedback
   transitionSpeed: 3.0,     // How fast to transition to new color (per second)
-  
-  // Categories to sample from (what counts as "environment")
-  sampleCategories: [Category.MAP, Category.NPC],
-  
-  // Exclude these from sampling
-  excludeCategories: [Category.PLAYER, Category.PROJECTILE, Category.EFFECT],
 }
 
 // ============================================================================
@@ -378,28 +371,47 @@ function clearVisualization() {
 
 /**
  * Scan nearby meshes and compute camouflage color
+ * Scans the actual scene graph for meshes with materials
  */
 function scanEnvironment(playerPosition) {
   const scanRadius = getScanRadius()
   const radiusSq = scanRadius * scanRadius
   
-  // Get all entities and filter manually with world positions
-  // (MeshRegistry.getNearby uses local positions which may be wrong)
-  const allEntities = [
-    ...MeshRegistry.getByCategory(Category.MAP),
-    ...MeshRegistry.getByCategory(Category.NPC),
-  ]
+  if (!sceneRef) {
+    console.warn('[Camper] No scene reference')
+    return new THREE.Color(0x808080)
+  }
   
-  // Filter by distance using world positions
+  // Collect all meshes with colors in range
   const nearby = []
   const tempPos = new THREE.Vector3()
   
-  for (const entity of allEntities) {
-    if (entity.id === 'player') continue
+  sceneRef.traverse((child) => {
+    // Skip non-meshes
+    if (!child.isMesh) return
+    
+    // Skip player mesh
+    if (child.userData.registryId === 'player') return
+    if (child.parent?.userData?.registryId === 'player') return
+    
+    // Skip visualization elements
+    if (child.userData.isVizElement) return
+    if (child.parent?.name === 'camper-viz') return
+    
+    // Skip sky, floor, water (large environment meshes we don't want to sample)
+    const id = child.userData.registryId
+    if (id === 'sky' || id === 'floor' || id === 'waterSurface') return
+    
+    // Check if it has a material with color
+    if (!child.material) return
+    const materials = Array.isArray(child.material) ? child.material : [child.material]
+    const hasColor = materials.some(m => m.color instanceof THREE.Color)
+    if (!hasColor) return
     
     // Get world position
-    entity.mesh.getWorldPosition(tempPos)
+    child.getWorldPosition(tempPos)
     
+    // Distance check
     const dx = tempPos.x - playerPosition.x
     const dy = tempPos.y - playerPosition.y
     const dz = tempPos.z - playerPosition.z
@@ -407,12 +419,12 @@ function scanEnvironment(playerPosition) {
     
     if (distSq <= radiusSq) {
       nearby.push({
-        entity,
+        mesh: child,
         distance: Math.sqrt(distSq),
         worldPos: tempPos.clone(),
       })
     }
-  }
+  })
   
   // Sort by distance
   nearby.sort((a, b) => a.distance - b.distance)
@@ -420,14 +432,14 @@ function scanEnvironment(playerPosition) {
   // Limit samples
   const toSample = nearby.slice(0, CAMPER_CONFIG.maxSamples)
   
-  // Store for visualization (store entities with world positions)
-  lastSampledEntities = toSample.map(n => n.entity)
+  // Store for visualization (wrap in entity-like objects)
+  lastSampledEntities = toSample.map(n => ({ mesh: n.mesh }))
   
   // Extract colors with distances
   const colorData = []
   
-  for (const { entity, distance } of toSample) {
-    const colors = extractColorsFromMesh(entity.mesh)
+  for (const { mesh, distance } of toSample) {
+    const colors = extractColorsFromMesh(mesh)
     
     for (const color of colors) {
       colorData.push({ color, distance })
@@ -437,7 +449,7 @@ function scanEnvironment(playerPosition) {
   // Store for debug
   lastSampledColors = colorData.map(d => d.color.getHexString())
   
-  console.log(`[Camper] Scan radius: ${scanRadius.toFixed(1)}, found ${allEntities.length} total entities, ${nearby.length} in range`)
+  console.log(`[Camper] Scan radius: ${scanRadius.toFixed(1)}, found ${nearby.length} meshes in range`)
   
   // Blend all colors
   return blendColors(colorData)
@@ -538,17 +550,21 @@ export default {
 export function debugCamper() {
   const scanRadius = getScanRadius()
   console.group('[Camper] Debug')
-  console.log('Detection Method: Sphere (world position check)')
+  console.log('Detection Method: Scene graph traversal (all meshes with colors)')
   console.log('Base Scan Radius:', CAMPER_CONFIG.baseScanRadius, 'units')
   console.log('Current Scan Radius:', scanRadius.toFixed(2), 'units (scales with fish)')
   console.log('Max Samples:', CAMPER_CONFIG.maxSamples, 'meshes')
   console.log('')
   console.log('Active:', isActive)
   console.log('Blend:', (currentBlend * 100).toFixed(0) + '%')
+  console.log('Viz Opacity:', (vizOpacity * 100).toFixed(0) + '%')
   console.log('Target color:', targetColor ? `#${targetColor.getHexString()}` : 'none')
   console.log('Original colors stored:', originalColors.size)
   console.log('Sampled meshes:', lastSampledEntities.length)
   console.log('Sampled colors:', lastSampledColors.length)
+  if (lastSampledColors.length > 0) {
+    console.log('Colors:', lastSampledColors.slice(0, 5).map(c => '#' + c).join(', '))
+  }
   console.groupEnd()
 }
 
@@ -560,6 +576,7 @@ export function getCamperState() {
   return {
     isActive,
     currentBlend,
+    vizOpacity,
     targetColor: targetColor ? `#${targetColor.getHexString()}` : null,
     sampledMeshCount: lastSampledEntities.length,
     sampledColorCount: lastSampledColors.length,
