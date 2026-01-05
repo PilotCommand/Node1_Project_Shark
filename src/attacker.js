@@ -56,6 +56,7 @@ const CONFIG = {
   // NPC glow settings - make them REALLY visible through any fog
   npc: {
     emissiveIntensity: 5.0,  // Extremely strong glow to cut through fog
+    fogDisableThreshold: 0.3,  // Disable fog when blend passes this point (0-1)
   },
   
   // Transition
@@ -239,21 +240,12 @@ function buildCache() {
     const npcVol = getNPCVolume(child)
     
     if (npcVol !== null) {
-      // It's an NPC - disable fog and force shader recompile
-      for (let i = 0; i < mats.length; i++) {
-        const m = mats[i]
-        if (m && m.fog !== undefined) {
-          m.fog = false
-          m.needsUpdate = true
-          // Force shader recompilation
-          if (m.version !== undefined) m.version++
-        }
-      }
-      
+      // It's an NPC - store in npcCache (fog will be disabled gradually in applyToNPCs)
       npcCache.set(child.uuid, {
         mesh: child,
         origColors,
         volume: npcVol,
+        fogDisabled: false,  // Track fog state
       })
     } else {
       // World geometry
@@ -271,7 +263,7 @@ function buildCache() {
     let sample = 0
     for (const [uuid, data] of npcCache) {
       if (sample++ < 3) {
-        console.log(`  NPC sample: vol=${data.volume.toFixed(2)}, fog disabled`)
+        console.log(`  NPC sample: vol=${data.volume.toFixed(2)}`)
       }
     }
   } else {
@@ -319,6 +311,33 @@ function applyToNPCs(t) {
     const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
     const threatColor = getThreatColor(volume)
     
+    // Handle fog toggle (once per NPC, affects all materials)
+    const shouldDisableFog = t > CONFIG.npc.fogDisableThreshold
+    if (shouldDisableFog && !data.fogDisabled) {
+      // Disable fog on all materials
+      for (let i = 0; i < mats.length; i++) {
+        const m = mats[i]
+        if (m && m.fog !== undefined) {
+          m.fog = false
+          m.needsUpdate = true
+          if (m.version !== undefined) m.version++
+        }
+      }
+      data.fogDisabled = true
+    } else if (!shouldDisableFog && data.fogDisabled) {
+      // Re-enable fog on all materials
+      for (let i = 0; i < mats.length; i++) {
+        const m = mats[i]
+        if (m && m.fog !== undefined) {
+          m.fog = true
+          m.needsUpdate = true
+          if (m.version !== undefined) m.version++
+        }
+      }
+      data.fogDisabled = false
+    }
+    
+    // Apply colors to all materials
     for (let i = 0; i < mats.length; i++) {
       const m = mats[i]
       const o = origColors[i]
@@ -556,7 +575,7 @@ export function debugAttacker() {
 }
 
 // ============================================================================
-// EXPORTS
+// EXPORT
 // ============================================================================
 
 export default {
