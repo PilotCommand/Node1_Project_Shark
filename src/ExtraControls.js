@@ -6,15 +6,15 @@
  * 
  * Abilities are defined in their own files:
  *   - sprinter.js  (sprint with trail)
- *   - stacker.js   (TODO)
- *   - camper.js    (TODO)
- *   - attacker.js  (TODO)
+ *   - stacker.js   (build pentagonal prisms)
+ *   - camper.js    (camouflage/blend into environment)
+ *   - attacker.js  (predator vision - threat detection)
  */
 
 import Sprinter, { init as initSprinter, clear as clearSprinter } from './sprinter.js'
 import Stacker, { init as initStacker, debugStacker } from './stacker.js'
 import Camper, { init as initCamper, debugCamper } from './camper.js'
-import Attacker from './attacker.js'
+import Attacker, { init as initAttacker, debugAttacker } from './attacker.js'
 
 // ============================================================================
 // 
@@ -32,7 +32,7 @@ import Attacker from './attacker.js'
  * 
  * Options: 'sprinter', 'stacker', 'camper', 'attacker', 'none'
  */
-const ACTIVE_ABILITY = 'stacker'
+const ACTIVE_ABILITY = 'attacker'
 
 // ============================================================================
 // ABILITIES REGISTRY
@@ -72,6 +72,7 @@ export function initAbilities(scene) {
   initSprinter(scene)
   initStacker(scene)
   initCamper(scene)
+  initAttacker(scene)
 }
 
 /**
@@ -195,5 +196,7 @@ export function debugExtra() {
     debugCamper()
   } else if (ACTIVE_ABILITY === 'stacker') {
     debugStacker()
+  } else if (ACTIVE_ABILITY === 'attacker') {
+    debugAttacker()
   }
 }
