@@ -22,9 +22,14 @@ const MINIMAP_RANGE = 200 // World units to display
 let sonarAngle = 0
 const SONAR_SPEED = 0.5 // Radians per second
 
-// Track pinged NPCs with their radar position at ping time
-// Stores: { time, radarX, radarZ, volume }
-const npcPingData = new Map()
+// Track pinged dots with unique IDs (each ping is independent)
+// Stores: { time, radarX, radarZ, color }
+const pingData = new Map()
+let pingIdCounter = 0
+
+// Debounce: track last ping time per NPC to prevent multiple pings per sweep
+const lastNpcPingTime = new Map()
+const PING_DEBOUNCE_MS = 500 // Minimum time between pings for same NPC
 
 // Chat message history
 const chatHistory = []
@@ -731,7 +736,7 @@ function updateMinimap() {
   const nearbyNPCs = FishAdder.getNearbyNPCs(playerPos, MINIMAP_RANGE * 1.5)
   const currentTime = performance.now()
   const fullRotationTime = (Math.PI * 2) / SONAR_SPEED * 1000 // ms for full rotation
-  const fadeTime = fullRotationTime * 0.85
+  const fadeTime = fullRotationTime * 0.5 // Faster fade for independent pings
   const pingWindow = 0.15 // Radians - how close sonar needs to be to "ping"
   
   // Get player volume for color calculation
@@ -752,8 +757,14 @@ function updateMinimap() {
       const npcAngle = Math.atan2(-relZ, relX)
       const angleDiff = normalizeAngle(sonarAngle - npcAngle)
       
-      // If sonar is passing over this NPC right now, record ping with position
+      // If sonar is passing over this NPC right now, create a NEW independent ping
       if (Math.abs(angleDiff) < pingWindow) {
+        // Debounce: don't ping same NPC too frequently
+        const npcUuid = npc.mesh.uuid
+        const lastPing = lastNpcPingTime.get(npcUuid) || 0
+        if (currentTime - lastPing < PING_DEBOUNCE_MS) continue
+        lastNpcPingTime.set(npcUuid, currentTime)
+        
         const npcVol = npc.visualVolume || 0
         let color
         if (npcVol < playerVolLow) {
@@ -764,8 +775,11 @@ function updateMinimap() {
           color = NPC_COLOR_SIMILAR
         }
         
-        // Store world position at ping time (will be converted to radar each frame)
-        npcPingData.set(npc.mesh.uuid, {
+        // Create unique ping ID - each ping is independent
+        const pingId = pingIdCounter++
+        
+        // Store world position at ping time
+        pingData.set(pingId, {
           time: currentTime,
           worldX: npc.mesh.position.x,
           worldZ: npc.mesh.position.z,
@@ -776,17 +790,17 @@ function updateMinimap() {
   }
   
   // ==========================================================================
-  // DRAW ALL PINGED DOTS - From stored positions, independent of NPC existence
+  // DRAW ALL PINGED DOTS - Each ping is independent, like real sonar
   // ==========================================================================
   const expiredIds = []
   const radarRadiusSq = radarRadius * radarRadius // Pre-compute for border check
   
-  for (const [npcId, data] of npcPingData) {
+  for (const [pingId, data] of pingData) {
     const timeSincePing = currentTime - data.time
     
     // Remove if fully faded
     if (timeSincePing > fadeTime) {
-      expiredIds.push(npcId)
+      expiredIds.push(pingId)
       continue
     }
     
@@ -800,7 +814,7 @@ function updateMinimap() {
     const distSq = relX * relX + relZ * relZ
     if (distSq > radarRadiusSq) {
       // Dot has reached radar border - remove it
-      expiredIds.push(npcId)
+      expiredIds.push(pingId)
       continue
     }
     
@@ -821,7 +835,16 @@ function updateMinimap() {
   
   // Clean up expired pings
   for (let i = 0; i < expiredIds.length; i++) {
-    npcPingData.delete(expiredIds[i])
+    pingData.delete(expiredIds[i])
+  }
+  
+  // Periodic cleanup of debounce map (every ~5 seconds worth of entries)
+  if (lastNpcPingTime.size > 200) {
+    for (const [npcUuid, time] of lastNpcPingTime) {
+      if (currentTime - time > 5000) {
+        lastNpcPingTime.delete(npcUuid)
+      }
+    }
   }
   
   // ==========================================================================
