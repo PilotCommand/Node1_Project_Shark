@@ -61,11 +61,53 @@ function createStyles() {
       align-items: center;
     }
     
-    .hud-title::after {
-      content: '::';
+    .hud-title-controls {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    
+    .hud-title-controls .grip {
       opacity: 0.4;
       font-size: 10px;
       letter-spacing: 1px;
+    }
+    
+    .hud-title-controls .collapse-btn {
+      opacity: 0.5;
+      font-size: 8px;
+      cursor: pointer;
+      transition: opacity 0.2s, transform 0.2s;
+      line-height: 1;
+    }
+    
+    .hud-title-controls .collapse-btn:hover {
+      opacity: 1;
+    }
+    
+    .hud-panel.collapsed .collapse-btn {
+      transform: rotate(180deg);
+    }
+    
+    /* Collapsible content wrappers */
+    .hud-collapsible {
+      overflow: hidden;
+      transition: max-height 0.3s ease, opacity 0.2s ease;
+      max-height: 500px;
+      opacity: 1;
+    }
+    
+    .hud-panel.collapsed .hud-collapsible {
+      max-height: 0;
+      opacity: 0;
+    }
+    
+    .hud-panel.collapsed {
+      min-height: auto !important;
+    }
+    
+    .hud-panel.collapsed .resize-handle {
+      display: none;
     }
     
     /* Resize handle - default bottom-right */
@@ -134,6 +176,16 @@ function createStyles() {
       right: 10px;
       bottom: 10px;
       padding: 0;
+      display: flex;
+      flex-direction: column;
+    }
+    
+    #minimap-canvas-wrapper {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
     }
     
     #minimap-canvas {
@@ -177,9 +229,12 @@ function createStyles() {
       left: 10px;
       top: 10px;
       width: 280px;
-      height: 180px;
+    }
+    
+    #chat-panel .hud-collapsible {
       display: flex;
       flex-direction: column;
+      height: 150px;
     }
     
     #chat-messages {
@@ -379,6 +434,16 @@ function makeResizable(panel, onResize, corner = 'bottom-right') {
   })
 }
 
+function makeCollapsible(panel) {
+  const collapseBtn = panel.querySelector('.collapse-btn')
+  if (!collapseBtn) return
+  
+  collapseBtn.addEventListener('click', (e) => {
+    e.stopPropagation()
+    panel.classList.toggle('collapsed')
+  })
+}
+
 function createFPSCounter() {
   stats = new Stats()
   stats.showPanel(0)
@@ -399,30 +464,41 @@ function createMinimap() {
   
   const title = document.createElement('div')
   title.className = 'hud-title'
-  title.textContent = 'Map'
+  title.innerHTML = '<span>Map</span><span class="hud-title-controls"><span class="collapse-btn">v</span><span class="grip">::</span></span>'
+  
+  const collapsible = document.createElement('div')
+  collapsible.className = 'hud-collapsible'
+  
+  const canvasWrapper = document.createElement('div')
+  canvasWrapper.id = 'minimap-canvas-wrapper'
   
   minimapCanvas = document.createElement('canvas')
   minimapCanvas.id = 'minimap-canvas'
   minimapCanvas.width = MINIMAP_SIZE
   minimapCanvas.height = MINIMAP_SIZE
   
+  canvasWrapper.appendChild(minimapCanvas)
+  collapsible.appendChild(canvasWrapper)
   minimapContainer.appendChild(title)
-  minimapContainer.appendChild(minimapCanvas)
+  minimapContainer.appendChild(collapsible)
   document.body.appendChild(minimapContainer)
   
   minimapCtx = minimapCanvas.getContext('2d')
   
-  // Make draggable and resizable
+  // Make draggable, resizable, and collapsible
   makeDraggable(minimapContainer)
   makeResizable(minimapContainer, (width, height) => {
     // Resize canvas to match panel (minus title bar height)
     const titleHeight = title.offsetHeight
-    const newSize = Math.min(width - 2, height - titleHeight - 2)
+    const availableWidth = width - 4
+    const availableHeight = height - titleHeight - 4
+    const newSize = Math.min(availableWidth, availableHeight)
     if (newSize > 50) {
       minimapCanvas.width = newSize
       minimapCanvas.height = newSize
     }
   }, 'top-left')
+  makeCollapsible(minimapContainer)
 }
 
 function createInfoPanel() {
@@ -431,41 +507,44 @@ function createInfoPanel() {
   infoPanel.className = 'hud-panel'
   
   infoPanel.innerHTML = `
-    <div class="hud-title">Info</div>
-    <div class="info-content">
-      <div class="info-row">
-        <span class="info-label">Species</span>
-        <span class="info-value" id="info-species">---</span>
-      </div>
-      <div class="info-row">
-        <span class="info-label">Size</span>
-        <span class="info-value" id="info-size">---</span>
-      </div>
-      <div class="info-row">
-        <span class="info-label">Depth</span>
-        <span class="info-value" id="info-depth">---</span>
-      </div>
-      <div class="info-divider"></div>
-      <div class="info-row">
-        <span class="info-label">Eaten</span>
-        <span class="info-value" id="info-eaten">0</span>
-      </div>
-      <div class="info-row">
-        <span class="info-label">Nearby</span>
-        <span class="info-value" id="info-nearby">0</span>
-      </div>
-      <div class="info-row">
-        <span class="info-label">Population</span>
-        <span class="info-value" id="info-population">0</span>
+    <div class="hud-title"><span>Info</span><span class="hud-title-controls"><span class="collapse-btn">v</span><span class="grip">::</span></span></div>
+    <div class="hud-collapsible">
+      <div class="info-content">
+        <div class="info-row">
+          <span class="info-label">Species</span>
+          <span class="info-value" id="info-species">---</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">Size</span>
+          <span class="info-value" id="info-size">---</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">Depth</span>
+          <span class="info-value" id="info-depth">---</span>
+        </div>
+        <div class="info-divider"></div>
+        <div class="info-row">
+          <span class="info-label">Eaten</span>
+          <span class="info-value" id="info-eaten">0</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">Nearby</span>
+          <span class="info-value" id="info-nearby">0</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">Population</span>
+          <span class="info-value" id="info-population">0</span>
+        </div>
       </div>
     </div>
   `
   
   document.body.appendChild(infoPanel)
   
-  // Make draggable and resizable
+  // Make draggable, resizable, and collapsible
   makeDraggable(infoPanel)
   makeResizable(infoPanel, null, 'bottom-left')
+  makeCollapsible(infoPanel)
 }
 
 function createChatPanel() {
@@ -474,10 +553,12 @@ function createChatPanel() {
   chatPanel.className = 'hud-panel'
   
   chatPanel.innerHTML = `
-    <div class="hud-title">Chat</div>
-    <div id="chat-messages"></div>
-    <div id="chat-input-container">
-      <input type="text" id="chat-input" placeholder="Press Enter to chat..." />
+    <div class="hud-title"><span>Chat</span><span class="hud-title-controls"><span class="collapse-btn">v</span><span class="grip">::</span></span></div>
+    <div class="hud-collapsible">
+      <div id="chat-messages"></div>
+      <div id="chat-input-container">
+        <input type="text" id="chat-input" placeholder="Press Enter to chat..." />
+      </div>
     </div>
   `
   
@@ -506,9 +587,10 @@ function createChatPanel() {
   // Welcome message
   addChatMessage('Welcome to the ocean!', 'system')
   
-  // Make draggable and resizable
+  // Make draggable, resizable, and collapsible
   makeDraggable(chatPanel)
   makeResizable(chatPanel)
+  makeCollapsible(chatPanel)
 }
 
 export function addChatMessage(text, type = 'player') {
