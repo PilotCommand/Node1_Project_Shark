@@ -31,7 +31,7 @@ const CAMPER_CONFIG = {
   vizFadeOutSpeed: 2.5,     // How fast viz fades out
   
   // Movement detection
-  movementThreshold: 0.05,  // How far fish must move to break camo
+  movementThreshold: 5,     // How far fish must move to break camo (allows small adjustments)
   
   // Detector mesh color (matches sprinter trail)
   detectorColor: 0x00ffaa,
@@ -39,15 +39,16 @@ const CAMPER_CONFIG = {
   // Fish camouflage opacity (1% = nearly invisible)
   fishCamoOpacity: 0.3,
   
-  // Disguise shell settings
-  disguiseShell: {
-    enabled: true,           // Whether to create disguise shell
+  // Disguise mimic settings
+  disguiseMimic: {
+    enabled: true,           // Whether to create disguise mimic
     type: 'auto',            // 'coral', 'boulder', or 'auto' (detect from nearby)
-    pieceCount: 6,           // Number of shell pieces (more = fuller coverage)
+    pieceCount: 6,           // Number of mimic pieces (more = fuller coverage)
     sizeMultiplier: 1.4,     // How much larger than fish (1.0 = same size)
     pointsPerPiece: 10,      // Convex hull points per piece (more = rounder)
     irregularity: 0.35,      // Shape irregularity (0-1)
-    opacity: 0.85,           // Shell opacity when fully visible
+    opacity: 0.85,           // Mimic opacity when fully visible
+    useOpacity: false,        // Whether final opacity is partial (true) or full (false)
     roughness: 0.85,         // Material roughness
     metalness: 0.05,         // Material metalness
   },
@@ -75,8 +76,8 @@ let holdTimer = 0               // Timer for hold duration
 let lastPosition = null         // Track position for movement detection
 let isCamouflaged = false       // Whether color is currently applied and should stay
 
-// Disguise shell state
-let disguiseShellGroup = null   // Group containing shell pieces
+// Disguise mimic state
+let disguiseMimicGroup = null   // Group containing mimic pieces
 let detectedTerrainType = null  // 'coral', 'boulder', or null
 
 // ============================================================================
@@ -256,13 +257,13 @@ function restoreOriginalColors(playerMesh) {
 }
 
 // ============================================================================
-// DISGUISE SHELL - Convex Hull Generation
+// DISGUISE MIMIC - Convex Hull Generation
 // ============================================================================
 
 /**
- * Simple seeded RNG for deterministic shell generation
+ * Simple seeded RNG for deterministic mimic generation
  */
-function createShellRNG(seed) {
+function createMimicRNG(seed) {
   return function() {
     let t = seed += 0x6D2B79F5
     t = Math.imul(t ^ t >>> 15, t | 1)
@@ -380,9 +381,9 @@ function computeConvexHull(points) {
 }
 
 /**
- * Create a convex hull geometry for a shell piece
+ * Create a convex hull geometry for a mimic piece
  */
-function createShellPieceGeometry(size, pointCount, rng, options = {}) {
+function createMimicPieceGeometry(size, pointCount, rng, options = {}) {
   const { flatness = 1.0, irregularity = 0.3 } = options
   
   const points = []
@@ -454,10 +455,10 @@ function detectTerrainType(entities) {
 }
 
 /**
- * Get icosahedron vertices for shell piece placement
+ * Get icosahedron vertices for mimic piece placement
  * Returns vertices distributed around a sphere
  */
-function getShellPositions(count) {
+function getMimicPositions(count) {
   const positions = []
   
   // Use fibonacci sphere for even distribution
@@ -478,19 +479,19 @@ function getShellPositions(count) {
 }
 
 /**
- * Create the disguise shell around the player
+ * Create the disguise mimic around the player
  * @param {THREE.Object3D} player - Player mesh
  * @param {THREE.Color} color - Sampled color from environment
  * @param {string} terrainType - 'coral' or 'boulder'
  */
-function createDisguiseShell(player, color, terrainType) {
-  if (!CAMPER_CONFIG.disguiseShell.enabled) return
+function createDisguiseMimic(player, color, terrainType) {
+  if (!CAMPER_CONFIG.disguiseMimic.enabled) return
   if (!sceneRef) return
   
-  // Clean up existing shell
-  clearDisguiseShell()
+  // Clean up existing mimic
+  clearDisguiseMimic()
   
-  const config = CAMPER_CONFIG.disguiseShell
+  const config = CAMPER_CONFIG.disguiseMimic
   
   // Get player bounding box for sizing
   const bbox = new THREE.Box3().setFromObject(player)
@@ -498,15 +499,15 @@ function createDisguiseShell(player, color, terrainType) {
   bbox.getSize(size)
   const baseSize = Math.max(size.x, size.y, size.z) * 0.5 * config.sizeMultiplier
   
-  // Create shell group
-  disguiseShellGroup = new THREE.Group()
-  disguiseShellGroup.name = 'disguise-shell'
+  // Create mimic group
+  disguiseMimicGroup = new THREE.Group()
+  disguiseMimicGroup.name = 'disguise-mimic'
   
-  // Get positions for shell pieces
-  const positions = getShellPositions(config.pieceCount)
+  // Get positions for mimic pieces
+  const positions = getMimicPositions(config.pieceCount)
   
-  // Create RNG for consistent shell shape
-  const rng = createShellRNG(Math.floor(Math.random() * 100000))
+  // Create RNG for consistent mimic shape
+  const rng = createMimicRNG(Math.floor(Math.random() * 100000))
   
   // Vary color slightly for each piece (like coral does)
   const hsl = { h: 0, s: 0, l: 0 }
@@ -529,7 +530,7 @@ function createDisguiseShell(player, color, terrainType) {
     }
     
     // Create geometry
-    const geometry = createShellPieceGeometry(
+    const geometry = createMimicPieceGeometry(
       pieceSize,
       config.pointsPerPiece + Math.floor(rng() * 4),
       rng,
@@ -543,7 +544,7 @@ function createDisguiseShell(player, color, terrainType) {
       Math.min(1, hsl.l * (0.85 + rng() * 0.3))
     )
     
-    // Create material
+    // Create material - always enable transparency for fade in/out effects
     const material = new THREE.MeshStandardMaterial({
       color: pieceColor,
       roughness: config.roughness,
@@ -553,7 +554,8 @@ function createDisguiseShell(player, color, terrainType) {
       opacity: 0, // Start invisible, will fade in
       depthWrite: false,
     })
-    material.userData.targetOpacity = config.opacity
+    // Target opacity: partial if useOpacity enabled, full otherwise
+    material.userData.targetOpacity = config.useOpacity ? config.opacity : 1.0
     
     const mesh = new THREE.Mesh(geometry, material)
     
@@ -567,47 +569,83 @@ function createDisguiseShell(player, color, terrainType) {
       rng() * Math.PI * 2
     )
     
-    mesh.userData.isDisguiseShell = true
-    disguiseShellGroup.add(mesh)
+    mesh.userData.isDisguiseMimic = true
+    disguiseMimicGroup.add(mesh)
   }
   
   // Attach to player so it moves with them
-  player.add(disguiseShellGroup)
+  player.add(disguiseMimicGroup)
   
-  console.log(`[Camper] Created ${terrainType} disguise shell with ${config.pieceCount} pieces`)
+  console.log(`[Camper] Created ${terrainType} disguise mimic with ${config.pieceCount} pieces`)
 }
 
 /**
- * Update disguise shell opacity
+ * Update disguise mimic opacity (always fades in/out regardless of useOpacity setting)
  */
-function updateDisguiseShellOpacity(opacity) {
-  if (!disguiseShellGroup) return
+function updateDisguiseMimicOpacity(opacity) {
+  if (!disguiseMimicGroup) return
   
-  disguiseShellGroup.traverse((child) => {
-    if (child.material && child.userData.isDisguiseShell) {
-      const targetOpacity = child.material.userData.targetOpacity || CAMPER_CONFIG.disguiseShell.opacity
+  disguiseMimicGroup.traverse((child) => {
+    if (child.material && child.userData.isDisguiseMimic) {
+      // Always update opacity for fade in/out effect
+      const targetOpacity = child.material.userData.targetOpacity || 1.0
       child.material.opacity = targetOpacity * opacity
     }
   })
 }
 
 /**
- * Clear disguise shell
+ * Convert disguise mimic to opaque mode (after fade in completes)
+ * This fixes z-sorting issues with transparent objects
  */
-function clearDisguiseShell() {
-  if (disguiseShellGroup) {
+function makeDisguiseMimicOpaque() {
+  if (!disguiseMimicGroup) return
+  
+  disguiseMimicGroup.traverse((child) => {
+    if (child.material && child.userData.isDisguiseMimic) {
+      const targetOpacity = child.material.userData.targetOpacity || 1.0
+      child.material.transparent = false
+      child.material.opacity = targetOpacity
+      child.material.depthWrite = true
+      child.material.needsUpdate = true
+    }
+  })
+  console.log('[Camper] Mimic switched to opaque mode')
+}
+
+/**
+ * Convert disguise mimic to transparent mode (for fade out)
+ */
+function makeDisguiseMimicTransparent() {
+  if (!disguiseMimicGroup) return
+  
+  disguiseMimicGroup.traverse((child) => {
+    if (child.material && child.userData.isDisguiseMimic) {
+      child.material.transparent = true
+      child.material.depthWrite = false
+      child.material.needsUpdate = true
+    }
+  })
+  console.log('[Camper] Mimic switched to transparent mode')
+}
+
+/**
+ * Clear disguise mimic
+ */
+function clearDisguiseMimic() {
+  if (disguiseMimicGroup) {
     // Dispose all geometries and materials
-    disguiseShellGroup.traverse((child) => {
+    disguiseMimicGroup.traverse((child) => {
       if (child.geometry) child.geometry.dispose()
       if (child.material) child.material.dispose()
     })
     
     // Remove from parent (player)
-    if (disguiseShellGroup.parent) {
-      disguiseShellGroup.parent.remove(disguiseShellGroup)
+    if (disguiseMimicGroup.parent) {
+      disguiseMimicGroup.parent.remove(disguiseMimicGroup)
     }
     
-    disguiseShellGroup = null
+    disguiseMimicGroup = null
   }
   detectedTerrainType = null
 }
@@ -964,9 +1002,9 @@ function scanEnvironment(playerPosition) {
     if (child.userData.isVizElement) return
     if (child.parent?.name === 'camper-viz') return
     
-    // Skip disguise shell elements
-    if (child.userData.isDisguiseShell) return
-    if (child.parent?.name === 'disguise-shell') return
+    // Skip disguise mimic elements
+    if (child.userData.isDisguiseMimic) return
+    if (child.parent?.name === 'disguise-mimic') return
     
     // Check if it has a material with color
     if (!child.material) return
@@ -1068,6 +1106,7 @@ function storePosition(player) {
  */
 function breakCamouflage() {
   console.log('[Camper] Movement detected - breaking camouflage')
+  makeDisguiseMimicTransparent()  // Switch to transparent for fade out
   camoState = 'idle'
   isCamouflaged = false
   // Color will fade out in onPassiveUpdate
@@ -1091,10 +1130,10 @@ export default {
       return
     }
     
-    // If already camouflaged, re-scan (and recreate shell)
+    // If already camouflaged, re-scan (and recreate mimic)
     if (camoState === 'camouflaged') {
       console.log('[Camper] Re-scanning while camouflaged')
-      clearDisguiseShell()
+      clearDisguiseMimic()
     }
     
     // Start the sequence
@@ -1111,15 +1150,15 @@ export default {
     targetColor = scanEnvironment(player.position)
     
     // Detect terrain type from sampled entities
-    const configType = CAMPER_CONFIG.disguiseShell.type
+    const configType = CAMPER_CONFIG.disguiseMimic.type
     if (configType === 'auto') {
       detectedTerrainType = detectTerrainType(lastSampledEntities)
     } else {
       detectedTerrainType = configType
     }
     
-    // Create disguise shell with sampled color
-    createDisguiseShell(player, targetColor, detectedTerrainType)
+    // Create disguise mimic with sampled color
+    createDisguiseMimic(player, targetColor, detectedTerrainType)
     
     // Store position for movement tracking
     storePosition(player)
@@ -1156,8 +1195,8 @@ export default {
         vizOpacity = Math.min(1, vizOpacity + delta * CAMPER_CONFIG.vizFadeInSpeed)
         updateVizOpacity()
         
-        // Fade in disguise shell
-        updateDisguiseShellOpacity(vizOpacity)
+        // Fade in disguise mimic
+        updateDisguiseMimicOpacity(vizOpacity)
         
         // Transition color towards camo
         if (targetColor && currentBlend < 1) {
@@ -1169,6 +1208,7 @@ export default {
         if (vizOpacity >= 1) {
           camoState = 'holding'
           holdTimer = 0
+          makeDisguiseMimicOpaque()  // Switch to opaque for proper rendering
           console.log('[Camper] Visualization at full - holding')
         }
         break
@@ -1228,12 +1268,12 @@ export default {
           }
         }
         
-        // Fade out camouflage color and shell if not camouflaged
+        // Fade out camouflage color and mimic if not camouflaged
         if (!isCamouflaged && currentBlend > 0) {
           currentBlend = Math.max(0, currentBlend - delta * CAMPER_CONFIG.transitionSpeed)
           
-          // Fade out shell with color
-          updateDisguiseShellOpacity(currentBlend)
+          // Fade out mimic with color
+          updateDisguiseMimicOpacity(currentBlend)
           
           if (targetColor) {
             applyColorToPlayer(player, targetColor, currentBlend)
@@ -1241,7 +1281,7 @@ export default {
           
           if (currentBlend <= 0) {
             restoreOriginalColors(player)
-            clearDisguiseShell()
+            clearDisguiseMimic()
             targetColor = null
             lastSampledEntities = []
           }
@@ -1278,12 +1318,12 @@ export function debugCamper() {
     console.log('Colors:', lastSampledColors.slice(0, 5).map(c => '#' + c).join(', '))
   }
   console.log('')
-  console.log('Disguise Shell:')
-  console.log('  Enabled:', CAMPER_CONFIG.disguiseShell.enabled)
-  console.log('  Type:', CAMPER_CONFIG.disguiseShell.type)
+  console.log('Disguise Mimic:')
+  console.log('  Enabled:', CAMPER_CONFIG.disguiseMimic.enabled)
+  console.log('  Type:', CAMPER_CONFIG.disguiseMimic.type)
   console.log('  Detected Terrain:', detectedTerrainType || 'none')
-  console.log('  Shell Active:', disguiseShellGroup !== null)
-  console.log('  Piece Count:', disguiseShellGroup ? disguiseShellGroup.children.length : 0)
+  console.log('  Mimic Active:', disguiseMimicGroup !== null)
+  console.log('  Piece Count:', disguiseMimicGroup ? disguiseMimicGroup.children.length : 0)
   console.groupEnd()
 }
 
@@ -1301,11 +1341,11 @@ export function getCamperState() {
     targetColor: targetColor ? `#${targetColor.getHexString()}` : null,
     sampledMeshCount: lastSampledEntities.length,
     sampledColorCount: lastSampledColors.length,
-    disguiseShell: {
-      enabled: CAMPER_CONFIG.disguiseShell.enabled,
-      active: disguiseShellGroup !== null,
+    disguiseMimic: {
+      enabled: CAMPER_CONFIG.disguiseMimic.enabled,
+      active: disguiseMimicGroup !== null,
       terrainType: detectedTerrainType,
-      pieceCount: disguiseShellGroup ? disguiseShellGroup.children.length : 0,
+      pieceCount: disguiseMimicGroup ? disguiseMimicGroup.children.length : 0,
     },
   }
 }
