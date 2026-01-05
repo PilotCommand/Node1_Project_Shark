@@ -38,6 +38,19 @@ const CAMPER_CONFIG = {
   
   // Fish camouflage opacity (1% = nearly invisible)
   fishCamoOpacity: 0.3,
+  
+  // Disguise shell settings
+  disguiseShell: {
+    enabled: true,           // Whether to create disguise shell
+    type: 'auto',            // 'coral', 'boulder', or 'auto' (detect from nearby)
+    pieceCount: 6,           // Number of shell pieces (more = fuller coverage)
+    sizeMultiplier: 1.4,     // How much larger than fish (1.0 = same size)
+    pointsPerPiece: 10,      // Convex hull points per piece (more = rounder)
+    irregularity: 0.35,      // Shape irregularity (0-1)
+    opacity: 0.85,           // Shell opacity when fully visible
+    roughness: 0.85,         // Material roughness
+    metalness: 0.05,         // Material metalness
+  },
 }
 
 // ============================================================================
@@ -61,6 +74,10 @@ let camoState = 'idle'
 let holdTimer = 0               // Timer for hold duration
 let lastPosition = null         // Track position for movement detection
 let isCamouflaged = false       // Whether color is currently applied and should stay
+
+// Disguise shell state
+let disguiseShellGroup = null   // Group containing shell pieces
+let detectedTerrainType = null  // 'coral', 'boulder', or null
 
 // ============================================================================
 // COLOR UTILITIES
@@ -236,6 +253,363 @@ function restoreOriginalColors(playerMesh) {
   })
   
   console.log(`[Camper] Restored ${restoredCount} materials to original state`)
+}
+
+// ============================================================================
+// DISGUISE SHELL - Convex Hull Generation
+// ============================================================================
+
+/**
+ * Simple seeded RNG for deterministic shell generation
+ */
+function createShellRNG(seed) {
+  return function() {
+    let t = seed += 0x6D2B79F5
+    t = Math.imul(t ^ t >>> 15, t | 1)
+    t ^= t + Math.imul(t ^ t >>> 7, t | 61)
+    return ((t ^ t >>> 14) >>> 0) / 4294967296
+  }
+}
+
+/**
+ * Compute convex hull from 3D points
+ * Returns array of triangle faces [Vector3, Vector3, Vector3]
+ */
+function computeConvexHull(points) {
+  if (points.length < 4) return []
+  
+  const eps = 1e-10
+  
+  // Find initial tetrahedron
+  let minX = 0, maxX = 0
+  for (let i = 1; i < points.length; i++) {
+    if (points[i].x < points[minX].x) minX = i
+    if (points[i].x > points[maxX].x) maxX = i
+  }
+  if (minX === maxX) maxX = minX === 0 ? 1 : 0
+  
+  let maxDist = -1, furthest = -1
+  const lineDir = new THREE.Vector3().subVectors(points[maxX], points[minX]).normalize()
+  
+  for (let i = 0; i < points.length; i++) {
+    if (i === minX || i === maxX) continue
+    const toPoint = new THREE.Vector3().subVectors(points[i], points[minX])
+    const proj = toPoint.dot(lineDir)
+    const projVec = lineDir.clone().multiplyScalar(proj)
+    const dist = toPoint.sub(projVec).length()
+    if (dist > maxDist) { maxDist = dist; furthest = i }
+  }
+  if (furthest === -1) furthest = (minX + 1) % points.length
+  
+  const p0 = points[minX], p1 = points[maxX], p2 = points[furthest]
+  const v01 = new THREE.Vector3().subVectors(p1, p0)
+  const v02 = new THREE.Vector3().subVectors(p2, p0)
+  const planeNormal = new THREE.Vector3().crossVectors(v01, v02).normalize()
+  
+  maxDist = -1
+  let fourth = -1
+  for (let i = 0; i < points.length; i++) {
+    if (i === minX || i === maxX || i === furthest) continue
+    const dist = Math.abs(new THREE.Vector3().subVectors(points[i], p0).dot(planeNormal))
+    if (dist > maxDist) { maxDist = dist; fourth = i }
+  }
+  if (fourth === -1) return [[p0.clone(), p1.clone(), p2.clone()]]
+  
+  const p3 = points[fourth]
+  const center = new THREE.Vector3().add(p0).add(p1).add(p2).add(p3).multiplyScalar(0.25)
+  
+  const makeFace = (a, b, c) => {
+    const ab = new THREE.Vector3().subVectors(b, a)
+    const ac = new THREE.Vector3().subVectors(c, a)
+    const normal = new THREE.Vector3().crossVectors(ab, ac)
+    const toCenter = new THREE.Vector3().subVectors(center, a)
+    if (normal.dot(toCenter) > 0) return [a.clone(), c.clone(), b.clone()]
+    return [a.clone(), b.clone(), c.clone()]
+  }
+  
+  let hullFaces = [makeFace(p0, p1, p2), makeFace(p0, p1, p3), makeFace(p0, p2, p3), makeFace(p1, p2, p3)]
+  
+  for (let i = 0; i < points.length; i++) {
+    if (i === minX || i === maxX || i === furthest || i === fourth) continue
+    
+    const pt = points[i]
+    const visibleFaces = []
+    
+    for (let f = 0; f < hullFaces.length; f++) {
+      const [a, b, c] = hullFaces[f]
+      const ab = new THREE.Vector3().subVectors(b, a)
+      const ac = new THREE.Vector3().subVectors(c, a)
+      const normal = new THREE.Vector3().crossVectors(ab, ac)
+      const toPoint = new THREE.Vector3().subVectors(pt, a)
+      if (toPoint.dot(normal) > eps) visibleFaces.push(f)
+    }
+    
+    if (visibleFaces.length === 0) continue
+    
+    const edgeCount = new Map()
+    const edgeKey = (a, b) => {
+      const k1 = `${a.x.toFixed(6)},${a.y.toFixed(6)},${a.z.toFixed(6)}-${b.x.toFixed(6)},${b.y.toFixed(6)},${b.z.toFixed(6)}`
+      const k2 = `${b.x.toFixed(6)},${b.y.toFixed(6)},${b.z.toFixed(6)}-${a.x.toFixed(6)},${a.y.toFixed(6)},${a.z.toFixed(6)}`
+      return [k1, k2]
+    }
+    
+    for (const f of visibleFaces) {
+      const [a, b, c] = hullFaces[f]
+      for (const [ea, eb] of [[a,b],[b,c],[c,a]]) {
+        const [k1, k2] = edgeKey(ea, eb)
+        edgeCount.set(k1, (edgeCount.get(k1) || 0) + 1)
+        edgeCount.set(k2, (edgeCount.get(k2) || 0) + 1)
+      }
+    }
+    
+    const boundaryEdges = []
+    for (const f of visibleFaces) {
+      const [a, b, c] = hullFaces[f]
+      for (const [ea, eb] of [[a,b],[b,c],[c,a]]) {
+        const [k1] = edgeKey(ea, eb)
+        if (edgeCount.get(k1) === 1) boundaryEdges.push([ea, eb])
+      }
+    }
+    
+    visibleFaces.sort((a, b) => b - a)
+    for (const f of visibleFaces) hullFaces.splice(f, 1)
+    for (const [ea, eb] of boundaryEdges) hullFaces.push(makeFace(ea, eb, pt))
+  }
+  
+  return hullFaces
+}
+
+/**
+ * Create a convex hull geometry for a shell piece
+ */
+function createShellPieceGeometry(size, pointCount, rng, options = {}) {
+  const { flatness = 1.0, irregularity = 0.3 } = options
+  
+  const points = []
+  for (let i = 0; i < pointCount; i++) {
+    const theta = rng() * Math.PI * 2
+    const phi = Math.acos(2 * rng() - 1)
+    
+    const baseRadius = size * (0.7 + rng() * 0.6)
+    const bumpFreq = 2 + Math.floor(rng() * 4)
+    const bump = 1 + Math.sin(theta * bumpFreq) * Math.cos(phi * bumpFreq) * irregularity
+    const r = baseRadius * bump
+    
+    const x = r * Math.sin(phi) * Math.cos(theta)
+    const y = r * Math.cos(phi) * flatness
+    const z = r * Math.sin(phi) * Math.sin(theta)
+    
+    points.push(new THREE.Vector3(x, y, z))
+  }
+  
+  const hullFaces = computeConvexHull(points)
+  
+  const vertices = []
+  const normals = []
+  
+  for (const face of hullFaces) {
+    const [a, b, c] = face
+    const ab = new THREE.Vector3().subVectors(b, a)
+    const ac = new THREE.Vector3().subVectors(c, a)
+    const normal = new THREE.Vector3().crossVectors(ab, ac).normalize()
+    
+    vertices.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z)
+    normals.push(normal.x, normal.y, normal.z, normal.x, normal.y, normal.z, normal.x, normal.y, normal.z)
+  }
+  
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3))
+  geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3))
+  
+  return geometry
+}
+
+/**
+ * Detect terrain type from sampled entities
+ */
+function detectTerrainType(entities) {
+  let coralCount = 0
+  let boulderCount = 0
+  
+  for (const entity of entities) {
+    const mesh = entity.mesh
+    // Check the mesh and its parents for terrain type markers
+    let current = mesh
+    while (current) {
+      if (current.userData?.terrainType === 'coral') {
+        coralCount++
+        break
+      } else if (current.userData?.terrainType === 'boulder' || 
+                 current.userData?.terrainType === 'boulderCluster') {
+        boulderCount++
+        break
+      }
+      current = current.parent
+    }
+  }
+  
+  if (coralCount > boulderCount) return 'coral'
+  if (boulderCount > coralCount) return 'boulder'
+  return 'boulder' // Default to boulder
+}
+
+/**
+ * Get icosahedron vertices for shell piece placement
+ * Returns vertices distributed around a sphere
+ */
+function getShellPositions(count) {
+  const positions = []
+  
+  // Use fibonacci sphere for even distribution
+  const goldenRatio = (1 + Math.sqrt(5)) / 2
+  
+  for (let i = 0; i < count; i++) {
+    const theta = 2 * Math.PI * i / goldenRatio
+    const phi = Math.acos(1 - 2 * (i + 0.5) / count)
+    
+    positions.push(new THREE.Vector3(
+      Math.sin(phi) * Math.cos(theta),
+      Math.sin(phi) * Math.sin(theta),
+      Math.cos(phi)
+    ))
+  }
+  
+  return positions
+}
+
+/**
+ * Create the disguise shell around the player
+ * @param {THREE.Object3D} player - Player mesh
+ * @param {THREE.Color} color - Sampled color from environment
+ * @param {string} terrainType - 'coral' or 'boulder'
+ */
+function createDisguiseShell(player, color, terrainType) {
+  if (!CAMPER_CONFIG.disguiseShell.enabled) return
+  if (!sceneRef) return
+  
+  // Clean up existing shell
+  clearDisguiseShell()
+  
+  const config = CAMPER_CONFIG.disguiseShell
+  
+  // Get player bounding box for sizing
+  const bbox = new THREE.Box3().setFromObject(player)
+  const size = new THREE.Vector3()
+  bbox.getSize(size)
+  const baseSize = Math.max(size.x, size.y, size.z) * 0.5 * config.sizeMultiplier
+  
+  // Create shell group
+  disguiseShellGroup = new THREE.Group()
+  disguiseShellGroup.name = 'disguise-shell'
+  
+  // Get positions for shell pieces
+  const positions = getShellPositions(config.pieceCount)
+  
+  // Create RNG for consistent shell shape
+  const rng = createShellRNG(Math.floor(Math.random() * 100000))
+  
+  // Vary color slightly for each piece (like coral does)
+  const hsl = { h: 0, s: 0, l: 0 }
+  color.getHSL(hsl)
+  
+  for (let i = 0; i < positions.length; i++) {
+    const pos = positions[i]
+    
+    // Piece size with variation
+    const pieceSize = baseSize * (0.4 + rng() * 0.4)
+    
+    // Shape parameters based on terrain type
+    let flatness, irregularity
+    if (terrainType === 'coral') {
+      flatness = 0.6 + rng() * 0.8
+      irregularity = 0.25 + rng() * 0.3
+    } else {
+      flatness = 0.7 + rng() * 0.6
+      irregularity = 0.35 + rng() * 0.25
+    }
+    
+    // Create geometry
+    const geometry = createShellPieceGeometry(
+      pieceSize,
+      config.pointsPerPiece + Math.floor(rng() * 4),
+      rng,
+      { flatness, irregularity }
+    )
+    
+    // Color variation
+    const pieceColor = new THREE.Color().setHSL(
+      hsl.h + (rng() - 0.5) * 0.08,
+      Math.min(1, hsl.s * (0.85 + rng() * 0.3)),
+      Math.min(1, hsl.l * (0.85 + rng() * 0.3))
+    )
+    
+    // Create material
+    const material = new THREE.MeshStandardMaterial({
+      color: pieceColor,
+      roughness: config.roughness,
+      metalness: config.metalness,
+      flatShading: true,
+      transparent: true,
+      opacity: 0, // Start invisible, will fade in
+      depthWrite: false,
+    })
+    material.userData.targetOpacity = config.opacity
+    
+    const mesh = new THREE.Mesh(geometry, material)
+    
+    // Position around player
+    mesh.position.copy(pos).multiplyScalar(baseSize * 0.7)
+    
+    // Random rotation
+    mesh.rotation.set(
+      rng() * Math.PI * 2,
+      rng() * Math.PI * 2,
+      rng() * Math.PI * 2
+    )
+    
+    mesh.userData.isDisguiseShell = true
+    disguiseShellGroup.add(mesh)
+  }
+  
+  // Attach to player so it moves with them
+  player.add(disguiseShellGroup)
+  
+  console.log(`[Camper] Created ${terrainType} disguise shell with ${config.pieceCount} pieces`)
+}
+
+/**
+ * Update disguise shell opacity
+ */
+function updateDisguiseShellOpacity(opacity) {
+  if (!disguiseShellGroup) return
+  
+  disguiseShellGroup.traverse((child) => {
+    if (child.material && child.userData.isDisguiseShell) {
+      const targetOpacity = child.material.userData.targetOpacity || CAMPER_CONFIG.disguiseShell.opacity
+      child.material.opacity = targetOpacity * opacity
+    }
+  })
+}
+
+/**
+ * Clear disguise shell
+ */
+function clearDisguiseShell() {
+  if (disguiseShellGroup) {
+    // Dispose all geometries and materials
+    disguiseShellGroup.traverse((child) => {
+      if (child.geometry) child.geometry.dispose()
+      if (child.material) child.material.dispose()
+    })
+    
+    // Remove from parent (player)
+    if (disguiseShellGroup.parent) {
+      disguiseShellGroup.parent.remove(disguiseShellGroup)
+    }
+    
+    disguiseShellGroup = null
+  }
+  detectedTerrainType = null
 }
 
 // ============================================================================
@@ -590,6 +964,10 @@ function scanEnvironment(playerPosition) {
     if (child.userData.isVizElement) return
     if (child.parent?.name === 'camper-viz') return
     
+    // Skip disguise shell elements
+    if (child.userData.isDisguiseShell) return
+    if (child.parent?.name === 'disguise-shell') return
+    
     // Check if it has a material with color
     if (!child.material) return
     const materials = Array.isArray(child.material) ? child.material : [child.material]
@@ -713,9 +1091,10 @@ export default {
       return
     }
     
-    // If already camouflaged, re-scan
+    // If already camouflaged, re-scan (and recreate shell)
     if (camoState === 'camouflaged') {
       console.log('[Camper] Re-scanning while camouflaged')
+      clearDisguiseShell()
     }
     
     // Start the sequence
@@ -731,6 +1110,17 @@ export default {
     // Scan environment and set target color
     targetColor = scanEnvironment(player.position)
     
+    // Detect terrain type from sampled entities
+    const configType = CAMPER_CONFIG.disguiseShell.type
+    if (configType === 'auto') {
+      detectedTerrainType = detectTerrainType(lastSampledEntities)
+    } else {
+      detectedTerrainType = configType
+    }
+    
+    // Create disguise shell with sampled color
+    createDisguiseShell(player, targetColor, detectedTerrainType)
+    
     // Store position for movement tracking
     storePosition(player)
     
@@ -740,6 +1130,7 @@ export default {
     console.log(`[Camper] Tap activated - starting camo sequence`)
     console.log(`[Camper] Found ${lastSampledEntities.length} meshes, ${lastSampledColors.length} colors`)
     console.log(`[Camper] Target color: #${targetColor.getHexString()}`)
+    console.log(`[Camper] Terrain type: ${detectedTerrainType}`)
   },
   
   // For one-tap, we don't use onDeactivate for the main logic
@@ -764,6 +1155,9 @@ export default {
         // Fade in visualization
         vizOpacity = Math.min(1, vizOpacity + delta * CAMPER_CONFIG.vizFadeInSpeed)
         updateVizOpacity()
+        
+        // Fade in disguise shell
+        updateDisguiseShellOpacity(vizOpacity)
         
         // Transition color towards camo
         if (targetColor && currentBlend < 1) {
@@ -834,9 +1228,12 @@ export default {
           }
         }
         
-        // Fade out camouflage color if not camouflaged
+        // Fade out camouflage color and shell if not camouflaged
         if (!isCamouflaged && currentBlend > 0) {
           currentBlend = Math.max(0, currentBlend - delta * CAMPER_CONFIG.transitionSpeed)
+          
+          // Fade out shell with color
+          updateDisguiseShellOpacity(currentBlend)
           
           if (targetColor) {
             applyColorToPlayer(player, targetColor, currentBlend)
@@ -844,6 +1241,7 @@ export default {
           
           if (currentBlend <= 0) {
             restoreOriginalColors(player)
+            clearDisguiseShell()
             targetColor = null
             lastSampledEntities = []
           }
@@ -879,6 +1277,13 @@ export function debugCamper() {
   if (lastSampledColors.length > 0) {
     console.log('Colors:', lastSampledColors.slice(0, 5).map(c => '#' + c).join(', '))
   }
+  console.log('')
+  console.log('Disguise Shell:')
+  console.log('  Enabled:', CAMPER_CONFIG.disguiseShell.enabled)
+  console.log('  Type:', CAMPER_CONFIG.disguiseShell.type)
+  console.log('  Detected Terrain:', detectedTerrainType || 'none')
+  console.log('  Shell Active:', disguiseShellGroup !== null)
+  console.log('  Piece Count:', disguiseShellGroup ? disguiseShellGroup.children.length : 0)
   console.groupEnd()
 }
 
@@ -896,6 +1301,12 @@ export function getCamperState() {
     targetColor: targetColor ? `#${targetColor.getHexString()}` : null,
     sampledMeshCount: lastSampledEntities.length,
     sampledColorCount: lastSampledColors.length,
+    disguiseShell: {
+      enabled: CAMPER_CONFIG.disguiseShell.enabled,
+      active: disguiseShellGroup !== null,
+      terrainType: detectedTerrainType,
+      pieceCount: disguiseShellGroup ? disguiseShellGroup.children.length : 0,
+    },
   }
 }
 
