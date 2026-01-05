@@ -17,6 +17,7 @@ let chatInput = null
 // Minimap settings
 const MINIMAP_SIZE = 160
 const MINIMAP_RANGE = 200 // World units to display
+let minimapFontSize = 9 // Base font size for compass text
 
 // Sonar sweep
 let sonarAngle = 0
@@ -78,6 +79,21 @@ function createStyles() {
       display: flex;
       align-items: center;
       gap: 6px;
+    }
+    
+    .hud-title-controls .font-btn {
+      opacity: 0.5;
+      font-size: 12px;
+      font-weight: bold;
+      cursor: pointer;
+      transition: opacity 0.2s;
+      line-height: 1;
+      padding: 0 2px;
+      user-select: none;
+    }
+    
+    .hud-title-controls .font-btn:hover {
+      opacity: 1;
     }
     
     .hud-title-controls .grip {
@@ -254,7 +270,7 @@ function createStyles() {
       flex: 1;
       overflow-y: auto;
       padding: 8px;
-      font-size: 11px;
+      font-size: var(--chat-font-size, 11px);
     }
     
     #chat-messages::-webkit-scrollbar {
@@ -286,7 +302,7 @@ function createStyles() {
     
     .chat-message .timestamp {
       color: rgba(0, 255, 200, 0.4);
-      font-size: 9px;
+      font-size: 0.82em;
       margin-right: 4px;
     }
     
@@ -302,7 +318,7 @@ function createStyles() {
       border-radius: 2px;
       color: #00ffc8;
       font-family: inherit;
-      font-size: 11px;
+      font-size: var(--chat-font-size, 11px);
       padding: 4px 6px;
       outline: none;
       box-sizing: border-box;
@@ -399,10 +415,37 @@ function makeResizable(panel, onResize, corner = 'bottom-right') {
     isResizing = true
     panel.classList.add('resizing')
     
+    const rect = panel.getBoundingClientRect()
     startX = e.clientX
     startY = e.clientY
-    startWidth = panel.offsetWidth
-    startHeight = panel.offsetHeight
+    startWidth = rect.width
+    startHeight = rect.height
+    
+    // Normalize positioning based on which corner is the resize handle
+    // The opposite corner should stay anchored
+    if (corner === 'bottom-left') {
+      // Handle at bottom-left, anchor top-right
+      panel.style.left = 'auto'
+      panel.style.bottom = 'auto'
+      panel.style.right = (window.innerWidth - rect.right) + 'px'
+      panel.style.top = rect.top + 'px'
+    } else if (corner === 'top-left') {
+      // Handle at top-left, anchor bottom-right
+      panel.style.left = 'auto'
+      panel.style.top = 'auto'
+      panel.style.right = (window.innerWidth - rect.right) + 'px'
+      panel.style.bottom = (window.innerHeight - rect.bottom) + 'px'
+    } else {
+      // Default bottom-right: anchor top-left
+      panel.style.right = 'auto'
+      panel.style.bottom = 'auto'
+      panel.style.left = rect.left + 'px'
+      panel.style.top = rect.top + 'px'
+    }
+    
+    // Set explicit dimensions
+    panel.style.width = startWidth + 'px'
+    panel.style.height = startHeight + 'px'
     
     e.preventDefault()
     e.stopPropagation()
@@ -457,15 +500,63 @@ function makeCollapsible(panel) {
   })
 }
 
+function makeFontResizable(panel) {
+  const decreaseBtn = panel.querySelector('.font-decrease')
+  const increaseBtn = panel.querySelector('.font-increase')
+  if (!decreaseBtn || !increaseBtn) return
+  
+  // Get the content area (not the title)
+  const content = panel.querySelector('.hud-collapsible') || panel
+  
+  // Check panel type
+  const isMinimap = panel.id === 'minimap-container'
+  const isChat = panel.id === 'chat-panel'
+  
+  // Track current font size based on panel type
+  let currentSize = isMinimap ? 9 : (isChat ? 11 : 12)
+  const minSize = isMinimap ? 6 : 8
+  const maxSize = isMinimap ? 16 : 20
+  const step = 1
+  
+  const updateFontSizes = () => {
+    if (isMinimap) {
+      // Update the module-level variable used by canvas drawing
+      minimapFontSize = currentSize
+    } else if (isChat) {
+      // Use CSS custom property for chat (handles dynamic content)
+      panel.style.setProperty('--chat-font-size', currentSize + 'px')
+    } else {
+      // Standard font-size for other panels
+      content.style.fontSize = currentSize + 'px'
+    }
+  }
+  
+  decreaseBtn.addEventListener('click', (e) => {
+    e.stopPropagation()
+    if (currentSize > minSize) {
+      currentSize -= step
+      updateFontSizes()
+    }
+  })
+  
+  increaseBtn.addEventListener('click', (e) => {
+    e.stopPropagation()
+    if (currentSize < maxSize) {
+      currentSize += step
+      updateFontSizes()
+    }
+  })
+}
+
 function createFPSCounter() {
   stats = new Stats()
   stats.showPanel(0)
   
-  // Position flush in lower left corner (no margin)
+  // Position in lower left corner with margin matching other panels
   stats.dom.style.position = 'absolute'
-  stats.dom.style.left = '0px'
+  stats.dom.style.left = '10px'
   stats.dom.style.top = 'auto'
-  stats.dom.style.bottom = '0px'
+  stats.dom.style.bottom = '10px'
   
   document.body.appendChild(stats.dom)
 }
@@ -477,7 +568,7 @@ function createMinimap() {
   
   const title = document.createElement('div')
   title.className = 'hud-title'
-  title.innerHTML = '<span>Map</span><span class="hud-title-controls"><span class="collapse-btn">v</span><span class="grip">::</span></span>'
+  title.innerHTML = '<span>Map</span><span class="hud-title-controls"><span class="font-btn font-decrease">−</span><span class="font-btn font-increase">+</span><span class="collapse-btn">v</span><span class="grip">::</span></span>'
   
   const collapsible = document.createElement('div')
   collapsible.className = 'hud-collapsible'
@@ -498,7 +589,7 @@ function createMinimap() {
   
   minimapCtx = minimapCanvas.getContext('2d')
   
-  // Make draggable, resizable, and collapsible
+  // Make draggable, resizable, collapsible, and font-resizable
   makeDraggable(minimapContainer)
   makeResizable(minimapContainer, (width, height) => {
     // Resize canvas to match panel (minus title bar height)
@@ -512,6 +603,7 @@ function createMinimap() {
     }
   }, 'top-left')
   makeCollapsible(minimapContainer)
+  makeFontResizable(minimapContainer)
 }
 
 function createInfoPanel() {
@@ -520,7 +612,7 @@ function createInfoPanel() {
   infoPanel.className = 'hud-panel'
   
   infoPanel.innerHTML = `
-    <div class="hud-title"><span>Info</span><span class="hud-title-controls"><span class="collapse-btn">v</span><span class="grip">::</span></span></div>
+    <div class="hud-title"><span>Info</span><span class="hud-title-controls"><span class="font-btn font-decrease">−</span><span class="font-btn font-increase">+</span><span class="collapse-btn">v</span><span class="grip">::</span></span></div>
     <div class="hud-collapsible">
       <div class="info-content">
         <div class="info-row">
@@ -554,10 +646,11 @@ function createInfoPanel() {
   
   document.body.appendChild(infoPanel)
   
-  // Make draggable, resizable, and collapsible
+  // Make draggable, resizable, collapsible, and font-resizable
   makeDraggable(infoPanel)
   makeResizable(infoPanel, null, 'bottom-left')
   makeCollapsible(infoPanel)
+  makeFontResizable(infoPanel)
 }
 
 function createChatPanel() {
@@ -566,7 +659,7 @@ function createChatPanel() {
   chatPanel.className = 'hud-panel'
   
   chatPanel.innerHTML = `
-    <div class="hud-title"><span>Chat</span><span class="hud-title-controls"><span class="collapse-btn">v</span><span class="grip">::</span></span></div>
+    <div class="hud-title"><span>Chat</span><span class="hud-title-controls"><span class="font-btn font-decrease">−</span><span class="font-btn font-increase">+</span><span class="collapse-btn">v</span><span class="grip">::</span></span></div>
     <div class="hud-collapsible">
       <div id="chat-messages"></div>
       <div id="chat-input-container">
@@ -600,10 +693,11 @@ function createChatPanel() {
   // Welcome message
   addChatMessage('Welcome to the ocean!', 'system')
   
-  // Make draggable, resizable, and collapsible
+  // Make draggable, resizable, collapsible, and font-resizable
   makeDraggable(chatPanel)
   makeResizable(chatPanel)
   makeCollapsible(chatPanel)
+  makeFontResizable(chatPanel)
 }
 
 export function addChatMessage(text, type = 'player') {
@@ -883,7 +977,7 @@ function updateMinimap() {
   // ==========================================================================
   const compassRadius = radarRadius + 9 // Position outside the radar circle
   ctx.fillStyle = 'rgba(0, 255, 200, 0.6)'
-  ctx.font = 'bold 9px monospace'
+  ctx.font = 'bold ' + minimapFontSize + 'px monospace'
   ctx.textAlign = 'center'
   ctx.textBaseline = 'middle'
   
