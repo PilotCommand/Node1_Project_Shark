@@ -22,6 +22,9 @@ const MINIMAP_RANGE = 200 // World units to display
 let sonarAngle = 0
 const SONAR_SPEED = 0.5 // Radians per second
 
+// Track last ping time for NPCs (keyed by NPC id or mesh uuid)
+const npcPingTimes = new Map()
+
 // Chat message history
 const chatHistory = []
 const MAX_CHAT_MESSAGES = 50
@@ -709,6 +712,9 @@ function updateMinimap() {
   // DRAW NEARBY NPCs (with sonar ping fade effect)
   // ==========================================================================
   const nearbyNPCs = FishAdder.getNearbyNPCs(playerPos, MINIMAP_RANGE)
+  const currentTime = performance.now()
+  const fullRotationTime = (Math.PI * 2) / SONAR_SPEED * 1000 // ms for full rotation
+  
   if (nearbyNPCs) {
     for (const npc of nearbyNPCs) {
       if (!npc.mesh) continue
@@ -726,15 +732,39 @@ function updateMinimap() {
       // Calculate NPC angle from center (matching sonar coordinate system)
       const npcAngle = Math.atan2(-relZ, relX)
       
-      // Calculate how long ago (in radians) the sonar passed over this NPC
-      // For clockwise rotation: time since ping = npcAngle - sonarAngle (normalized to 0-2π)
-      let angleSincePing = npcAngle - sonarAngle
-      while (angleSincePing < 0) angleSincePing += Math.PI * 2
-      while (angleSincePing > Math.PI * 2) angleSincePing -= Math.PI * 2
+      // Check if sonar is currently passing over this NPC (within small window)
+      let angleDiff = sonarAngle - npcAngle
+      while (angleDiff < -Math.PI) angleDiff += Math.PI * 2
+      while (angleDiff > Math.PI) angleDiff -= Math.PI * 2
       
-      // Fade based on time since ping (0 = just pinged = bright, 2π = about to ping = almost invisible)
-      const fadeRatio = 1 - (angleSincePing / (Math.PI * 2))
-      const pingAlpha = 0.2 + fadeRatio * 0.7 // Range from 0.2 (faded) to 0.9 (fresh ping)
+      const npcId = npc.mesh.uuid
+      const pingWindow = 0.15 // Radians - how close sonar needs to be to "ping"
+      
+      // If sonar is passing over this NPC right now, record the ping
+      if (Math.abs(angleDiff) < pingWindow) {
+        npcPingTimes.set(npcId, currentTime)
+      }
+      
+      // Check if this NPC has been pinged
+      const lastPingTime = npcPingTimes.get(npcId)
+      if (!lastPingTime) continue // Never pinged, don't show
+      
+      // Calculate time since ping
+      const timeSincePing = currentTime - lastPingTime
+      
+      // Fade out over 85% of rotation time, then invisible
+      const fadeTime = fullRotationTime * 0.85
+      if (timeSincePing > fadeTime) {
+        npcPingTimes.delete(npcId) // Clear old ping
+        continue // Faded out
+      }
+      
+      // Fade based on time since ping
+      const fadeRatio = 1 - (timeSincePing / fadeTime)
+      const pingAlpha = fadeRatio * 0.9 // Range from 0 to 0.9
+      
+      // Skip if fully faded
+      if (pingAlpha < 0.05) continue
       
       // Color based on size relative to player (green = smaller, red = larger)
       const playerVol = Feeding.getPlayerVisualVolume()
@@ -757,6 +787,13 @@ function updateMinimap() {
       ctx.beginPath()
       ctx.arc(screenX, screenZ, dotSize, 0, Math.PI * 2)
       ctx.fill()
+    }
+  }
+  
+  // Clean up ping times for NPCs no longer in range
+  for (const [npcId, pingTime] of npcPingTimes) {
+    if (currentTime - pingTime > fullRotationTime) {
+      npcPingTimes.delete(npcId)
     }
   }
   
