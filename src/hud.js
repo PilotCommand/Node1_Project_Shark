@@ -691,29 +691,29 @@ function updateMinimap() {
   
   // ==========================================================================
   // DRAW SONAR SWEEP (rotating dial with fading trail)
-  // OPTIMIZED: Single gradient arc replaces 20 individual line draws
   // ==========================================================================
   sonarAngle -= SONAR_SPEED * 0.016 // Clockwise rotation (~60fps delta time)
   if (sonarAngle < 0) sonarAngle += Math.PI * 2
   
-  // Draw fading trail as a single gradient-filled arc (replaces 20 individual lines)
+  // Draw fading trail (gradient arc behind the sweep line)
   const trailLength = Math.PI * 0.4 // ~72 degrees of trail
-  const trailStartAngle = -sonarAngle // Canvas uses clockwise angles, negate for our coord system
-  const trailEndAngle = -(sonarAngle + trailLength)
+  const trailSteps = 20
   
-  // Create conic gradient for the sweep trail
-  const gradient = ctx.createConicGradient(trailStartAngle, halfSize, halfSize)
-  // Trail fades from 0.15 alpha at sweep line to 0 at end
-  gradient.addColorStop(0, 'rgba(0, 255, 200, 0.15)')
-  gradient.addColorStop(trailLength / (Math.PI * 2), 'rgba(0, 255, 200, 0)')
-  gradient.addColorStop(1, 'rgba(0, 255, 200, 0)') // Rest is transparent
-  
-  ctx.fillStyle = gradient
-  ctx.beginPath()
-  ctx.moveTo(halfSize, halfSize)
-  ctx.arc(halfSize, halfSize, radarRadius, trailStartAngle, trailEndAngle, true)
-  ctx.closePath()
-  ctx.fill()
+  for (let i = 0; i < trailSteps; i++) {
+    const t = i / trailSteps
+    const angle = sonarAngle + t * trailLength // Trail behind (clockwise = positive direction is behind)
+    const alpha = (1 - t) * 0.15 // Fade from 0.15 to 0
+    
+    ctx.strokeStyle = 'rgba(0, 255, 200, ' + alpha.toFixed(3) + ')'
+    ctx.lineWidth = 1
+    ctx.beginPath()
+    ctx.moveTo(halfSize, halfSize)
+    ctx.lineTo(
+      halfSize + Math.cos(angle) * radarRadius,
+      halfSize - Math.sin(angle) * radarRadius
+    )
+    ctx.stroke()
+  }
   
   // Draw main sweep line
   ctx.strokeStyle = 'rgba(0, 255, 200, 0.6)'
