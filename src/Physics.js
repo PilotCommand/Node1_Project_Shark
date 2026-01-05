@@ -99,6 +99,20 @@ let physicsReady = false
 // Collision callbacks (for feeding system, etc.)
 const collisionCallbacks = []
 
+// Scene reference for debug visualization
+let sceneRef = null
+
+// Static collider debug wireframe visibility
+let staticWireframeVisible = false
+
+// Debug wireframe config
+const DEBUG_WIREFRAME = {
+  color: 0x00ff00,      // Green to match terrain wireframe
+  opacity: 0.6,
+  depthTest: true,
+  depthWrite: false,
+}
+
 // ============================================================================
 // INITIALIZATION
 // ============================================================================
@@ -164,6 +178,14 @@ export function isPhysicsReady() {
 export function setPhysicsEnabled(enabled) {
   physicsEnabled = enabled
   console.log(`[Physics] ${enabled ? 'Enabled' : 'Disabled'}`)
+}
+
+/**
+ * Set the scene reference for debug visualization
+ * @param {THREE.Scene} scene
+ */
+export function setPhysicsScene(scene) {
+  sceneRef = scene
 }
 
 // ============================================================================
@@ -234,6 +256,317 @@ export function removeTerrainCollider() {
 }
 
 // ============================================================================
+// STATIC COLLIDERS (Player-placed structures, decorations)
+// ============================================================================
+
+// Storage for static colliders (prisms, camps, etc.)
+const staticColliders = new Map()  // id -> { collider, mesh, debugMesh }
+
+/**
+ * Create a static convex hull collider from mesh geometry
+ * Good for simple shapes like prisms, boxes, etc.
+ * 
+ * @param {string} id - Unique identifier for this collider
+ * @param {THREE.Mesh} mesh - The mesh to create a collider for
+ * @param {object} [options] - Optional configuration
+ * @param {number} [options.friction=0.5] - Surface friction
+ * @param {number} [options.restitution=0.1] - Bounciness
+ * @returns {object|null} - { collider } or null if failed
+ */
+export function createStaticCollider(id, mesh, options = {}) {
+  if (!physicsReady) {
+    console.warn('[Physics] Not initialized - call initPhysics() first')
+    return null
+  }
+  
+  if (staticColliders.has(id)) {
+    console.warn(`[Physics] Static collider '${id}' already exists, removing old one`)
+    removeStaticCollider(id)
+  }
+  
+  const friction = options.friction ?? 0.5
+  const restitution = options.restitution ?? 0.1
+  
+  try {
+    // Extract vertices from the mesh geometry
+    const geometry = mesh.geometry
+    if (!geometry) {
+      console.warn(`[Physics] Mesh has no geometry`)
+      return null
+    }
+    
+    // Get position attribute
+    const posAttr = geometry.getAttribute('position')
+    if (!posAttr) {
+      console.warn(`[Physics] Geometry has no position attribute`)
+      return null
+    }
+    
+    // Transform vertices to world space
+    mesh.updateMatrixWorld(true)
+    const vertices = new Float32Array(posAttr.count * 3)
+    const vertex = new THREE.Vector3()
+    
+    for (let i = 0; i < posAttr.count; i++) {
+      vertex.fromBufferAttribute(posAttr, i)
+      vertex.applyMatrix4(mesh.matrixWorld)
+      vertices[i * 3] = vertex.x
+      vertices[i * 3 + 1] = vertex.y
+      vertices[i * 3 + 2] = vertex.z
+    }
+    
+    // Create convex hull collider
+    const colliderDesc = RAPIER.ColliderDesc.convexHull(vertices)
+    if (!colliderDesc) {
+      console.warn(`[Physics] Failed to create convex hull for '${id}'`)
+      return null
+    }
+    
+    colliderDesc
+      .setFriction(friction)
+      .setRestitution(restitution)
+      .setCollisionGroups(createCollisionGroups(CONFIG.groups.TERRAIN, 0xFFFF))
+    
+    const collider = world.createCollider(colliderDesc)
+    
+    // Create debug wireframe mesh
+    let debugMesh = null
+    if (sceneRef) {
+      debugMesh = createDebugWireframe(mesh.geometry, mesh.matrixWorld)
+      if (debugMesh) {
+        debugMesh.visible = staticWireframeVisible
+        debugMesh.name = `physics-debug-${id}`
+        sceneRef.add(debugMesh)
+      }
+    }
+    
+    // Store reference
+    const entry = { 
+      collider, 
+      mesh,
+      debugMesh,
+    }
+    staticColliders.set(id, entry)
+    
+    if (CONFIG.debug) {
+      console.log(`[Physics] Created static collider: ${id}${debugMesh ? ' (with debug wireframe)' : ''}`)
+    }
+    
+    return { collider }
+  } catch (error) {
+    console.error(`[Physics] Failed to create static collider '${id}':`, error)
+    return null
+  }
+}
+
+/**
+ * Create a debug wireframe mesh from geometry
+ * @param {THREE.BufferGeometry} geometry - Source geometry
+ * @param {THREE.Matrix4} worldMatrix - Transform matrix
+ * @returns {THREE.LineSegments|null}
+ */
+function createDebugWireframe(geometry, worldMatrix) {
+  try {
+    // Clone and transform geometry to world space
+    const clonedGeometry = geometry.clone()
+    clonedGeometry.applyMatrix4(worldMatrix)
+    
+    // Create wireframe from the geometry
+    const wireframeGeometry = new THREE.WireframeGeometry(clonedGeometry)
+    const wireframeMaterial = new THREE.LineBasicMaterial({
+      color: DEBUG_WIREFRAME.color,
+      transparent: true,
+      opacity: DEBUG_WIREFRAME.opacity,
+      depthTest: DEBUG_WIREFRAME.depthTest,
+      depthWrite: DEBUG_WIREFRAME.depthWrite,
+    })
+    
+    const wireframe = new THREE.LineSegments(wireframeGeometry, wireframeMaterial)
+    wireframe.renderOrder = 999  // Render on top
+    
+    // Clean up cloned geometry
+    clonedGeometry.dispose()
+    
+    return wireframe
+  } catch (error) {
+    console.warn('[Physics] Failed to create debug wireframe:', error)
+    return null
+  }
+}
+
+/**
+ * Create a static trimesh collider from mesh geometry
+ * Better for complex shapes with concave surfaces
+ * 
+ * @param {string} id - Unique identifier
+ * @param {THREE.Mesh} mesh - The mesh
+ * @param {object} [options] - Configuration
+ * @returns {object|null}
+ */
+export function createStaticTrimeshCollider(id, mesh, options = {}) {
+  if (!physicsReady) {
+    console.warn('[Physics] Not initialized')
+    return null
+  }
+  
+  if (staticColliders.has(id)) {
+    removeStaticCollider(id)
+  }
+  
+  const friction = options.friction ?? 0.5
+  const restitution = options.restitution ?? 0.1
+  
+  try {
+    const geometry = mesh.geometry
+    const posAttr = geometry.getAttribute('position')
+    const indexAttr = geometry.getIndex()
+    
+    if (!posAttr) {
+      console.warn(`[Physics] Geometry has no position attribute`)
+      return null
+    }
+    
+    // Transform vertices to world space
+    mesh.updateMatrixWorld(true)
+    const vertices = new Float32Array(posAttr.count * 3)
+    const vertex = new THREE.Vector3()
+    
+    for (let i = 0; i < posAttr.count; i++) {
+      vertex.fromBufferAttribute(posAttr, i)
+      vertex.applyMatrix4(mesh.matrixWorld)
+      vertices[i * 3] = vertex.x
+      vertices[i * 3 + 1] = vertex.y
+      vertices[i * 3 + 2] = vertex.z
+    }
+    
+    // Get or generate indices
+    let indices
+    if (indexAttr) {
+      indices = new Uint32Array(indexAttr.array)
+    } else {
+      // Generate indices for non-indexed geometry
+      indices = new Uint32Array(posAttr.count)
+      for (let i = 0; i < posAttr.count; i++) {
+        indices[i] = i
+      }
+    }
+    
+    const colliderDesc = RAPIER.ColliderDesc.trimesh(vertices, indices)
+      .setFriction(friction)
+      .setRestitution(restitution)
+      .setCollisionGroups(createCollisionGroups(CONFIG.groups.TERRAIN, 0xFFFF))
+    
+    const collider = world.createCollider(colliderDesc)
+    
+    staticColliders.set(id, { collider, mesh, debugMesh: null })
+    
+    if (CONFIG.debug) {
+      console.log(`[Physics] Created static trimesh collider: ${id}`)
+    }
+    
+    return { collider }
+  } catch (error) {
+    console.error(`[Physics] Failed to create trimesh collider '${id}':`, error)
+    return null
+  }
+}
+
+/**
+ * Remove a static collider
+ * @param {string} id
+ * @returns {boolean} Success
+ */
+export function removeStaticCollider(id) {
+  const entry = staticColliders.get(id)
+  if (!entry) {
+    return false
+  }
+  
+  if (entry.collider) {
+    world.removeCollider(entry.collider, true)
+  }
+  
+  // Remove debug mesh if exists
+  if (entry.debugMesh && entry.debugMesh.parent) {
+    entry.debugMesh.parent.remove(entry.debugMesh)
+    entry.debugMesh.geometry?.dispose()
+    entry.debugMesh.material?.dispose()
+  }
+  
+  staticColliders.delete(id)
+  
+  if (CONFIG.debug) {
+    console.log(`[Physics] Removed static collider: ${id}`)
+  }
+  
+  return true
+}
+
+/**
+ * Get a static collider by ID
+ * @param {string} id
+ * @returns {object|null}
+ */
+export function getStaticCollider(id) {
+  return staticColliders.get(id) || null
+}
+
+/**
+ * Get all static collider IDs
+ * @returns {string[]}
+ */
+export function getStaticColliderIds() {
+  return Array.from(staticColliders.keys())
+}
+
+/**
+ * Get count of static colliders
+ * @returns {number}
+ */
+export function getStaticColliderCount() {
+  return staticColliders.size
+}
+
+/**
+ * Toggle static collider debug wireframe visibility
+ * @returns {boolean} New visibility state
+ */
+export function toggleStaticColliderWireframe() {
+  staticWireframeVisible = !staticWireframeVisible
+  
+  for (const [id, entry] of staticColliders) {
+    if (entry.debugMesh) {
+      entry.debugMesh.visible = staticWireframeVisible
+    }
+  }
+  
+  console.log(`[Physics] Static collider wireframes: ${staticWireframeVisible ? 'ON' : 'OFF'} (${staticColliders.size} colliders)`)
+  return staticWireframeVisible
+}
+
+/**
+ * Set static collider debug wireframe visibility explicitly
+ * @param {boolean} visible
+ */
+export function setStaticColliderWireframeVisible(visible) {
+  staticWireframeVisible = visible
+  
+  for (const [id, entry] of staticColliders) {
+    if (entry.debugMesh) {
+      entry.debugMesh.visible = staticWireframeVisible
+    }
+  }
+}
+
+/**
+ * Check if static collider wireframes are currently visible
+ * @returns {boolean}
+ */
+export function isStaticColliderWireframeVisible() {
+  return staticWireframeVisible
+}
+
+// ============================================================================
 // CREATURE PHYSICS (Player + NPCs)
 // ============================================================================
 
@@ -291,7 +624,7 @@ export function createPlayerBody(overrideCapsuleParams = null) {
       .setMass(CONFIG.player.mass)
       .setCollisionGroups(createCollisionGroups(CONFIG.groups.PLAYER, CONFIG.groups.TERRAIN | CONFIG.groups.NPC))
       // Rotate capsule to align with Z axis (fish forward direction)
-      .setRotation({ x: 0.7071068, y: 0, z: 0, w: 0.7071068 })  // 90Â° around X
+      .setRotation({ x: 0.7071068, y: 0, z: 0, w: 0.7071068 })  // 90Ã‚Â° around X
       // Enable collision events for debugging
       .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS)
     
@@ -446,7 +779,7 @@ export function updatePhysics(delta) {
 
 /**
  * Sync rigid body rotation to match mesh rotation
- * For player: combines mesh rotation with capsule's initial 90Ã‚Â° X offset
+ * For player: combines mesh rotation with capsule's initial 90Ãƒâ€šÃ‚Â° X offset
  */
 function syncBodyRotation(body, mesh, isPlayer) {
   // Get mesh rotation as quaternion
@@ -454,7 +787,7 @@ function syncBodyRotation(body, mesh, isPlayer) {
   meshQuat.setFromEuler(mesh.rotation)
   
   if (isPlayer) {
-    // Player capsule has a 90Ã‚Â° X rotation offset (capsule aligned to Z axis)
+    // Player capsule has a 90Ãƒâ€šÃ‚Â° X rotation offset (capsule aligned to Z axis)
     // We need to combine: meshRotation * capsuleOffset
     const capsuleOffset = new THREE.Quaternion()
     capsuleOffset.setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2)
@@ -786,7 +1119,16 @@ export function debugPhysics() {
   console.group('[Physics] Debug Info')
   console.log(`Enabled: ${physicsEnabled}`)
   console.log(`Terrain colliders: ${terrainBodies.size}`)
+  console.log(`Static colliders: ${staticColliders.size}`)
   console.log(`Creature bodies: ${creatureBodies.size}`)
+  
+  if (staticColliders.size > 0) {
+    console.group('Static Colliders')
+    for (const [id, entry] of staticColliders) {
+      console.log(`  - ${id}`)
+    }
+    console.groupEnd()
+  }
   
   if (playerBody) {
     const pos = playerBody.translation()
@@ -840,6 +1182,11 @@ export function disposePhysics() {
     removeCreatureBody(id)
   }
   
+  // Remove all static colliders
+  for (const [id] of staticColliders) {
+    removeStaticCollider(id)
+  }
+  
   // Remove terrain
   removeTerrainCollider()
   
@@ -863,11 +1210,23 @@ export default {
   initPhysics,
   isPhysicsReady,
   setPhysicsEnabled,
+  setPhysicsScene,
   disposePhysics,
   
   // Terrain
   buildTerrainCollider,
   removeTerrainCollider,
+  
+  // Static colliders (player-placed structures)
+  createStaticCollider,
+  createStaticTrimeshCollider,
+  removeStaticCollider,
+  getStaticCollider,
+  getStaticColliderIds,
+  getStaticColliderCount,
+  toggleStaticColliderWireframe,
+  setStaticColliderWireframeVisible,
+  isStaticColliderWireframeVisible,
   
   // Creatures
   createPlayerBody,

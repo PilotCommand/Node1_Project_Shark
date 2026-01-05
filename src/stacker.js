@@ -2,15 +2,16 @@
  * stacker.js - Stacker Ability
  * 
  * Build pentagonal prisms by:
- * 1. Press Q → Activate aiming mode (shows ray pointer with pentagon)
- * 2. Press Q → Select start point on a surface
- * 3. Press Q → Finalize and place the prism
+ * 1. Press Q â†’ Activate aiming mode (shows ray pointer with pentagon)
+ * 2. Press Q â†’ Select start point on a surface
+ * 3. Press Q â†’ Finalize and place the prism
  */
 
 import * as THREE from 'three'
 import { getPlayer } from './player.js'
 import { camera } from './camera.js'
 import { MeshRegistry, Category, Tag } from './MeshRegistry.js'
+import { createStaticCollider, removeStaticCollider, isPhysicsReady } from './Physics.js'
 
 // ============================================================================
 // CONFIG - Edit these values to customize the stacker!
@@ -718,12 +719,27 @@ function finalizePrism() {
   finalPrism.userData.prismId = prismId
   placedPrisms.push(finalPrism)
   
+  // Create physics collider for the prism
+  let physicsBody = null
+  if (isPhysicsReady()) {
+    const colliderResult = createStaticCollider(prismId, finalPrism, {
+      friction: 0.6,
+      restitution: 0.1,
+    })
+    if (colliderResult) {
+      physicsBody = colliderResult.collider
+      console.log(`[Stacker] Created physics collider for prism: ${prismId}`)
+    } else {
+      console.warn(`[Stacker] Failed to create physics collider for prism: ${prismId}`)
+    }
+  }
+  
   // Register in MeshRegistry
   MeshRegistry.register(prismId, {
     mesh: finalPrism,
-    body: null,
+    body: physicsBody,
     category: Category.DECOR,
-    tags: [Tag.COLLIDABLE],
+    tags: [Tag.COLLIDABLE, Tag.STATIC],
     metadata: {
       type: 'pentagonal-prism',
       start: startPoint.clone(),
@@ -732,10 +748,11 @@ function finalizePrism() {
       color: finalColor.getHex(),
       roughness: finalRoughness,
       metalness: finalMetalness,
+      hasPhysics: !!physicsBody,
     }
   })
   
-  console.log(`[Stacker] Placed prism: ${length.toFixed(2)} units, color #${finalColor.getHexString()} (${placedPrisms.length}/${CONFIG.maxPrisms})`)
+  console.log(`[Stacker] Placed prism: ${length.toFixed(2)} units, color #${finalColor.getHexString()} (${placedPrisms.length}/${CONFIG.maxPrisms})${physicsBody ? ' [SOLID]' : ' [NO PHYSICS]'}`)
   
   return finalPrism
 }
@@ -747,10 +764,16 @@ function removeOldestPrism() {
   if (placedPrisms.length === 0) return
   
   const oldest = placedPrisms.shift()
+  const prismId = oldest.userData.prismId
+  
+  // Remove physics collider first
+  if (prismId) {
+    removeStaticCollider(prismId)
+  }
   
   // Unregister from MeshRegistry
-  if (oldest.userData.prismId) {
-    MeshRegistry.unregister(oldest.userData.prismId)
+  if (prismId) {
+    MeshRegistry.unregister(prismId)
   }
   
   // Remove from scene and dispose
@@ -930,9 +953,16 @@ export default {
 
 export function clearAllPrisms() {
   for (const prism of placedPrisms) {
+    const prismId = prism.userData.prismId
+    
+    // Remove physics collider
+    if (prismId) {
+      removeStaticCollider(prismId)
+    }
+    
     // Unregister from MeshRegistry
-    if (prism.userData.prismId) {
-      MeshRegistry.unregister(prism.userData.prismId)
+    if (prismId) {
+      MeshRegistry.unregister(prismId)
     }
     
     if (prism.parent) {
@@ -942,7 +972,7 @@ export function clearAllPrisms() {
     prism.material.dispose()
   }
   placedPrisms = []
-  console.log('[Stacker] Cleared all prisms')
+  console.log('[Stacker] Cleared all prisms (including physics)')
 }
 
 export function debugStacker() {
@@ -952,6 +982,7 @@ export function debugStacker() {
   console.log('State:', state)
   console.log('Start Point:', startPoint)
   console.log('Placed Prisms:', placedPrisms.length)
+  console.log('Physics Ready:', isPhysicsReady())
   console.log('Scene Ref:', !!sceneRef)
   console.log('Fish Scale:', fishScale.toFixed(2))
   console.log('Sampled Color:', sampledColor ? '#' + sampledColor.getHexString() : 'none')
@@ -959,14 +990,14 @@ export function debugStacker() {
   console.log('Sampled Metalness:', sampledMetalness)
   console.groupEnd()
   
-  console.group('[Stacker] Config (base → scaled)')
-  console.log('Range:', CONFIG.baseRayMaxDistance, '→', getRayMaxDistance().toFixed(1))
-  console.log('Prism Radius:', CONFIG.basePrismRadius, '→', getPrismRadius().toFixed(2))
-  console.log('Pentagon Radius:', CONFIG.basePentagonRadius, '→', getPentagonRadius().toFixed(2))
-  console.log('Max Prism Length:', CONFIG.baseMaxPrismLength, '→', getMaxPrismLength().toFixed(1))
+  console.group('[Stacker] Config (base â†’ scaled)')
+  console.log('Range:', CONFIG.baseRayMaxDistance, 'â†’', getRayMaxDistance().toFixed(1))
+  console.log('Prism Radius:', CONFIG.basePrismRadius, 'â†’', getPrismRadius().toFixed(2))
+  console.log('Pentagon Radius:', CONFIG.basePentagonRadius, 'â†’', getPentagonRadius().toFixed(2))
+  console.log('Max Prism Length:', CONFIG.baseMaxPrismLength, 'â†’', getMaxPrismLength().toFixed(1))
   console.log('Max Prisms:', CONFIG.maxPrisms)
   console.log('Color Blend Ratio:', CONFIG.colorBlendRatio, '(0=start, 1=end)')
-  console.log('Pentagon Offset:', CONFIG.pentagonSurfaceOffset, '→', getPentagonOffset().toFixed(2))
+  console.log('Pentagon Offset:', CONFIG.pentagonSurfaceOffset, 'â†’', getPentagonOffset().toFixed(2))
   console.log('Default Prism Color:', '0x' + CONFIG.prismFinalColor.toString(16))
   console.groupEnd()
 }

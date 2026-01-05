@@ -17,6 +17,8 @@ export const Category = {
   PROJECTILE: 'projectile',
   PICKUP: 'pickup',
   EFFECT: 'effect',
+  DECOR: 'decor',        // Player-placed decorations (stacker prisms, camps, etc.)
+  STRUCTURE: 'structure', // Larger player-built structures
 }
 
 // Tags - flexible, entities can have multiple

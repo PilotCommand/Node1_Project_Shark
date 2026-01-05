@@ -11,7 +11,7 @@
  *   T           - Increase scale
  *   G           - Mutate creature (new random of same type)
  *   N / B       - Next / Previous species
- *   Z           - Cycle variant (e.g., Yellowfin ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ Bluefin)
+ *   Z           - Cycle variant (e.g., Yellowfin ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ Bluefin)
  *   M           - New map
  *   P           - Toggle debug overlays (wireframes + volume labels)
  *   V           - Toggle debug viz (spawn grid + fish paths)
@@ -50,6 +50,7 @@ import {
   createPlayerBody,
   removeTerrainCollider,
   buildTerrainCollider,
+  toggleStaticColliderWireframe,
 } from './Physics.js'
 import {
   initSwimming,
@@ -221,7 +222,7 @@ export function initControls() {
         if (scaleDownResult) {
           rebuildPlayerPhysics()
           showNotification(
-            `Scale: ${scaleDownResult.scalePercent.toFixed(0)}% | Vol: ${scaleDownResult.volume.toFixed(2)} mÃƒâ€šÃ‚Â³`,
+            `Scale: ${scaleDownResult.scalePercent.toFixed(0)}% | Vol: ${scaleDownResult.volume.toFixed(2)} mÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³`,
             '#ff8888'
           )
         }
@@ -233,7 +234,7 @@ export function initControls() {
         if (scaleUpResult) {
           rebuildPlayerPhysics()
           showNotification(
-            `Scale: ${scaleUpResult.scalePercent.toFixed(0)}% | Vol: ${scaleUpResult.volume.toFixed(2)} mÃƒâ€šÃ‚Â³`,
+            `Scale: ${scaleUpResult.scalePercent.toFixed(0)}% | Vol: ${scaleUpResult.volume.toFixed(2)} mÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³`,
             '#88ff88'
           )
         }
@@ -277,7 +278,7 @@ export function initControls() {
         }
         break
       
-      // Z = Cycle variant (e.g., Yellowfin Tuna ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ Bluefin Tuna)
+      // Z = Cycle variant (e.g., Yellowfin Tuna ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ Bluefin Tuna)
       case 'KeyZ':
         const variantResult = cycleVariant()
         if (variantResult.hasVariants) {
@@ -301,6 +302,7 @@ export function initControls() {
       case 'KeyP':
         const wireframeOn = toggleWireframe()
         toggleTerrainWireframe()
+        toggleStaticColliderWireframe()
         FishAdder.toggleLabels()
         showNotification(
           `Debug overlays: ${wireframeOn ? 'ON' : 'OFF'}`,
