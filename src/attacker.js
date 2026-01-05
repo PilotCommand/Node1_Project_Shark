@@ -3,15 +3,13 @@
  * 
  * Hold Q to activate predator vision:
  *   - World fades to navy blue
- *   - Lighting dims
- *   - Creatures glow with threat colors:
+ *   - Fish become SOLID GLOWING colors visible at any distance:
  *     - RED: Can eat you (larger)
- *     - GREEN: You can eat (smaller)
+ *     - GREEN: You can eat (smaller)  
  *     - YELLOW: Similar size (risky)
- *   - Smooth fade in/out transitions
  * 
- * PERFORMANCE: Scene is only traversed ONCE on activation.
- * Updates iterate over cached references only.
+ * Fish are made fully emissive with fog disabled so they glow
+ * through any distance/fog/darkness.
  */
 
 import * as THREE from 'three'
@@ -25,48 +23,47 @@ import { MeshRegistry, Category } from './MeshRegistry.js'
 // ============================================================================
 
 const CONFIG = {
-  // Vision colors (matching radar convention from HUD)
+  // Threat colors - BRIGHT and SOLID
   colors: {
-    edible: new THREE.Color(0x00ff64),    // Green - you can eat it
-    danger: new THREE.Color(0xff5050),    // Red - it can eat you
-    similar: new THREE.Color(0xffff00),   // Yellow - similar size
+    edible: new THREE.Color(0x00ff00),    // Pure bright green
+    danger: new THREE.Color(0xff0000),    // Pure bright red  
+    similar: new THREE.Color(0xffff00),   // Pure bright yellow
   },
   
-  // Navy blue world tint
+  // Navy blue world
   world: {
-    targetColor: new THREE.Color(0x0a1628),  // Navy blue
-    colorMix: 0.7,                            // 70% navy, 30% original (darkened)
+    targetColor: new THREE.Color(0x0a1628),
+    colorMix: 0.7,
   },
   
-  // Volume thresholds (same as HUD radar)
+  // Volume thresholds
   volumeThresholds: {
-    edibleRatio: 0.8,   // NPC volume < player * 0.8 = edible
-    dangerRatio: 1.2,   // NPC volume > player * 1.2 = danger
+    edibleRatio: 0.8,
+    dangerRatio: 1.2,
   },
   
-  // Lighting in predator mode (multipliers of original)
+  // Lighting
   lighting: {
-    intensityMult: 0.15,  // Dim to 15% of original
+    intensityMult: 0.15,
   },
   
-  // Fog in predator mode
+  // Fog
   fog: {
-    color: new THREE.Color(0x0a1225),  // Navy fog
-    densityMult: 1.5,                   // Slightly thicker
+    color: new THREE.Color(0x0a1225),
+    densityMult: 1.5,
   },
   
-  // Creature glow
-  creatureEmissive: 0.5,
+  // NPC glow settings - make them REALLY visible through any fog
+  npc: {
+    emissiveIntensity: 5.0,  // Extremely strong glow to cut through fog
+  },
   
-  // Transition timing
+  // Transition
   fadeInSpeed: 2.5,
   fadeOutSpeed: 3.5,
   
-  // Detection range
-  detectionRange: 250,
-  
-  // NPC lookup refresh interval (seconds)
-  npcRefreshInterval: 0.25,
+  detectionRange: 500,  // Large range to catch all fish
+  npcRefreshInterval: 0.2,  // Check for new fish frequently
 }
 
 // ============================================================================
@@ -74,31 +71,25 @@ const CONFIG = {
 // ============================================================================
 
 let sceneRef = null
-
-// State: 'inactive' | 'fading_in' | 'active' | 'fading_out'
 let state = 'inactive'
 let blendValue = 0
 
-// Cached mesh data (populated once on activation)
-// meshUuid -> { mesh, originalColors: [{color, emissive, emissiveIntensity}], isNPC, npcVolume }
-const meshCache = new Map()
+// Cached world meshes: uuid -> { mesh, origColors: [{color, emissive, emissiveIntensity}] }
+const worldCache = new Map()
 
-// Cached light data
-// lightUuid -> { light, originalIntensity, originalColor, originalGroundColor }
+// Cached NPC meshes: uuid -> { mesh, origColors: [{color, emissive, emissiveIntensity, fog}], volume }
+const npcCache = new Map()
+
+// Cached lights: uuid -> { light, origIntensity, origColor, origGroundColor }
 const lightCache = new Map()
 
-// Original fog state
 let originalFog = null
-
-// NPC root meshes for volume lookup
-const npcRoots = new Map()  // meshUuid -> volume
-
-// Timer for NPC refresh
-let npcRefreshTimer = 0
-
-// Player reference (cached)
 let playerRef = null
 let playerVolume = 1
+let npcRefreshTimer = 0
+
+// NPC root mesh -> volume lookup
+const npcRoots = new Map()
 
 // ============================================================================
 // INITIALIZATION
@@ -113,15 +104,16 @@ export function init(scene) {
 // HELPERS
 // ============================================================================
 
+const _tempColor = new THREE.Color()
+
+function lerp(a, b, t) {
+  return a + (b - a) * t
+}
+
 function lerpColor(out, a, b, t) {
   out.r = a.r + (b.r - a.r) * t
   out.g = a.g + (b.g - a.g) * t
   out.b = a.b + (b.b - a.b) * t
-  return out
-}
-
-function lerp(a, b, t) {
-  return a + (b - a) * t
 }
 
 function isPlayerMesh(mesh) {
@@ -135,59 +127,51 @@ function isPlayerMesh(mesh) {
   return false
 }
 
-function getNavyBlendedColor(originalColor, tempColor) {
-  // Darken original first, then blend with navy
-  const darkened = tempColor.copy(originalColor).multiplyScalar(0.3)
-  // Mix with navy blue
-  darkened.r = darkened.r * (1 - CONFIG.world.colorMix) + CONFIG.world.targetColor.r * CONFIG.world.colorMix
-  darkened.g = darkened.g * (1 - CONFIG.world.colorMix) + CONFIG.world.targetColor.g * CONFIG.world.colorMix
-  darkened.b = darkened.b * (1 - CONFIG.world.colorMix) + CONFIG.world.targetColor.b * CONFIG.world.colorMix
-  return darkened
-}
-
 function getThreatColor(npcVol) {
-  const lowThreshold = playerVolume * CONFIG.volumeThresholds.edibleRatio
-  const highThreshold = playerVolume * CONFIG.volumeThresholds.dangerRatio
+  const low = playerVolume * CONFIG.volumeThresholds.edibleRatio
+  const high = playerVolume * CONFIG.volumeThresholds.dangerRatio
   
-  if (npcVol < lowThreshold) return CONFIG.colors.edible
-  if (npcVol > highThreshold) return CONFIG.colors.danger
+  if (npcVol < low) return CONFIG.colors.edible
+  if (npcVol > high) return CONFIG.colors.danger
   return CONFIG.colors.similar
 }
 
+function getNavyColor(original) {
+  const darkened = _tempColor.copy(original).multiplyScalar(0.3)
+  darkened.lerp(CONFIG.world.targetColor, CONFIG.world.colorMix)
+  return darkened
+}
+
 // ============================================================================
-// NPC LOOKUP (called periodically, not every frame)
+// NPC LOOKUP
 // ============================================================================
 
-function refreshNPCLookup() {
+function refreshNPCRoots() {
   npcRoots.clear()
   
   if (!playerRef) return
   
-  const nearbyNPCs = FishAdder.getNearbyNPCs(playerRef.position, CONFIG.detectionRange)
-  if (nearbyNPCs) {
-    for (let i = 0; i < nearbyNPCs.length; i++) {
-      const npc = nearbyNPCs[i]
+  const nearby = FishAdder.getNearbyNPCs(playerRef.position, CONFIG.detectionRange)
+  if (nearby) {
+    for (let i = 0; i < nearby.length; i++) {
+      const npc = nearby[i]
       if (npc.mesh) {
         npcRoots.set(npc.mesh.uuid, npc.visualVolume || 1)
       }
     }
   }
   
-  // Also MeshRegistry NPCs
   const regNPCs = MeshRegistry.getByCategory(Category.NPC)
   for (let i = 0; i < regNPCs.length; i++) {
-    const entity = regNPCs[i]
-    if (entity.mesh && !npcRoots.has(entity.mesh.uuid)) {
-      const vol = entity.metadata?.visualVolume || entity.metadata?.capsuleParams?.volume || 1
-      npcRoots.set(entity.mesh.uuid, vol)
+    const e = regNPCs[i]
+    if (e.mesh && !npcRoots.has(e.mesh.uuid)) {
+      npcRoots.set(e.mesh.uuid, e.metadata?.visualVolume || 1)
     }
   }
 }
 
 function getNPCVolume(mesh) {
-  // Check if this mesh or any parent is an NPC root
   if (npcRoots.has(mesh.uuid)) return npcRoots.get(mesh.uuid)
-  
   let p = mesh.parent
   while (p) {
     if (npcRoots.has(p.uuid)) return npcRoots.get(p.uuid)
@@ -197,11 +181,12 @@ function getNPCVolume(mesh) {
 }
 
 // ============================================================================
-// CACHE BUILDING (called ONCE on activation)
+// CACHE BUILDING (once on activation)
 // ============================================================================
 
 function buildCache() {
-  meshCache.clear()
+  worldCache.clear()
+  npcCache.clear()
   lightCache.clear()
   originalFog = null
   
@@ -209,9 +194,7 @@ function buildCache() {
   if (!playerRef) return
   
   playerVolume = Feeding.getPlayerVisualVolume()
-  
-  // Build NPC lookup first
-  refreshNPCLookup()
+  refreshNPCRoots()
   
   // Store fog
   if (sceneRef.fog) {
@@ -221,15 +204,15 @@ function buildCache() {
     }
   }
   
-  // Single scene traversal
+  // Single traversal
   sceneRef.traverse((child) => {
     // Lights
     if (child.isLight) {
       lightCache.set(child.uuid, {
         light: child,
-        originalIntensity: child.intensity,
-        originalColor: child.color ? child.color.clone() : null,
-        originalGroundColor: child.groundColor ? child.groundColor.clone() : null,
+        origIntensity: child.intensity,
+        origColor: child.color?.clone() || null,
+        origGroundColor: child.groundColor?.clone() || null,
       })
       return
     }
@@ -238,178 +221,233 @@ function buildCache() {
     if (!child.isMesh || !child.material) return
     if (isPlayerMesh(child)) return
     
-    const materials = Array.isArray(child.material) ? child.material : [child.material]
-    const originalColors = []
+    const mats = Array.isArray(child.material) ? child.material : [child.material]
+    const origColors = []
     
-    for (let i = 0; i < materials.length; i++) {
-      const mat = materials[i]
-      if (!mat) {
-        originalColors.push(null)
-        continue
-      }
-      originalColors.push({
-        color: mat.color ? mat.color.clone() : null,
-        emissive: mat.emissive ? mat.emissive.clone() : null,
-        emissiveIntensity: mat.emissiveIntensity || 0,
+    for (let i = 0; i < mats.length; i++) {
+      const m = mats[i]
+      if (!m) { origColors.push(null); continue }
+      
+      origColors.push({
+        color: m.color?.clone() || null,
+        emissive: m.emissive?.clone() || null,
+        emissiveIntensity: m.emissiveIntensity || 0,
+        fog: m.fog !== undefined ? m.fog : true,
       })
     }
     
     const npcVol = getNPCVolume(child)
     
-    meshCache.set(child.uuid, {
-      mesh: child,
-      originalColors,
-      isNPC: npcVol !== null,
-      npcVolume: npcVol,
-    })
+    if (npcVol !== null) {
+      // It's an NPC - disable fog and force shader recompile
+      for (let i = 0; i < mats.length; i++) {
+        const m = mats[i]
+        if (m && m.fog !== undefined) {
+          m.fog = false
+          m.needsUpdate = true
+          // Force shader recompilation
+          if (m.version !== undefined) m.version++
+        }
+      }
+      
+      npcCache.set(child.uuid, {
+        mesh: child,
+        origColors,
+        volume: npcVol,
+      })
+    } else {
+      // World geometry
+      worldCache.set(child.uuid, {
+        mesh: child,
+        origColors,
+      })
+    }
   })
+  
+  console.log(`[Attacker] Cached ${worldCache.size} world, ${npcCache.size} NPCs, ${lightCache.size} lights`)
+  
+  // Debug: log some NPC info
+  if (npcCache.size > 0) {
+    let sample = 0
+    for (const [uuid, data] of npcCache) {
+      if (sample++ < 3) {
+        console.log(`  NPC sample: vol=${data.volume.toFixed(2)}, fog disabled`)
+      }
+    }
+  } else {
+    console.warn('[Attacker] WARNING: No NPCs detected! Check getNPCVolume logic')
+  }
 }
 
 // ============================================================================
-// APPLY BLEND (iterates cached refs only - fast!)
+// APPLY EFFECTS
 // ============================================================================
 
-const _tempColor = new THREE.Color()
-const _tempColor2 = new THREE.Color()
-
-function applyBlend(t) {
-  // Update player volume (cheap)
-  playerVolume = Feeding.getPlayerVisualVolume()
-  
-  // Apply to all cached meshes
-  for (const [uuid, data] of meshCache) {
-    const { mesh, originalColors, isNPC, npcVolume } = data
-    if (!mesh.material) continue
+function applyToWorld(t) {
+  for (const [uuid, data] of worldCache) {
+    const { mesh, origColors } = data
+    // Defensive checks
+    if (!mesh || !mesh.material || !mesh.parent) continue
     
-    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
+    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
     
-    for (let i = 0; i < materials.length; i++) {
-      const mat = materials[i]
-      const orig = originalColors[i]
-      if (!mat || !orig) continue
+    for (let i = 0; i < mats.length; i++) {
+      const m = mats[i]
+      const o = origColors[i]
+      if (!m || !o) continue
       
-      if (isNPC) {
-        // NPC: blend to threat color
-        const threatColor = getThreatColor(npcVolume)
-        
-        if (mat.color && orig.color) {
-          lerpColor(mat.color, orig.color, threatColor, t)
-        }
-        if (mat.emissive !== undefined) {
-          const origE = orig.emissive || _tempColor.setRGB(0, 0, 0)
-          lerpColor(mat.emissive, origE, threatColor, t)
-          mat.emissiveIntensity = lerp(orig.emissiveIntensity, CONFIG.creatureEmissive, t)
-        }
-      } else {
-        // World: blend to navy blue
-        if (mat.color && orig.color) {
-          getNavyBlendedColor(orig.color, _tempColor2)
-          lerpColor(mat.color, orig.color, _tempColor2, t)
-        }
-        if (mat.emissive !== undefined && orig.emissive) {
-          getNavyBlendedColor(orig.emissive, _tempColor2)
-          lerpColor(mat.emissive, orig.emissive, _tempColor2, t)
-        }
+      if (m.color && o.color) {
+        const navy = getNavyColor(o.color)
+        lerpColor(m.color, o.color, navy, t)
+      }
+      if (m.emissive && o.emissive) {
+        const navy = getNavyColor(o.emissive)
+        lerpColor(m.emissive, o.emissive, navy, t)
       }
     }
   }
+}
+
+function applyToNPCs(t) {
+  playerVolume = Feeding.getPlayerVisualVolume()
   
-  // Apply to lights
-  for (const [uuid, data] of lightCache) {
-    const { light, originalIntensity, originalColor, originalGroundColor } = data
+  for (const [uuid, data] of npcCache) {
+    const { mesh, origColors, volume } = data
+    // Defensive checks
+    if (!mesh || !mesh.material || !mesh.parent) continue
     
-    const targetIntensity = originalIntensity * CONFIG.lighting.intensityMult
-    light.intensity = lerp(originalIntensity, targetIntensity, t)
+    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
+    const threatColor = getThreatColor(volume)
     
-    if (originalColor && light.color) {
-      getNavyBlendedColor(originalColor, _tempColor)
-      lerpColor(light.color, originalColor, _tempColor, t)
+    for (let i = 0; i < mats.length; i++) {
+      const m = mats[i]
+      const o = origColors[i]
+      if (!m || !o) continue
+      
+      // Lerp color toward threat color
+      if (m.color && o.color) {
+        lerpColor(m.color, o.color, threatColor, t)
+      }
+      
+      // Set emissive to threat color with strong intensity - makes them GLOW
+      if (m.emissive !== undefined) {
+        const origE = o.emissive || _tempColor.setRGB(0, 0, 0)
+        lerpColor(m.emissive, origE, threatColor, t)
+        m.emissiveIntensity = lerp(o.emissiveIntensity, CONFIG.npc.emissiveIntensity, t)
+      }
     }
-    
-    if (originalGroundColor && light.groundColor) {
-      getNavyBlendedColor(originalGroundColor, _tempColor)
-      lerpColor(light.groundColor, originalGroundColor, _tempColor, t)
-    }
-  }
-  
-  // Apply to fog
-  if (sceneRef.fog && originalFog) {
-    lerpColor(sceneRef.fog.color, originalFog.color, CONFIG.fog.color, t)
-    sceneRef.fog.density = lerp(originalFog.density, originalFog.density * CONFIG.fog.densityMult, t)
   }
 }
 
+function applyToLights(t) {
+  for (const [uuid, data] of lightCache) {
+    const { light, origIntensity, origColor, origGroundColor } = data
+    // Defensive check
+    if (!light || !light.parent) continue
+    
+    light.intensity = lerp(origIntensity, origIntensity * CONFIG.lighting.intensityMult, t)
+    
+    if (origColor && light.color) {
+      const navy = getNavyColor(origColor)
+      lerpColor(light.color, origColor, navy, t)
+    }
+    if (origGroundColor && light.groundColor) {
+      const navy = getNavyColor(origGroundColor)
+      lerpColor(light.groundColor, origGroundColor, navy, t)
+    }
+  }
+}
+
+function applyToFog(t) {
+  if (!sceneRef.fog || !originalFog) return
+  lerpColor(sceneRef.fog.color, originalFog.color, CONFIG.fog.color, t)
+  sceneRef.fog.density = lerp(originalFog.density, originalFog.density * CONFIG.fog.densityMult, t)
+}
+
 // ============================================================================
-// RESTORE (called once when fade out completes)
+// RESTORE
 // ============================================================================
 
 function restoreAll() {
-  // Restore meshes
-  for (const [uuid, data] of meshCache) {
-    const { mesh, originalColors } = data
-    if (!mesh.material) continue
-    
-    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
-    
-    for (let i = 0; i < materials.length; i++) {
-      const mat = materials[i]
-      const orig = originalColors[i]
-      if (!mat || !orig) continue
-      
-      if (orig.color && mat.color) mat.color.copy(orig.color)
-      if (orig.emissive && mat.emissive) mat.emissive.copy(orig.emissive)
-      if (mat.emissiveIntensity !== undefined) mat.emissiveIntensity = orig.emissiveIntensity
+  console.log('[Attacker] Restoring all materials...')
+  
+  // Restore world
+  for (const [uuid, data] of worldCache) {
+    const { mesh, origColors } = data
+    if (!mesh || !mesh.material) continue
+    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
+    for (let i = 0; i < mats.length; i++) {
+      const m = mats[i], o = origColors[i]
+      if (!m || !o) continue
+      if (o.color && m.color) m.color.copy(o.color)
+      if (o.emissive && m.emissive) m.emissive.copy(o.emissive)
+      if (m.emissiveIntensity !== undefined) m.emissiveIntensity = o.emissiveIntensity
     }
   }
   
+  // Restore NPCs
+  let fogRestoredCount = 0
+  for (const [uuid, data] of npcCache) {
+    const { mesh, origColors } = data
+    if (!mesh || !mesh.material) continue
+    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
+    for (let i = 0; i < mats.length; i++) {
+      const m = mats[i], o = origColors[i]
+      if (!m || !o) continue
+      if (o.color && m.color) m.color.copy(o.color)
+      if (o.emissive && m.emissive) m.emissive.copy(o.emissive)
+      if (m.emissiveIntensity !== undefined) m.emissiveIntensity = o.emissiveIntensity
+      // Force fog back to true (original default)
+      m.fog = true
+      m.needsUpdate = true
+      if (m.version !== undefined) m.version++
+      fogRestoredCount++
+    }
+  }
+  console.log(`[Attacker] Restored fog on ${fogRestoredCount} NPC materials`)
+  
   // Restore lights
   for (const [uuid, data] of lightCache) {
-    const { light, originalIntensity, originalColor, originalGroundColor } = data
-    light.intensity = originalIntensity
-    if (originalColor && light.color) light.color.copy(originalColor)
-    if (originalGroundColor && light.groundColor) light.groundColor.copy(originalGroundColor)
+    const { light, origIntensity, origColor, origGroundColor } = data
+    if (!light) continue
+    light.intensity = origIntensity
+    if (origColor && light.color) light.color.copy(origColor)
+    if (origGroundColor && light.groundColor) light.groundColor.copy(origGroundColor)
   }
   
   // Restore fog
-  if (sceneRef.fog && originalFog) {
+  if (sceneRef && sceneRef.fog && originalFog) {
     sceneRef.fog.color.copy(originalFog.color)
     sceneRef.fog.density = originalFog.density
   }
   
   // Clear caches
-  meshCache.clear()
+  worldCache.clear()
+  npcCache.clear()
   lightCache.clear()
   npcRoots.clear()
   originalFog = null
   
-  console.log('[Attacker] Vision restored')
+  // Reset state
+  state = 'inactive'
+  blendValue = 0
+  
+  console.log('[Attacker] Restored')
 }
 
 // ============================================================================
-// STATE CONTROL
+// UPDATE
 // ============================================================================
-
-function startActivation() {
-  if (!sceneRef) return
-  if (state === 'active' || state === 'fading_in') return
-  
-  state = 'fading_in'
-  npcRefreshTimer = 0
-  
-  // Build cache once
-  buildCache()
-  
-  console.log('[Attacker] Fading in... (' + meshCache.size + ' meshes cached)')
-}
-
-function startDeactivation() {
-  if (state === 'inactive' || state === 'fading_out') return
-  state = 'fading_out'
-  console.log('[Attacker] Fading out...')
-}
 
 function updateVision(delta) {
   if (state === 'inactive') return
+  
+  // Safety check - if caches are empty but we're not inactive, something went wrong
+  if (worldCache.size === 0 && npcCache.size === 0 && state !== 'inactive') {
+    console.warn('[Attacker] Caches empty but state is', state, '- forcing restore')
+    restoreAll()
+    return
+  }
   
   // Update blend
   if (state === 'fading_in') {
@@ -417,34 +455,91 @@ function updateVision(delta) {
     if (blendValue >= 1) {
       blendValue = 1
       state = 'active'
-      console.log('[Attacker] Active')
     }
   } else if (state === 'fading_out') {
     blendValue -= delta * CONFIG.fadeOutSpeed
     if (blendValue <= 0) {
-      blendValue = 0
-      state = 'inactive'
-      restoreAll()
+      console.log('[Attacker] Fade out complete, calling restoreAll')
+      restoreAll()  // This sets state='inactive' and blendValue=0
       return
     }
   }
   
-  // Periodically refresh NPC lookup (not every frame)
+  // Refresh NPC volumes periodically
   npcRefreshTimer += delta
   if (npcRefreshTimer >= CONFIG.npcRefreshInterval) {
     npcRefreshTimer = 0
-    refreshNPCLookup()
+    refreshNPCRoots()
     
-    // Update NPC flags in mesh cache
-    for (const [uuid, data] of meshCache) {
+    // Update volumes in cache
+    for (const [uuid, data] of npcCache) {
       const vol = getNPCVolume(data.mesh)
-      data.isNPC = vol !== null
-      data.npcVolume = vol
+      if (vol !== null) data.volume = vol
     }
   }
   
-  // Apply blend (fast - no traversal)
-  applyBlend(blendValue)
+  // Apply all effects
+  applyToWorld(blendValue)
+  applyToNPCs(blendValue)
+  applyToLights(blendValue)
+  applyToFog(blendValue)
+}
+
+// Cooldown to prevent rapid re-activation after releasing Q
+// Key release (deactivation) is always honored immediately
+let lastStateChangeTime = 0
+const STATE_CHANGE_COOLDOWN = 0.15  // 150ms minimum between activations
+
+// ============================================================================
+// STATE CONTROL
+// ============================================================================
+
+function startActivation() {
+  if (!sceneRef) return
+  
+  const now = performance.now() / 1000
+  
+  // Cooldown check
+  if (now - lastStateChangeTime < STATE_CHANGE_COOLDOWN) {
+    return
+  }
+  
+  // Already active or fading in - ignore
+  if (state === 'active' || state === 'fading_in') return
+  
+  // If fading out, immediately restore first then start fresh
+  if (state === 'fading_out') {
+    console.log('[Attacker] Interrupted fade out - restoring first')
+    restoreAll()
+    // State is now 'inactive', blendValue is 0
+  }
+  
+  lastStateChangeTime = now
+  state = 'fading_in'
+  blendValue = 0  // Always start from 0
+  npcRefreshTimer = 0
+  buildCache()
+}
+
+function startDeactivation() {
+  // Always honor key release - no cooldown check here
+  
+  // Already inactive or fading out - ignore
+  if (state === 'inactive' || state === 'fading_out') return
+  
+  // Update cooldown timer so rapid re-activation is prevented
+  lastStateChangeTime = performance.now() / 1000
+  
+  // If fading in, just reverse direction (keep the cache)
+  if (state === 'fading_in') {
+    console.log('[Attacker] Reversing fade - now fading out from blend:', blendValue.toFixed(2))
+    state = 'fading_out'
+    return
+  }
+  
+  // Was active, start fading out
+  state = 'fading_out'
+  console.log('[Attacker] Starting fade out, blendValue:', blendValue.toFixed(2))
 }
 
 // ============================================================================
@@ -453,34 +548,25 @@ function updateVision(delta) {
 
 export function debugAttacker() {
   console.group('[Attacker] Debug')
-  console.log('State:', state)
-  console.log('Blend:', (blendValue * 100).toFixed(1) + '%')
-  console.log('Cached Meshes:', meshCache.size)
-  console.log('Cached Lights:', lightCache.size)
-  console.log('NPC Roots:', npcRoots.size)
-  console.log('Player Volume:', playerVolume.toFixed(2))
+  console.log('State:', state, '| Blend:', (blendValue * 100).toFixed(0) + '%')
+  console.log('World meshes:', worldCache.size)
+  console.log('NPC meshes:', npcCache.size)
+  console.log('Player volume:', playerVolume.toFixed(2))
   console.groupEnd()
 }
 
 // ============================================================================
-// ABILITY EXPORT
+// EXPORT
 // ============================================================================
 
 export default {
   name: 'Attacker',
   description: 'Hold Q for predator vision',
-  
-  onActivate: () => startActivation(),
-  onDeactivate: () => startDeactivation(),
-  onUpdate: (delta) => updateVision(delta),
-  onPassiveUpdate: (delta) => {
-    if (state === 'fading_out') updateVision(delta)
-  },
+  onActivate: startActivation,
+  onDeactivate: startDeactivation,
+  onUpdate: updateVision,
+  onPassiveUpdate: (delta) => { if (state === 'fading_out') updateVision(delta) },
 }
-
-// ============================================================================
-// CONSOLE ACCESS
-// ============================================================================
 
 if (typeof window !== 'undefined') {
   window.Attacker = { CONFIG, debugAttacker, getState: () => state, getBlend: () => blendValue }
