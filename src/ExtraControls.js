@@ -12,7 +12,7 @@
  */
 
 import Sprinter, { init as initSprinter, clear as clearSprinter } from './sprinter.js'
-import Stacker from './stacker.js'
+import Stacker, { init as initStacker, debugStacker } from './stacker.js'
 import Camper, { init as initCamper, debugCamper } from './camper.js'
 import Attacker from './attacker.js'
 
@@ -32,7 +32,7 @@ import Attacker from './attacker.js'
  * 
  * Options: 'sprinter', 'stacker', 'camper', 'attacker', 'none'
  */
-const ACTIVE_ABILITY = 'camper'
+const ACTIVE_ABILITY = 'stacker'
 
 // ============================================================================
 // ABILITIES REGISTRY
@@ -70,6 +70,7 @@ let isActive = false
 export function initAbilities(scene) {
   // Initialize abilities that need scene reference
   initSprinter(scene)
+  initStacker(scene)
   initCamper(scene)
 }
 
@@ -192,5 +193,7 @@ export function debugExtra() {
   // Also debug specific abilities if relevant
   if (ACTIVE_ABILITY === 'camper') {
     debugCamper()
+  } else if (ACTIVE_ABILITY === 'stacker') {
+    debugStacker()
   }
 }
