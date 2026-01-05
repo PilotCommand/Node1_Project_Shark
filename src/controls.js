@@ -11,7 +11,7 @@
  *   T           - Increase scale
  *   G           - Mutate creature (new random of same type)
  *   N / B       - Next / Previous species
- *   Z           - Cycle variant (e.g., Yellowfin Ã¢â€ â€™ Bluefin)
+ *   Z           - Cycle variant (e.g., Yellowfin ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ Bluefin)
  *   M           - New map
  *   P           - Toggle debug overlays (wireframes + volume labels)
  *   V           - Toggle debug viz (spawn grid + fish paths)
@@ -64,6 +64,7 @@ import {
   deactivateExtra,
   updateExtra,
   getActiveExtra,
+  getActiveAbilityName,
   debugExtra,
 } from './ExtraControls.js'
 import { SpawnFactory } from './SpawnFactory.js'
@@ -182,7 +183,10 @@ export function initControls() {
         if (!keys.q) {
           keys.q = true
           activateExtra()
-          setBoosting(true)  // For boost extra
+          // Only boost speed when sprinter ability is active
+          if (getActiveAbilityName() === 'sprinter') {
+            setBoosting(true)
+          }
         }
         break
       
@@ -217,7 +221,7 @@ export function initControls() {
         if (scaleDownResult) {
           rebuildPlayerPhysics()
           showNotification(
-            `Scale: ${scaleDownResult.scalePercent.toFixed(0)}% | Vol: ${scaleDownResult.volume.toFixed(2)} mÃ‚Â³`,
+            `Scale: ${scaleDownResult.scalePercent.toFixed(0)}% | Vol: ${scaleDownResult.volume.toFixed(2)} mÃƒâ€šÃ‚Â³`,
             '#ff8888'
           )
         }
@@ -229,7 +233,7 @@ export function initControls() {
         if (scaleUpResult) {
           rebuildPlayerPhysics()
           showNotification(
-            `Scale: ${scaleUpResult.scalePercent.toFixed(0)}% | Vol: ${scaleUpResult.volume.toFixed(2)} mÃ‚Â³`,
+            `Scale: ${scaleUpResult.scalePercent.toFixed(0)}% | Vol: ${scaleUpResult.volume.toFixed(2)} mÃƒâ€šÃ‚Â³`,
             '#88ff88'
           )
         }
@@ -273,7 +277,7 @@ export function initControls() {
         }
         break
       
-      // Z = Cycle variant (e.g., Yellowfin Tuna Ã¢â€ â€™ Bluefin Tuna)
+      // Z = Cycle variant (e.g., Yellowfin Tuna ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ Bluefin Tuna)
       case 'KeyZ':
         const variantResult = cycleVariant()
         if (variantResult.hasVariants) {
@@ -355,7 +359,10 @@ export function initControls() {
       case 'KeyQ':
         keys.q = false
         deactivateExtra()
-        setBoosting(false)  // For boost extra
+        // Only stop boosting if sprinter ability was active
+        if (getActiveAbilityName() === 'sprinter') {
+          setBoosting(false)
+        }
         break
     }
   })
