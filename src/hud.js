@@ -22,8 +22,9 @@ const MINIMAP_RANGE = 200 // World units to display
 let sonarAngle = 0
 const SONAR_SPEED = 0.5 // Radians per second
 
-// Track last ping time for NPCs (keyed by NPC id or mesh uuid)
-const npcPingTimes = new Map()
+// Track pinged NPCs with their radar position at ping time
+// Stores: { time, radarX, radarZ, volume }
+const npcPingData = new Map()
 
 // Chat message history
 const chatHistory = []
@@ -623,6 +624,19 @@ export function addChatMessage(text, type = 'player') {
   }
 }
 
+// Pre-computed constants for NPC colors (avoid object allocation in hot loop)
+const NPC_COLOR_EDIBLE = { r: 0, g: 255, b: 100 }
+const NPC_COLOR_DANGER = { r: 255, g: 80, b: 80 }
+const NPC_COLOR_SIMILAR = { r: 255, g: 255, b: 0 }
+
+// Fast angle normalization to [-PI, PI] without while loops
+function normalizeAngle(angle) {
+  angle = angle % (Math.PI * 2)
+  if (angle > Math.PI) angle -= Math.PI * 2
+  else if (angle < -Math.PI) angle += Math.PI * 2
+  return angle
+}
+
 function updateMinimap() {
   if (!minimapCtx || !minimapCanvas) return
   
@@ -634,6 +648,8 @@ function updateMinimap() {
   const halfSize = size / 2
   const radarRadius = halfSize * 0.82 // Radar zone radius
   const scale = (radarRadius * 2) / (MINIMAP_RANGE * 2) // Scale to fit radar zone
+  
+  // Clip region handles exact border cutoff for dots
   
   // ==========================================================================
   // DRAW DARK NAVY BORDER (mask outside radar zone)
@@ -670,29 +686,29 @@ function updateMinimap() {
   
   // ==========================================================================
   // DRAW SONAR SWEEP (rotating dial with fading trail)
+  // OPTIMIZED: Single gradient arc replaces 20 individual line draws
   // ==========================================================================
   sonarAngle -= SONAR_SPEED * 0.016 // Clockwise rotation (~60fps delta time)
   if (sonarAngle < 0) sonarAngle += Math.PI * 2
   
-  // Draw fading trail (gradient arc behind the sweep line)
+  // Draw fading trail as a single gradient-filled arc (replaces 20 individual lines)
   const trailLength = Math.PI * 0.4 // ~72 degrees of trail
-  const trailSteps = 20
+  const trailStartAngle = -sonarAngle // Canvas uses clockwise angles, negate for our coord system
+  const trailEndAngle = -(sonarAngle + trailLength)
   
-  for (let i = 0; i < trailSteps; i++) {
-    const t = i / trailSteps
-    const angle = sonarAngle + t * trailLength // Trail behind (clockwise = positive direction is behind)
-    const alpha = (1 - t) * 0.15 // Fade from 0.15 to 0
-    
-    ctx.strokeStyle = `rgba(0, 255, 200, ${alpha})`
-    ctx.lineWidth = 1
-    ctx.beginPath()
-    ctx.moveTo(halfSize, halfSize)
-    ctx.lineTo(
-      halfSize + Math.cos(angle) * radarRadius,
-      halfSize - Math.sin(angle) * radarRadius
-    )
-    ctx.stroke()
-  }
+  // Create conic gradient for the sweep trail
+  const gradient = ctx.createConicGradient(trailStartAngle, halfSize, halfSize)
+  // Trail fades from 0.15 alpha at sweep line to 0 at end
+  gradient.addColorStop(0, 'rgba(0, 255, 200, 0.15)')
+  gradient.addColorStop(trailLength / (Math.PI * 2), 'rgba(0, 255, 200, 0)')
+  gradient.addColorStop(1, 'rgba(0, 255, 200, 0)') // Rest is transparent
+  
+  ctx.fillStyle = gradient
+  ctx.beginPath()
+  ctx.moveTo(halfSize, halfSize)
+  ctx.arc(halfSize, halfSize, radarRadius, trailStartAngle, trailEndAngle, true)
+  ctx.closePath()
+  ctx.fill()
   
   // Draw main sweep line
   ctx.strokeStyle = 'rgba(0, 255, 200, 0.6)'
@@ -709,92 +725,103 @@ function updateMinimap() {
   const playerPos = player.position
   
   // ==========================================================================
-  // DRAW NEARBY NPCs (with sonar ping fade effect)
+  // DETECT NEW PINGS - Store radar position when sonar passes over NPC
   // ==========================================================================
-  const nearbyNPCs = FishAdder.getNearbyNPCs(playerPos, MINIMAP_RANGE)
+  // Fetch NPCs to check for new pings
+  const nearbyNPCs = FishAdder.getNearbyNPCs(playerPos, MINIMAP_RANGE * 1.5)
   const currentTime = performance.now()
   const fullRotationTime = (Math.PI * 2) / SONAR_SPEED * 1000 // ms for full rotation
+  const fadeTime = fullRotationTime * 0.85
+  const pingWindow = 0.15 // Radians - how close sonar needs to be to "ping"
   
+  // Get player volume for color calculation
+  const playerVol = Feeding.getPlayerVisualVolume()
+  const playerVolLow = playerVol * 0.8
+  const playerVolHigh = playerVol * 1.2
+  
+  // Check for new pings from nearby NPCs
   if (nearbyNPCs) {
-    for (const npc of nearbyNPCs) {
+    for (let i = 0, len = nearbyNPCs.length; i < len; i++) {
+      const npc = nearbyNPCs[i]
       if (!npc.mesh) continue
       
       const relX = (npc.mesh.position.x - playerPos.x) * scale
       const relZ = (npc.mesh.position.z - playerPos.z) * scale
       
-      // Check if within circular radar zone
-      const distFromCenter = Math.sqrt(relX * relX + relZ * relZ)
-      if (distFromCenter > radarRadius - 4) continue // Skip if outside radar zone
-      
-      const screenX = halfSize + relX
-      const screenZ = halfSize + relZ
-      
       // Calculate NPC angle from center (matching sonar coordinate system)
       const npcAngle = Math.atan2(-relZ, relX)
+      const angleDiff = normalizeAngle(sonarAngle - npcAngle)
       
-      // Check if sonar is currently passing over this NPC (within small window)
-      let angleDiff = sonarAngle - npcAngle
-      while (angleDiff < -Math.PI) angleDiff += Math.PI * 2
-      while (angleDiff > Math.PI) angleDiff -= Math.PI * 2
-      
-      const npcId = npc.mesh.uuid
-      const pingWindow = 0.15 // Radians - how close sonar needs to be to "ping"
-      
-      // If sonar is passing over this NPC right now, record the ping
+      // If sonar is passing over this NPC right now, record ping with position
       if (Math.abs(angleDiff) < pingWindow) {
-        npcPingTimes.set(npcId, currentTime)
+        const npcVol = npc.visualVolume || 0
+        let color
+        if (npcVol < playerVolLow) {
+          color = NPC_COLOR_EDIBLE
+        } else if (npcVol > playerVolHigh) {
+          color = NPC_COLOR_DANGER
+        } else {
+          color = NPC_COLOR_SIMILAR
+        }
+        
+        // Store world position at ping time (will be converted to radar each frame)
+        npcPingData.set(npc.mesh.uuid, {
+          time: currentTime,
+          worldX: npc.mesh.position.x,
+          worldZ: npc.mesh.position.z,
+          color: color
+        })
       }
-      
-      // Check if this NPC has been pinged
-      const lastPingTime = npcPingTimes.get(npcId)
-      if (!lastPingTime) continue // Never pinged, don't show
-      
-      // Calculate time since ping
-      const timeSincePing = currentTime - lastPingTime
-      
-      // Fade out over 85% of rotation time, then invisible
-      const fadeTime = fullRotationTime * 0.85
-      if (timeSincePing > fadeTime) {
-        npcPingTimes.delete(npcId) // Clear old ping
-        continue // Faded out
-      }
-      
-      // Fade based on time since ping
-      const fadeRatio = 1 - (timeSincePing / fadeTime)
-      const pingAlpha = fadeRatio * 0.9 // Range from 0 to 0.9
-      
-      // Skip if fully faded
-      if (pingAlpha < 0.05) continue
-      
-      // Color based on size relative to player (green = smaller, red = larger)
-      const playerVol = Feeding.getPlayerVisualVolume()
-      const npcVol = npc.visualVolume || 0
-      
-      let r, g, b
-      if (npcVol < playerVol * 0.8) {
-        r = 0; g = 255; b = 100 // Edible - green
-      } else if (npcVol > playerVol * 1.2) {
-        r = 255; g = 80; b = 80 // Danger - red
-      } else {
-        r = 255; g = 255; b = 0 // Similar size - yellow
-      }
-      
-      ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${pingAlpha})`
-      
-      // Dot size also pulses slightly with ping freshness
-      const dotSize = 2 + fadeRatio * 1.5
-      
-      ctx.beginPath()
-      ctx.arc(screenX, screenZ, dotSize, 0, Math.PI * 2)
-      ctx.fill()
     }
   }
   
-  // Clean up ping times for NPCs no longer in range
-  for (const [npcId, pingTime] of npcPingTimes) {
-    if (currentTime - pingTime > fullRotationTime) {
-      npcPingTimes.delete(npcId)
+  // ==========================================================================
+  // DRAW ALL PINGED DOTS - From stored positions, independent of NPC existence
+  // ==========================================================================
+  const expiredIds = []
+  const radarRadiusSq = radarRadius * radarRadius // Pre-compute for border check
+  
+  for (const [npcId, data] of npcPingData) {
+    const timeSincePing = currentTime - data.time
+    
+    // Remove if fully faded
+    if (timeSincePing > fadeTime) {
+      expiredIds.push(npcId)
+      continue
     }
+    
+    // Convert stored world position to current radar position
+    const relX = (data.worldX - playerPos.x) * scale
+    const relZ = (data.worldZ - playerPos.z) * scale
+    const screenX = halfSize + relX
+    const screenZ = halfSize + relZ
+    
+    // Check if dot is within radar bounds - delete exactly at border
+    const distSq = relX * relX + relZ * relZ
+    if (distSq > radarRadiusSq) {
+      // Dot has reached radar border - remove it
+      expiredIds.push(npcId)
+      continue
+    }
+    
+    // Calculate fade
+    const fadeRatio = 1 - (timeSincePing / fadeTime)
+    const pingAlpha = fadeRatio * 0.9
+    
+    if (pingAlpha < 0.05) continue
+    
+    // Draw the dot
+    ctx.fillStyle = 'rgba(' + data.color.r + ',' + data.color.g + ',' + data.color.b + ',' + pingAlpha.toFixed(2) + ')'
+    const dotSize = 2 + fadeRatio * 1.5
+    
+    ctx.beginPath()
+    ctx.arc(screenX, screenZ, dotSize, 0, Math.PI * 2)
+    ctx.fill()
+  }
+  
+  // Clean up expired pings
+  for (let i = 0; i < expiredIds.length; i++) {
+    npcPingData.delete(expiredIds[i])
   }
   
   // ==========================================================================
