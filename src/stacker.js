@@ -18,7 +18,7 @@ import { MeshRegistry, Category, Tag } from './MeshRegistry.js'
 
 export const CONFIG = {
   // === PENTAGON INDICATOR ===
-  pentagonRadius: 0.5,              // Size of the pentagon cursor
+  basePentagonRadius: 0.5,          // Base size of the pentagon cursor (scales with fish)
   pentagonColor: 0x00ffaa,          // Default color (cyan)
   pentagonOpacity: 0.6,             // Fill transparency
   pentagonBorderColor: 0xffffff,    // Border color (white)
@@ -28,17 +28,66 @@ export const CONFIG = {
   // === RAY POINTER ===
   rayColor: 0x00ffaa,               // Color of the ray line
   rayOpacity: 0.6,                  // Ray transparency
-  rayMaxDistance: 50,               // Maximum range for detecting surfaces
+  baseRayMaxDistance: 50,           // Base maximum range for detecting surfaces (scales with fish)
   
   // === PRISM ===
-  prismRadius: 0.5,                 // Cross-section size of placed prisms
+  basePrismRadius: 0.5,             // Base cross-section size of placed prisms (scales with fish)
   prismColor: 0x44aaff,             // Preview prism color (blue)
   prismOpacity: 0.7,                // Preview prism transparency
   prismFinalColor: 0x2288dd,        // Placed prism color (fallback)
   prismFinalOpacity: 1.0,           // Placed prism transparency
   maxPrisms: 5,                     // Maximum number of prisms (oldest removed when exceeded)
+  baseMaxPrismLength: 20,           // Base maximum length a prism can extend (scales with fish)
   colorBlendRatio: 0.5,             // How much to blend end color (0 = start only, 1 = end only, 0.5 = 50/50)
   flatShading: true,                // Use flat shading (hard edges) vs smooth shading
+}
+
+// ============================================================================
+// FISH SCALE HELPER
+// ============================================================================
+
+/**
+ * Get current fish scale factor
+ */
+function getFishScale() {
+  const player = getPlayer()
+  if (!player) return 1.0
+  return player.scale.x  // Uniform scale
+}
+
+/**
+ * Get scaled pentagon radius
+ */
+function getPentagonRadius() {
+  return CONFIG.basePentagonRadius * getFishScale()
+}
+
+/**
+ * Get scaled prism radius
+ */
+function getPrismRadius() {
+  return CONFIG.basePrismRadius * getFishScale()
+}
+
+/**
+ * Get scaled ray max distance
+ */
+function getRayMaxDistance() {
+  return CONFIG.baseRayMaxDistance * getFishScale()
+}
+
+/**
+ * Get scaled max prism length
+ */
+function getMaxPrismLength() {
+  return CONFIG.baseMaxPrismLength * getFishScale()
+}
+
+/**
+ * Get scaled pentagon surface offset
+ */
+function getPentagonOffset() {
+  return CONFIG.pentagonSurfaceOffset * getFishScale()
 }
 
 // ============================================================================
@@ -46,14 +95,14 @@ export const CONFIG = {
 // ============================================================================
 
 export function setRange(distance) {
-  CONFIG.rayMaxDistance = distance
-  console.log(`[Stacker] Range set to ${distance}`)
+  CONFIG.baseRayMaxDistance = distance
+  console.log(`[Stacker] Base range set to ${distance} (scales with fish)`)
 }
 
 export function setPrismRadius(radius) {
-  CONFIG.prismRadius = radius
-  CONFIG.pentagonRadius = radius
-  console.log(`[Stacker] Prism radius set to ${radius}`)
+  CONFIG.basePrismRadius = radius
+  CONFIG.basePentagonRadius = radius
+  console.log(`[Stacker] Base prism radius set to ${radius} (scales with fish)`)
 }
 
 export function setPrismColor(hex) {
@@ -79,6 +128,11 @@ export function setMaxPrisms(count) {
 export function setColorBlendRatio(ratio) {
   CONFIG.colorBlendRatio = Math.max(0, Math.min(1, ratio))
   console.log(`[Stacker] Color blend ratio set to ${CONFIG.colorBlendRatio} (0=start only, 1=end only)`)
+}
+
+export function setMaxPrismLength(length) {
+  CONFIG.baseMaxPrismLength = Math.max(0.1, length)
+  console.log(`[Stacker] Base max prism length set to ${CONFIG.baseMaxPrismLength} (scales with fish)`)
 }
 
 // ============================================================================
@@ -332,8 +386,8 @@ function createRayVisuals() {
   rayLine.frustumCulled = false
   rayLine.visible = false
   
-  // Pentagon indicator at ray end (filled)
-  const pentGeometry = createPentagonGeometry(CONFIG.pentagonRadius)
+  // Pentagon indicator at ray end (filled) - created at size 1.0, scaled dynamically
+  const pentGeometry = createPentagonGeometry(1.0)
   const pentMaterial = new THREE.MeshBasicMaterial({
     color: CONFIG.pentagonColor,
     transparent: true,
@@ -346,8 +400,8 @@ function createRayVisuals() {
   pentagonIndicator.frustumCulled = false
   pentagonIndicator.visible = false
   
-  // Pentagon border (outline)
-  const borderGeometry = createPentagonBorderGeometry(CONFIG.pentagonRadius)
+  // Pentagon border (outline) - created at size 1.0, scaled dynamically
+  const borderGeometry = createPentagonBorderGeometry(1.0)
   const borderMaterial = new THREE.LineBasicMaterial({
     color: CONFIG.pentagonBorderColor,
     linewidth: CONFIG.pentagonBorderWidth,
@@ -421,6 +475,11 @@ function updateRayVisuals() {
   positions[5] = endPoint.z
   rayLine.geometry.attributes.position.needsUpdate = true
   
+  // Scale pentagon based on fish size
+  const pentScale = getPentagonRadius()
+  pentagonIndicator.scale.setScalar(pentScale)
+  pentagonBorder.scale.setScalar(pentScale)
+  
   // Calculate pentagon position with offset from surface
   let pentagonPosition = endPoint.clone()
   
@@ -428,8 +487,8 @@ function updateRayVisuals() {
   if (result.hit && result.normal) {
     const surfaceNormal = result.normal.clone()
     
-    // Offset the pentagon slightly above the surface to prevent z-fighting
-    pentagonPosition.addScaledVector(surfaceNormal, CONFIG.pentagonSurfaceOffset)
+    // Offset the pentagon slightly above the surface to prevent z-fighting (scales with fish)
+    pentagonPosition.addScaledVector(surfaceNormal, getPentagonOffset())
     
     // Update position first
     pentagonIndicator.position.copy(pentagonPosition)
@@ -484,7 +543,7 @@ function createPreviewPrism() {
   // Use sampled color if available, otherwise fall back to config
   const prismColor = sampledColor ? sampledColor.clone() : new THREE.Color(CONFIG.prismColor)
   
-  const geometry = createPentagonalPrismGeometry(CONFIG.prismRadius, 1)
+  const geometry = createPentagonalPrismGeometry(getPrismRadius(), 1)
   const materialProps = {
     color: prismColor,
     transparent: true,
@@ -519,15 +578,18 @@ function updatePreviewPrism() {
   
   // Calculate prism orientation and length
   const direction = new THREE.Vector3().subVectors(endPoint, startPoint)
-  const length = direction.length()
+  let length = direction.length()
   
   if (length < 0.1) return // Too short
   
+  // Clamp to maximum length (scaled with fish)
+  length = Math.min(length, getMaxPrismLength())
+  
   direction.normalize()
   
-  // Recreate geometry with correct length
+  // Recreate geometry with correct length (radius scaled with fish)
   previewPrism.geometry.dispose()
-  previewPrism.geometry = createPentagonalPrismGeometry(CONFIG.prismRadius, length)
+  previewPrism.geometry = createPentagonalPrismGeometry(getPrismRadius(), length)
   
   // Position at start point
   previewPrism.position.copy(startPoint)
@@ -559,27 +621,35 @@ function finalizePrism() {
   
   // Get final end point
   const result = doRaycast()
-  const endPoint = result.hit ? result.point : result.farPoint
+  const rawEndPoint = result.hit ? result.point : result.farPoint
   
-  const direction = new THREE.Vector3().subVectors(endPoint, startPoint)
-  const length = direction.length()
+  const direction = new THREE.Vector3().subVectors(rawEndPoint, startPoint)
+  let length = direction.length()
   
   if (length < 0.1) {
     console.log('[Stacker] Prism too short, cancelled')
     return null
   }
   
+  // Clamp to maximum length (scaled with fish)
+  const maxLen = getMaxPrismLength()
+  const wasClamped = length > maxLen
+  length = Math.min(length, maxLen)
+  
   direction.normalize()
+  
+  // Calculate actual end point (may be clamped)
+  const endPoint = startPoint.clone().addScaledVector(direction, length)
   
   // Remove oldest prism if we've hit the limit
   if (placedPrisms.length >= CONFIG.maxPrisms) {
     removeOldestPrism()
   }
   
-  // Determine final color - blend start and end if end hit a mesh
+  // Determine final color - blend start and end if end hit a mesh (only if not clamped)
   let finalColor, finalRoughness, finalMetalness, finalEmissive
   
-  if (result.hit && result.object) {
+  if (result.hit && result.object && !wasClamped) {
     // End point hit a mesh - blend colors from both points
     const endExtracted = extractBlendedColorFromMesh(result.object)
     
@@ -613,8 +683,8 @@ function finalizePrism() {
     finalEmissive = sampledEmissive
   }
   
-  // Create final prism mesh with blended material properties
-  const geometry = createPentagonalPrismGeometry(CONFIG.prismRadius, length)
+  // Create final prism mesh with blended material properties (radius scaled with fish)
+  const geometry = createPentagonalPrismGeometry(getPrismRadius(), length)
   const materialProps = {
     color: finalColor,
     transparent: false,
@@ -702,8 +772,11 @@ function doRaycast() {
   const direction = new THREE.Vector3()
   camera.getWorldDirection(direction)
   
+  // Get scaled max range
+  const maxRange = getRayMaxDistance()
+  
   raycaster.set(camera.position, direction)
-  raycaster.far = CONFIG.rayMaxDistance  // Only cast within max range
+  raycaster.far = maxRange  // Only cast within max range (scales with fish)
   
   // Get all meshes to test against (exclude our own visuals)
   const testObjects = []
@@ -735,13 +808,13 @@ function doRaycast() {
   }
   
   // No hit - return far point at max range
-  const farPoint = camera.position.clone().addScaledVector(direction, CONFIG.rayMaxDistance)
+  const farPoint = camera.position.clone().addScaledVector(direction, maxRange)
   return {
     hit: false,
     point: null,
     normal: null,
     object: null,
-    distance: CONFIG.rayMaxDistance,
+    distance: maxRange,
     farPoint: farPoint,
   }
 }
@@ -873,22 +946,27 @@ export function clearAllPrisms() {
 }
 
 export function debugStacker() {
+  const fishScale = getFishScale()
+  
   console.group('[Stacker] Debug')
   console.log('State:', state)
   console.log('Start Point:', startPoint)
   console.log('Placed Prisms:', placedPrisms.length)
   console.log('Scene Ref:', !!sceneRef)
+  console.log('Fish Scale:', fishScale.toFixed(2))
   console.log('Sampled Color:', sampledColor ? '#' + sampledColor.getHexString() : 'none')
   console.log('Sampled Roughness:', sampledRoughness)
   console.log('Sampled Metalness:', sampledMetalness)
   console.groupEnd()
   
-  console.group('[Stacker] Config')
-  console.log('Range:', CONFIG.rayMaxDistance)
-  console.log('Prism Radius:', CONFIG.prismRadius)
+  console.group('[Stacker] Config (base → scaled)')
+  console.log('Range:', CONFIG.baseRayMaxDistance, '→', getRayMaxDistance().toFixed(1))
+  console.log('Prism Radius:', CONFIG.basePrismRadius, '→', getPrismRadius().toFixed(2))
+  console.log('Pentagon Radius:', CONFIG.basePentagonRadius, '→', getPentagonRadius().toFixed(2))
+  console.log('Max Prism Length:', CONFIG.baseMaxPrismLength, '→', getMaxPrismLength().toFixed(1))
   console.log('Max Prisms:', CONFIG.maxPrisms)
   console.log('Color Blend Ratio:', CONFIG.colorBlendRatio, '(0=start, 1=end)')
-  console.log('Pentagon Offset:', CONFIG.pentagonSurfaceOffset)
+  console.log('Pentagon Offset:', CONFIG.pentagonSurfaceOffset, '→', getPentagonOffset().toFixed(2))
   console.log('Default Prism Color:', '0x' + CONFIG.prismFinalColor.toString(16))
   console.groupEnd()
 }
@@ -905,16 +983,24 @@ if (typeof window !== 'undefined') {
     setPrismColor,
     setPreviewColor,
     setMaxPrisms,
+    setMaxPrismLength,
     setColorBlendRatio,
     clearAllPrisms,
     debugStacker,
+    // Scale helpers
+    getFishScale,
+    getPrismRadius,
+    getPentagonRadius,
+    getPentagonOffset,
+    getRayMaxDistance,
+    getMaxPrismLength,
   }
   
-  console.log(`[Stacker] Console access enabled. Try:
-  - Stacker.CONFIG.rayMaxDistance = 100
-  - Stacker.setRange(75)
-  - Stacker.setPrismRadius(1.0)
-  - Stacker.setMaxPrisms(10)
+  console.log(`[Stacker] Console access enabled (all dimensions scale with fish). Try:
+  - Stacker.setRange(75)           // Base ray range
+  - Stacker.setPrismRadius(1.0)    // Base prism radius
+  - Stacker.setMaxPrisms(10)       // Max prisms to keep
+  - Stacker.setMaxPrismLength(30)  // Base max length
   - Stacker.setColorBlendRatio(0.5)
   - Stacker.clearAllPrisms()
   - Stacker.debugStacker()`)
