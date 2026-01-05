@@ -14,7 +14,7 @@ import { getPlayer } from './player.js'
 
 const CAMPER_CONFIG = {
   // Detection
-  baseScanRadius: 8,        // Base radius (will scale with fish)
+  baseScanRadius: 4.2,      // Base radius (will scale with fish)
   maxSamples: 10,           // Max meshes to sample colors from
   
   // Color blending
@@ -222,9 +222,8 @@ function updateVisualization(playerPosition, sampledEntities, blendedColor) {
   
   // 2. Lines to each sampled entity with color markers
   for (const entity of sampledEntities) {
-    // Get world position of entity
-    const entityPos = new THREE.Vector3()
-    entity.mesh.getWorldPosition(entityPos)
+    // Use the stored nearest point position
+    const entityPos = entity.worldPos || new THREE.Vector3()
     
     // Get dominant color from this entity
     const colors = extractColorsFromMesh(entity.mesh)
@@ -366,6 +365,143 @@ function clearVisualization() {
 }
 
 // ============================================================================
+// NEAREST POINT ON MESH UTILITIES
+// ============================================================================
+
+/**
+ * Find the closest point on a triangle to a given point
+ */
+function closestPointOnTriangle(point, a, b, c, target) {
+  // Check if point is in vertex region outside A
+  const ab = new THREE.Vector3().subVectors(b, a)
+  const ac = new THREE.Vector3().subVectors(c, a)
+  const ap = new THREE.Vector3().subVectors(point, a)
+  
+  const d1 = ab.dot(ap)
+  const d2 = ac.dot(ap)
+  if (d1 <= 0 && d2 <= 0) {
+    return target.copy(a)
+  }
+  
+  // Check if point is in vertex region outside B
+  const bp = new THREE.Vector3().subVectors(point, b)
+  const d3 = ab.dot(bp)
+  const d4 = ac.dot(bp)
+  if (d3 >= 0 && d4 <= d3) {
+    return target.copy(b)
+  }
+  
+  // Check if point is in edge region of AB
+  const vc = d1 * d4 - d3 * d2
+  if (vc <= 0 && d1 >= 0 && d3 <= 0) {
+    const v = d1 / (d1 - d3)
+    return target.copy(a).addScaledVector(ab, v)
+  }
+  
+  // Check if point is in vertex region outside C
+  const cp = new THREE.Vector3().subVectors(point, c)
+  const d5 = ab.dot(cp)
+  const d6 = ac.dot(cp)
+  if (d6 >= 0 && d5 <= d6) {
+    return target.copy(c)
+  }
+  
+  // Check if point is in edge region of AC
+  const vb = d5 * d2 - d1 * d6
+  if (vb <= 0 && d2 >= 0 && d6 <= 0) {
+    const w = d2 / (d2 - d6)
+    return target.copy(a).addScaledVector(ac, w)
+  }
+  
+  // Check if point is in edge region of BC
+  const va = d3 * d6 - d5 * d4
+  if (va <= 0 && (d4 - d3) >= 0 && (d5 - d6) >= 0) {
+    const w = (d4 - d3) / ((d4 - d3) + (d5 - d6))
+    return target.copy(b).addScaledVector(new THREE.Vector3().subVectors(c, b), w)
+  }
+  
+  // Point is inside face region
+  const denom = 1 / (va + vb + vc)
+  const v = vb * denom
+  const w = vc * denom
+  return target.copy(a).addScaledVector(ab, v).addScaledVector(ac, w)
+}
+
+/**
+ * Find the nearest point on a mesh to a given world position
+ * Returns { point: Vector3, distance: number } or null if mesh has no geometry
+ */
+function findNearestPointOnMesh(mesh, worldPoint) {
+  if (!mesh.geometry) return null
+  
+  const geometry = mesh.geometry
+  const position = geometry.attributes.position
+  if (!position) return null
+  
+  // Transform world point to local space
+  const localPoint = worldPoint.clone()
+  mesh.worldToLocal(localPoint)
+  
+  let nearestPoint = new THREE.Vector3()
+  let nearestDistSq = Infinity
+  
+  const vA = new THREE.Vector3()
+  const vB = new THREE.Vector3()
+  const vC = new THREE.Vector3()
+  const closestOnTri = new THREE.Vector3()
+  
+  // Check if indexed geometry
+  const index = geometry.index
+  
+  if (index) {
+    // Indexed geometry - iterate triangles
+    for (let i = 0; i < index.count; i += 3) {
+      const iA = index.getX(i)
+      const iB = index.getX(i + 1)
+      const iC = index.getX(i + 2)
+      
+      vA.fromBufferAttribute(position, iA)
+      vB.fromBufferAttribute(position, iB)
+      vC.fromBufferAttribute(position, iC)
+      
+      closestPointOnTriangle(localPoint, vA, vB, vC, closestOnTri)
+      
+      const distSq = localPoint.distanceToSquared(closestOnTri)
+      if (distSq < nearestDistSq) {
+        nearestDistSq = distSq
+        nearestPoint.copy(closestOnTri)
+      }
+    }
+  } else {
+    // Non-indexed geometry
+    for (let i = 0; i < position.count; i += 3) {
+      vA.fromBufferAttribute(position, i)
+      vB.fromBufferAttribute(position, i + 1)
+      vC.fromBufferAttribute(position, i + 2)
+      
+      closestPointOnTriangle(localPoint, vA, vB, vC, closestOnTri)
+      
+      const distSq = localPoint.distanceToSquared(closestOnTri)
+      if (distSq < nearestDistSq) {
+        nearestDistSq = distSq
+        nearestPoint.copy(closestOnTri)
+      }
+    }
+  }
+  
+  // Transform nearest point back to world space
+  mesh.localToWorld(nearestPoint)
+  
+  // Calculate world-space distance
+  const worldDistance = worldPoint.distanceTo(nearestPoint)
+  
+  return {
+    point: nearestPoint,
+    distance: worldDistance
+  }
+}
+
+// ============================================================================
 // SCANNING
 // ============================================================================
 
@@ -375,7 +511,6 @@ function clearVisualization() {
  */
 function scanEnvironment(playerPosition) {
   const scanRadius = getScanRadius()
-  const radiusSq = scanRadius * scanRadius
   
   if (!sceneRef) {
     console.warn('[Camper] No scene reference')
@@ -385,6 +520,7 @@ function scanEnvironment(playerPosition) {
   // Collect all meshes with colors in range
   const nearby = []
   const tempPos = new THREE.Vector3()
+  const tempScale = new THREE.Vector3()
   
   sceneRef.traverse((child) => {
     // Skip non-meshes
@@ -398,30 +534,44 @@ function scanEnvironment(playerPosition) {
     if (child.userData.isVizElement) return
     if (child.parent?.name === 'camper-viz') return
     
-    // Skip sky, floor, water (large environment meshes we don't want to sample)
-    const id = child.userData.registryId
-    if (id === 'sky' || id === 'floor' || id === 'waterSurface') return
-    
     // Check if it has a material with color
     if (!child.material) return
     const materials = Array.isArray(child.material) ? child.material : [child.material]
     const hasColor = materials.some(m => m.color instanceof THREE.Color)
     if (!hasColor) return
     
-    // Get world position
-    child.getWorldPosition(tempPos)
+    // Quick bounding sphere rejection first (for performance)
+    if (!child.geometry.boundingSphere) {
+      child.geometry.computeBoundingSphere()
+    }
+    const boundingSphere = child.geometry.boundingSphere
+    if (boundingSphere) {
+      tempPos.copy(boundingSphere.center)
+      child.localToWorld(tempPos)
+      child.getWorldScale(tempScale)
+      const meshRadius = boundingSphere.radius * Math.max(tempScale.x, tempScale.y, tempScale.z)
+      
+      const dx = tempPos.x - playerPosition.x
+      const dy = tempPos.y - playerPosition.y
+      const dz = tempPos.z - playerPosition.z
+      const distToCenter = Math.sqrt(dx * dx + dy * dy + dz * dz)
+      
+      // Quick reject: if bounding sphere doesn't even touch detector, skip
+      if (distToCenter - meshRadius > scanRadius) return
+    }
     
-    // Distance check
-    const dx = tempPos.x - playerPosition.x
-    const dy = tempPos.y - playerPosition.y
-    const dz = tempPos.z - playerPosition.z
-    const distSq = dx * dx + dy * dy + dz * dz
+    // Find actual nearest point on mesh geometry
+    const nearest = findNearestPointOnMesh(child, playerPosition)
+    if (!nearest) return
     
-    if (distSq <= radiusSq) {
+    // Check if nearest point is within detector
+    const distToNearest = playerPosition.distanceTo(nearest.point)
+    
+    if (distToNearest <= scanRadius) {
       nearby.push({
         mesh: child,
-        distance: Math.sqrt(distSq),
-        worldPos: tempPos.clone(),
+        distance: distToNearest,
+        worldPos: nearest.point.clone(), // Use the actual nearest point
       })
     }
   })
@@ -432,8 +582,8 @@ function scanEnvironment(playerPosition) {
   // Limit samples
   const toSample = nearby.slice(0, CAMPER_CONFIG.maxSamples)
   
-  // Store for visualization (wrap in entity-like objects)
-  lastSampledEntities = toSample.map(n => ({ mesh: n.mesh }))
+  // Store for visualization (include mesh and nearest point)
+  lastSampledEntities = toSample.map(n => ({ mesh: n.mesh, worldPos: n.worldPos }))
   
   // Extract colors with distances
   const colorData = []
@@ -550,7 +700,7 @@ export default {
 export function debugCamper() {
   const scanRadius = getScanRadius()
   console.group('[Camper] Debug')
-  console.log('Detection Method: Scene graph traversal (all meshes with colors)')
+  console.log('Detection Method: Nearest point on mesh surface')
   console.log('Base Scan Radius:', CAMPER_CONFIG.baseScanRadius, 'units')
   console.log('Current Scan Radius:', scanRadius.toFixed(2), 'units (scales with fish)')
   console.log('Max Samples:', CAMPER_CONFIG.maxSamples, 'meshes')
