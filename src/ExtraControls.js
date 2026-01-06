@@ -32,7 +32,7 @@ import Attacker, { init as initAttacker, debugAttacker } from './attacker.js'
  * 
  * Options: 'sprinter', 'stacker', 'camper', 'attacker', 'none'
  */
-const ACTIVE_ABILITY = 'attacker'
+const ACTIVE_ABILITY = 'camper'
 
 // ============================================================================
 // ABILITIES REGISTRY
@@ -112,6 +112,21 @@ export function getActiveAbilityName() {
 export function getActiveCapacityMode() {
   const ability = getActiveAbility()
   return ability.capacityMode || 'hold'  // Default to 'hold' for backwards compatibility
+}
+
+/**
+ * Get the active ability's capacity configuration
+ * @returns {Object} - Capacity config with max, depleteRate, regenRate, regenDelay
+ */
+export function getActiveCapacityConfig() {
+  const ability = getActiveAbility()
+  // Return ability's config if defined, otherwise return default
+  return ability.capacityConfig || {
+    max: 100,
+    depleteRate: 40,
+    regenRate: 25,
+    regenDelay: 0.5,
+  }
 }
 
 /**

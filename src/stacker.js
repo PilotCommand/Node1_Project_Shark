@@ -2,9 +2,9 @@
  * stacker.js - Stacker Ability
  * 
  * Build pentagonal prisms by:
- * 1. Press Q Ã¢â€ â€™ Activate aiming mode (shows ray pointer with pentagon)
- * 2. Press Q Ã¢â€ â€™ Select start point on a surface
- * 3. Press Q Ã¢â€ â€™ Finalize and place the prism
+ * 1. Press Q ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ Activate aiming mode (shows ray pointer with pentagon)
+ * 2. Press Q ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ Select start point on a surface
+ * 3. Press Q ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ Finalize and place the prism
  */
 
 import * as THREE from 'three'
@@ -13,6 +13,17 @@ import { camera } from './camera.js'
 import { MeshRegistry, Category, Tag } from './MeshRegistry.js'
 import { createStaticCollider, removeStaticCollider, isPhysicsReady } from './Physics.js'
 import { consumeCapacity, getCapacityConfig } from './hud.js'
+
+// ============================================================================
+// ⭐ CAPACITY CONFIG - EASY TO EDIT! ⭐
+// ============================================================================
+
+const CAPACITY_CONFIG = {
+  max: 100,              // Maximum capacity
+  depleteRate: 20,       // Not used for perUse mode (instant consumption)
+  regenRate: 10,         // Units per second when regenerating (after placing prisms)
+  regenDelay: 1.5,       // Seconds before regen starts after placing a prism
+}
 
 // ============================================================================
 // CONFIG - Edit these values to customize the stacker!
@@ -976,6 +987,7 @@ export default {
   name: 'Stacker',
   description: 'Build prisms - Q to aim, Q to start, Q to place (uses capacity)',
   capacityMode: 'perUse',  // One-time cost per placed prism
+  capacityConfig: CAPACITY_CONFIG,  // Per-ability capacity settings
   
   onActivate: () => {
     if (state === 'idle') {
@@ -1073,16 +1085,16 @@ export function debugStacker() {
   console.log('Sampled Metalness:', sampledMetalness)
   console.groupEnd()
   
-  console.group('[Stacker] Config (base Ã¢â€ â€™ scaled)')
-  console.log('Range:', CONFIG.baseRayMaxDistance, 'Ã¢â€ â€™', getRayMaxDistance().toFixed(1))
-  console.log('Prism Radius:', CONFIG.basePrismRadius, 'Ã¢â€ â€™', getPrismRadius().toFixed(2))
-  console.log('Pentagon Radius:', CONFIG.basePentagonRadius, 'Ã¢â€ â€™', getPentagonRadius().toFixed(2))
-  console.log('Max Prism Length:', CONFIG.baseMaxPrismLength, 'Ã¢â€ â€™', getMaxPrismLength().toFixed(1))
+  console.group('[Stacker] Config (base ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ scaled)')
+  console.log('Range:', CONFIG.baseRayMaxDistance, 'ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢', getRayMaxDistance().toFixed(1))
+  console.log('Prism Radius:', CONFIG.basePrismRadius, 'ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢', getPrismRadius().toFixed(2))
+  console.log('Pentagon Radius:', CONFIG.basePentagonRadius, 'ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢', getPentagonRadius().toFixed(2))
+  console.log('Max Prism Length:', CONFIG.baseMaxPrismLength, 'ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢', getMaxPrismLength().toFixed(1))
   console.log('Max Prisms:', CONFIG.maxPrisms)
   console.log('Capacity Cost Per Prism:', getCapacityCostPerPrism().toFixed(1))
   console.log('Despawn Time:', CONFIG.prismDespawnTime + 's (' + (CONFIG.prismDespawnTime / 60).toFixed(1) + ' min)')
   console.log('Color Blend Ratio:', CONFIG.colorBlendRatio, '(0=start, 1=end)')
-  console.log('Pentagon Offset:', CONFIG.pentagonSurfaceOffset, 'Ã¢â€ â€™', getPentagonOffset().toFixed(2))
+  console.log('Pentagon Offset:', CONFIG.pentagonSurfaceOffset, 'ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢', getPentagonOffset().toFixed(2))
   console.log('Default Prism Color:', '0x' + CONFIG.prismFinalColor.toString(16))
   console.groupEnd()
 }

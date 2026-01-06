@@ -11,6 +11,17 @@ import { getPlayer } from './player.js'
 import { setCapacityDepleting, hasCapacity } from './hud.js'
 
 // ============================================================================
+// ⭐ CAPACITY CONFIG - EASY TO EDIT! ⭐
+// ============================================================================
+
+const CAPACITY_CONFIG = {
+  max: 100,              // Maximum capacity
+  depleteRate: 15,       // Units per second while camouflaged
+  regenRate: 8,          // Units per second when regenerating (after camo breaks)
+  regenDelay: 1.0,       // Seconds before regen starts after camo breaks
+}
+
+// ============================================================================
 // CONFIGURATION
 // ============================================================================
 
@@ -1122,6 +1133,7 @@ export default {
   name: 'Camper',
   description: 'Tap to blend into surroundings (stay still to keep camo)',
   capacityMode: 'toggle',  // Ability manages its own capacity drain
+  capacityConfig: CAPACITY_CONFIG,  // Per-ability capacity settings
   
   // One-tap activation
   onActivate: () => {

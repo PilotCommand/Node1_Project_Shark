@@ -19,6 +19,17 @@ import { FishAdder } from './FishAdder.js'
 import { MeshRegistry, Category } from './MeshRegistry.js'
 
 // ============================================================================
+// ⭐ CAPACITY CONFIG - EASY TO EDIT! ⭐
+// ============================================================================
+
+const CAPACITY_CONFIG = {
+  max: 100,              // Maximum capacity
+  depleteRate: 35,       // Units per second when active (holding Q)
+  regenRate: 7,          // Units per second when inactive (5x slower than depletion)
+  regenDelay: 1.0,       // Seconds before regen starts after releasing Q
+}
+
+// ============================================================================
 // CONFIGURATION
 // ============================================================================
 
@@ -582,6 +593,7 @@ export default {
   name: 'Attacker',
   description: 'Hold Q for predator vision',
   capacityMode: 'hold',  // Continuous drain while Q held
+  capacityConfig: CAPACITY_CONFIG,  // Per-ability capacity settings
   onActivate: startActivation,
   onDeactivate: startDeactivation,
   onUpdate: updateVision,

@@ -8,6 +8,17 @@ import * as THREE from 'three'
 import { getPlayer } from './player.js'
 
 // ============================================================================
+// ⭐ CAPACITY CONFIG - EASY TO EDIT! ⭐
+// ============================================================================
+
+const CAPACITY_CONFIG = {
+  max: 100,              // Maximum capacity
+  depleteRate: 40,       // Units per second when active (holding Q)
+  regenRate: 8,          // Units per second when inactive (4-5x slower than depletion)
+  regenDelay: 0.8,       // Seconds before regen starts after releasing Q
+}
+
+// ============================================================================
 // TRAIL RIBBON CONFIG
 // ============================================================================
 
@@ -276,6 +287,7 @@ export default {
   name: 'Sprinter',
   description: 'Hold to swim faster with trail',
   capacityMode: 'hold',  // Continuous drain while Q held
+  capacityConfig: CAPACITY_CONFIG,  // Per-ability capacity settings
   
   onActivate: () => {
     startRibbon()

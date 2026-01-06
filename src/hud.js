@@ -3,6 +3,7 @@ import { getPlayer, getCurrentCreature, getPlayerNormalizationInfo, getCurrentVa
 import { Feeding } from './Feeding.js'
 import { FishAdder } from './FishAdder.js'
 import { getCameraMode } from './camera.js'
+import { getActiveCapacityConfig } from './ExtraControls.js'
 
 let stats
 
@@ -18,8 +19,9 @@ let cursorRing = null
 let capacityBar = null
 let capacityFill = null
 
-// Capacity system state
-const CAPACITY_CONFIG = {
+// Capacity system state - DEFAULT/FALLBACK config (per-ability configs override these)
+// Edit capacity settings in each ability file: sprinter.js, attacker.js, etc.
+const DEFAULT_CAPACITY_CONFIG = {
   max: 100,
   depleteRate: 40,   // Units per second when active
   regenRate: 25,     // Units per second when inactive
@@ -36,7 +38,7 @@ const CAPACITY_BAR_STYLE = {
   opacity: 0.7,       // Default opacity (0-1)
 }
 
-let currentCapacity = CAPACITY_CONFIG.max
+let currentCapacity = DEFAULT_CAPACITY_CONFIG.max
 let isCapacityActive = false
 let regenDelayTimer = 0
 
@@ -666,7 +668,7 @@ function createMinimap() {
   
   const title = document.createElement('div')
   title.className = 'hud-title'
-  title.innerHTML = '<span>Map</span><span class="hud-title-controls"><span class="font-btn font-decrease">âˆ’</span><span class="font-btn font-increase">+</span><span class="collapse-btn">â–¾</span><span class="grip">â‹®â‹®</span></span>'
+  title.innerHTML = '<span>Map</span><span class="hud-title-controls"><span class="font-btn font-decrease">Ã¢Ë†â€™</span><span class="font-btn font-increase">+</span><span class="collapse-btn">Ã¢â€“Â¾</span><span class="grip">Ã¢â€¹Â®Ã¢â€¹Â®</span></span>'
   
   const collapsible = document.createElement('div')
   collapsible.className = 'hud-collapsible'
@@ -710,7 +712,7 @@ function createInfoPanel() {
   infoPanel.className = 'hud-panel'
   
   infoPanel.innerHTML = `
-    <div class="hud-title"><span>Info</span><span class="hud-title-controls"><span class="font-btn font-decrease">âˆ’</span><span class="font-btn font-increase">+</span><span class="collapse-btn">â–¾</span><span class="grip">â‹®â‹®</span></span></div>
+    <div class="hud-title"><span>Info</span><span class="hud-title-controls"><span class="font-btn font-decrease">Ã¢Ë†â€™</span><span class="font-btn font-increase">+</span><span class="collapse-btn">Ã¢â€“Â¾</span><span class="grip">Ã¢â€¹Â®Ã¢â€¹Â®</span></span></div>
     <div class="hud-collapsible">
       <div class="info-content">
         <div class="info-row">
@@ -757,7 +759,7 @@ function createChatPanel() {
   chatPanel.className = 'hud-panel'
   
   chatPanel.innerHTML = `
-    <div class="hud-title"><span>Chat</span><span class="hud-title-controls"><span class="font-btn font-decrease">âˆ’</span><span class="font-btn font-increase">+</span><span class="collapse-btn">â–¾</span><span class="grip">â‹®â‹®</span></span></div>
+    <div class="hud-title"><span>Chat</span><span class="hud-title-controls"><span class="font-btn font-decrease">Ã¢Ë†â€™</span><span class="font-btn font-increase">+</span><span class="collapse-btn">Ã¢â€“Â¾</span><span class="grip">Ã¢â€¹Â®Ã¢â€¹Â®</span></span></div>
     <div class="hud-collapsible">
       <div id="chat-messages"></div>
       <div id="chat-input-container">
@@ -832,9 +834,12 @@ function createCapacityBar() {
 function updateCapacityBar(delta) {
   if (!capacityBar || !capacityFill) return
   
+  // Get the current ability's capacity config
+  const config = getActiveCapacityConfig()
+  
   if (isCapacityActive) {
     // Deplete capacity while active
-    currentCapacity -= CAPACITY_CONFIG.depleteRate * delta
+    currentCapacity -= config.depleteRate * delta
     currentCapacity = Math.max(0, currentCapacity)
     regenDelayTimer = 0
     
@@ -849,13 +854,13 @@ function updateCapacityBar(delta) {
     // Regenerate capacity when inactive (after delay)
     capacityBar.classList.remove('active')
     
-    if (currentCapacity < CAPACITY_CONFIG.max) {
+    if (currentCapacity < config.max) {
       regenDelayTimer += delta
       
-      if (regenDelayTimer >= CAPACITY_CONFIG.regenDelay) {
+      if (regenDelayTimer >= config.regenDelay) {
         capacityBar.classList.add('regenerating')
-        currentCapacity += CAPACITY_CONFIG.regenRate * delta
-        currentCapacity = Math.min(CAPACITY_CONFIG.max, currentCapacity)
+        currentCapacity += config.regenRate * delta
+        currentCapacity = Math.min(config.max, currentCapacity)
       }
     } else {
       capacityBar.classList.remove('regenerating')
@@ -868,7 +873,7 @@ function updateCapacityBar(delta) {
   }
   
   // Update fill bar width
-  const percent = (currentCapacity / CAPACITY_CONFIG.max) * 100
+  const percent = (currentCapacity / config.max) * 100
   capacityFill.style.width = percent + '%'
 }
 
@@ -940,9 +945,10 @@ export function setCapacityDepleting(depleting) {
 
 /**
  * Get the capacity config (for calculating per-use costs)
+ * Returns the current ability's config
  */
 export function getCapacityConfig() {
-  return { ...CAPACITY_CONFIG }
+  return { ...getActiveCapacityConfig() }
 }
 
 export function addChatMessage(text, type = 'player') {
