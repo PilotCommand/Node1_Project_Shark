@@ -2,6 +2,7 @@ import Stats from 'three/examples/jsm/libs/stats.module.js'
 import { getPlayer, getCurrentCreature, getPlayerNormalizationInfo, getCurrentVariantDisplayName } from './player.js'
 import { Feeding } from './Feeding.js'
 import { FishAdder } from './FishAdder.js'
+import { getCameraMode } from './camera.js'
 
 let stats
 
@@ -13,6 +14,21 @@ let infoPanel = null
 let chatPanel = null
 let chatMessages = null
 let chatInput = null
+let cursorRing = null
+let capacityBar = null
+let capacityFill = null
+
+// Capacity system state
+const CAPACITY_CONFIG = {
+  max: 100,
+  depleteRate: 40,   // Units per second when active
+  regenRate: 25,     // Units per second when inactive
+  regenDelay: 0.5,   // Seconds before regen starts after deactivation
+}
+
+let currentCapacity = CAPACITY_CONFIG.max
+let isCapacityActive = false
+let regenDelayTimer = 0
 
 // Minimap settings
 const MINIMAP_SIZE = 160
@@ -42,6 +58,8 @@ export function initHUD() {
   createMinimap()
   createInfoPanel()
   createChatPanel()
+  createCursorRing()
+  createCapacityBar()
 }
 
 function createStyles() {
@@ -341,6 +359,76 @@ function createStyles() {
     .hud-panel.resizing {
       opacity: 0.9;
     }
+    
+    /* Cursor Ring - Sprint color ring that appears only when zoomed in */
+    #cursor-ring {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 24px;
+      height: 24px;
+      border: 2px solid #00ffaa;
+      border-radius: 50%;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.15s ease-out;
+      box-shadow: 0 0 8px rgba(0, 255, 170, 0.4);
+      z-index: 9999;
+    }
+    
+    #cursor-ring.visible {
+      opacity: 0.8;
+    }
+    
+    /* Capacity Bar - Lower center of screen */
+    #capacity-bar {
+      position: fixed;
+      bottom: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 400px;
+      height: 16px;
+      background: rgba(0, 20, 40, 0.8);
+      border: 2px solid rgba(0, 255, 170, 0.3);
+      border-radius: 8px;
+      overflow: hidden;
+      pointer-events: none;
+      opacity: 0.7;
+      transition: opacity 0.2s ease-out;
+      z-index: 100;
+    }
+    
+    #capacity-bar:hover {
+      opacity: 1;
+    }
+    
+    #capacity-bar.active {
+      border-color: rgba(0, 255, 170, 0.6);
+      box-shadow: 0 0 15px rgba(0, 255, 170, 0.3);
+    }
+    
+    #capacity-bar.depleted {
+      border-color: rgba(255, 100, 100, 0.5);
+    }
+    
+    #capacity-fill {
+      height: 100%;
+      width: 100%;
+      background: linear-gradient(90deg, #00ffaa 0%, #00ddaa 100%);
+      border-radius: 6px;
+      transition: width 0.05s linear;
+      box-shadow: 0 0 10px rgba(0, 255, 170, 0.5);
+    }
+    
+    #capacity-bar.depleted #capacity-fill {
+      background: linear-gradient(90deg, #ff6666 0%, #ff4444 100%);
+      box-shadow: 0 0 10px rgba(255, 100, 100, 0.5);
+    }
+    
+    #capacity-bar.regenerating #capacity-fill {
+      background: linear-gradient(90deg, #00ffaa 0%, #88ffcc 100%);
+    }
   `
   document.head.appendChild(style)
 }
@@ -568,7 +656,7 @@ function createMinimap() {
   
   const title = document.createElement('div')
   title.className = 'hud-title'
-  title.innerHTML = '<span>Map</span><span class="hud-title-controls"><span class="font-btn font-decrease">−</span><span class="font-btn font-increase">+</span><span class="collapse-btn">v</span><span class="grip">::</span></span>'
+  title.innerHTML = '<span>Map</span><span class="hud-title-controls"><span class="font-btn font-decrease">âˆ’</span><span class="font-btn font-increase">+</span><span class="collapse-btn">v</span><span class="grip">::</span></span>'
   
   const collapsible = document.createElement('div')
   collapsible.className = 'hud-collapsible'
@@ -612,7 +700,7 @@ function createInfoPanel() {
   infoPanel.className = 'hud-panel'
   
   infoPanel.innerHTML = `
-    <div class="hud-title"><span>Info</span><span class="hud-title-controls"><span class="font-btn font-decrease">−</span><span class="font-btn font-increase">+</span><span class="collapse-btn">v</span><span class="grip">::</span></span></div>
+    <div class="hud-title"><span>Info</span><span class="hud-title-controls"><span class="font-btn font-decrease">âˆ’</span><span class="font-btn font-increase">+</span><span class="collapse-btn">v</span><span class="grip">::</span></span></div>
     <div class="hud-collapsible">
       <div class="info-content">
         <div class="info-row">
@@ -659,7 +747,7 @@ function createChatPanel() {
   chatPanel.className = 'hud-panel'
   
   chatPanel.innerHTML = `
-    <div class="hud-title"><span>Chat</span><span class="hud-title-controls"><span class="font-btn font-decrease">−</span><span class="font-btn font-increase">+</span><span class="collapse-btn">v</span><span class="grip">::</span></span></div>
+    <div class="hud-title"><span>Chat</span><span class="hud-title-controls"><span class="font-btn font-decrease">âˆ’</span><span class="font-btn font-increase">+</span><span class="collapse-btn">v</span><span class="grip">::</span></span></div>
     <div class="hud-collapsible">
       <div id="chat-messages"></div>
       <div id="chat-input-container">
@@ -698,6 +786,123 @@ function createChatPanel() {
   makeResizable(chatPanel)
   makeCollapsible(chatPanel)
   makeFontResizable(chatPanel)
+}
+
+function createCursorRing() {
+  cursorRing = document.createElement('div')
+  cursorRing.id = 'cursor-ring'
+  document.body.appendChild(cursorRing)
+}
+
+function updateCursorRing() {
+  if (!cursorRing) return
+  
+  // Only show cursor ring when camera is in first-person mode (completely zoomed in)
+  const cameraMode = getCameraMode()
+  const shouldShow = cameraMode === 'first-person'
+  
+  if (shouldShow) {
+    cursorRing.classList.add('visible')
+  } else {
+    cursorRing.classList.remove('visible')
+  }
+}
+
+function createCapacityBar() {
+  capacityBar = document.createElement('div')
+  capacityBar.id = 'capacity-bar'
+  
+  capacityFill = document.createElement('div')
+  capacityFill.id = 'capacity-fill'
+  
+  capacityBar.appendChild(capacityFill)
+  document.body.appendChild(capacityBar)
+}
+
+function updateCapacityBar(delta) {
+  if (!capacityBar || !capacityFill) return
+  
+  if (isCapacityActive) {
+    // Deplete capacity while active
+    currentCapacity -= CAPACITY_CONFIG.depleteRate * delta
+    currentCapacity = Math.max(0, currentCapacity)
+    regenDelayTimer = 0
+    
+    capacityBar.classList.add('active')
+    capacityBar.classList.remove('regenerating')
+    
+    // Auto-deactivate if depleted (controls will handle this via hasCapacity check)
+    if (currentCapacity <= 0) {
+      capacityBar.classList.add('depleted')
+    }
+  } else {
+    // Regenerate capacity when inactive (after delay)
+    capacityBar.classList.remove('active')
+    
+    if (currentCapacity < CAPACITY_CONFIG.max) {
+      regenDelayTimer += delta
+      
+      if (regenDelayTimer >= CAPACITY_CONFIG.regenDelay) {
+        capacityBar.classList.add('regenerating')
+        currentCapacity += CAPACITY_CONFIG.regenRate * delta
+        currentCapacity = Math.min(CAPACITY_CONFIG.max, currentCapacity)
+      }
+    } else {
+      capacityBar.classList.remove('regenerating')
+    }
+    
+    // Remove depleted state once we have some capacity back
+    if (currentCapacity > 10) {
+      capacityBar.classList.remove('depleted')
+    }
+  }
+  
+  // Update fill bar width
+  const percent = (currentCapacity / CAPACITY_CONFIG.max) * 100
+  capacityFill.style.width = percent + '%'
+}
+
+// ============================================================================
+// CAPACITY SYSTEM EXPORTS
+// ============================================================================
+
+/**
+ * Activate capacity consumption (called when Q is pressed)
+ */
+export function activateCapacity() {
+  if (currentCapacity > 0) {
+    isCapacityActive = true
+    return true
+  }
+  return false
+}
+
+/**
+ * Deactivate capacity consumption (called when Q is released)
+ */
+export function deactivateCapacity() {
+  isCapacityActive = false
+}
+
+/**
+ * Check if there's enough capacity to use ability
+ */
+export function hasCapacity() {
+  return currentCapacity > 0
+}
+
+/**
+ * Get current capacity as percentage (0-100)
+ */
+export function getCapacityPercent() {
+  return (currentCapacity / CAPACITY_CONFIG.max) * 100
+}
+
+/**
+ * Check if capacity system is currently active (depleting)
+ */
+export function isCapacityDepleting() {
+  return isCapacityActive
 }
 
 export function addChatMessage(text, type = 'player') {
@@ -1054,10 +1259,12 @@ function updateInfoPanel() {
   }
 }
 
-export function updateHUD() {
+export function updateHUD(delta) {
   stats.update()
   updateMinimap()
   updateInfoPanel()
+  updateCursorRing()
+  updateCapacityBar(delta)
 }
 
 // Export for external use (e.g., feeding events)

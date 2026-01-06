@@ -74,6 +74,7 @@ import {
 } from './ExtraControls.js'
 import { SpawnFactory } from './SpawnFactory.js'
 import { FishAdder } from './FishAdder.js'
+import { activateCapacity, deactivateCapacity, hasCapacity } from './hud.js'
 
 // ============================================================================
 // STATE
@@ -189,8 +190,9 @@ export function initControls() {
       
       // Q = Extra ability (hold)
       case 'KeyQ':
-        if (!keys.q) {
+        if (!keys.q && hasCapacity()) {
           keys.q = true
+          activateCapacity()
           activateExtra()
           // Only boost speed when sprinter ability is active
           if (getActiveAbilityName() === 'sprinter') {
@@ -368,6 +370,7 @@ export function initControls() {
         break
       case 'KeyQ':
         keys.q = false
+        deactivateCapacity()
         deactivateExtra()
         // Only stop boosting if sprinter ability was active
         if (getActiveAbilityName() === 'sprinter') {
@@ -383,6 +386,16 @@ export function initControls() {
 // ============================================================================
 
 export function updateMovement(delta) {
+  // Auto-deactivate ability if capacity runs out while Q is held
+  if (keys.q && !hasCapacity()) {
+    keys.q = false
+    deactivateCapacity()
+    deactivateExtra()
+    if (getActiveAbilityName() === 'sprinter') {
+      setBoosting(false)
+    }
+  }
+
   const forward = (keys.w ? 1 : 0) - (keys.s ? 1 : 0)
   const right = (keys.d ? 1 : 0) - (keys.a ? 1 : 0)
   const up = (keys.space ? 1 : 0) - (keys.shift ? 1 : 0)
