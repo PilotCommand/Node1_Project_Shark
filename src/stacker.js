@@ -12,19 +12,43 @@ import { getPlayer } from './player.js'
 import { camera } from './camera.js'
 import { MeshRegistry, Category, Tag } from './MeshRegistry.js'
 import { createStaticCollider, removeStaticCollider, isPhysicsReady } from './Physics.js'
-import { consumeCapacity, getCapacityConfig, restoreCapacity } from './hud.js'
+// NOTE: Stacker no longer uses hud.js capacity system - it has its own slot system
 
 // ============================================================================
-// ⭐ CAPACITY CONFIG - EASY TO EDIT! ⭐
+// ⭐ SLOT CAPACITY CONFIG - EASY TO EDIT! ⭐
 // ============================================================================
+// Stacker uses 5 INDEPENDENT slots instead of one shared capacity bar.
+// Each slot drains while its prism exists, then recharges when it despawns.
 
-const CAPACITY_CONFIG = {
-  max: 100,              // Maximum capacity (100 = can place maxPrisms prisms)
-  depleteRate: 0,        // Not used for perUse mode
-  regenRate: 0,          // NO time-based regen! Capacity only restores when prisms despawn
-  regenDelay: 0,         // Not used since regenRate is 0
+const SLOT_CONFIG = {
+  numSlots: 5,           // Number of independent prism slots
+  drainTime: 300,        // Seconds for a slot to fully drain (= prism lifetime)
+  rechargeTime: 60,      // Seconds for an empty slot to fully recharge
 }
-// NOTE: Capacity restores by (max / maxPrisms) when a prism despawns after its timer
+
+// Slot states: 'ready' (100%, can place), 'active' (draining, has prism), 'recharging' (filling back up)
+const slots = []
+
+// Initialize slots
+function initSlots() {
+  slots.length = 0
+  for (let i = 0; i < SLOT_CONFIG.numSlots; i++) {
+    slots.push({
+      state: 'ready',      // 'ready', 'active', 'recharging'
+      capacity: 100,       // 0-100
+      prism: null,         // Reference to linked prism mesh
+    })
+  }
+}
+initSlots()
+
+// Legacy capacity config (not used, but kept for compatibility)
+const CAPACITY_CONFIG = {
+  max: 100,
+  depleteRate: 0,
+  regenRate: 0,
+  regenDelay: 0,
+}
 
 // ============================================================================
 // CONFIG - Edit these values to customize the stacker!
@@ -153,12 +177,121 @@ export function setMaxPrismLength(length) {
 }
 
 export function setDespawnTime(seconds) {
-  CONFIG.prismDespawnTime = Math.max(0, seconds)
-  if (seconds === 0) {
-    console.log(`[Stacker] Prism despawn DISABLED (prisms persist until maxPrisms exceeded)`)
-  } else {
-    console.log(`[Stacker] Prism despawn time set to ${seconds}s (${(seconds / 60).toFixed(1)} min)`)
+  SLOT_CONFIG.drainTime = Math.max(1, seconds)
+  console.log(`[Stacker] Slot drain time set to ${seconds}s (${(seconds / 60).toFixed(1)} min)`)
+}
+
+export function setRechargeTime(seconds) {
+  SLOT_CONFIG.rechargeTime = Math.max(1, seconds)
+  console.log(`[Stacker] Slot recharge time set to ${seconds}s`)
+}
+
+// ============================================================================
+// SLOT SYSTEM
+// ============================================================================
+
+/**
+ * Find a ready slot (capacity at 100%)
+ * @returns {number} Slot index, or -1 if none available
+ */
+function findReadySlot() {
+  for (let i = 0; i < slots.length; i++) {
+    if (slots[i].state === 'ready' && slots[i].capacity >= 100) {
+      return i
+    }
   }
+  return -1
+}
+
+/**
+ * Check if any slot is ready
+ */
+function hasReadySlot() {
+  return findReadySlot() !== -1
+}
+
+/**
+ * Use a slot for a prism
+ * @param {THREE.Mesh} prism - The prism mesh to link
+ * @returns {boolean} True if slot was available and used
+ */
+function useSlot(prism) {
+  const slotIndex = findReadySlot()
+  if (slotIndex === -1) return false
+  
+  const slot = slots[slotIndex]
+  slot.state = 'active'
+  slot.capacity = 100  // Start full, will drain
+  slot.prism = prism
+  prism.userData.slotIndex = slotIndex
+  
+  console.log(`[Stacker] Slot ${slotIndex + 1} activated`)
+  return true
+}
+
+/**
+ * Update all slots (drain active, recharge empty)
+ */
+function updateSlots(delta) {
+  const drainRate = 100 / SLOT_CONFIG.drainTime      // % per second
+  const rechargeRate = 100 / SLOT_CONFIG.rechargeTime // % per second
+  
+  for (let i = 0; i < slots.length; i++) {
+    const slot = slots[i]
+    
+    if (slot.state === 'active') {
+      // Drain while prism exists
+      slot.capacity -= drainRate * delta
+      
+      if (slot.capacity <= 0) {
+        slot.capacity = 0
+        // Despawn the linked prism
+        if (slot.prism) {
+          despawnSlotPrism(i)
+        }
+        slot.state = 'recharging'
+        console.log(`[Stacker] Slot ${i + 1} drained → recharging`)
+      }
+    } else if (slot.state === 'recharging') {
+      // Recharge empty slot
+      slot.capacity += rechargeRate * delta
+      
+      if (slot.capacity >= 100) {
+        slot.capacity = 100
+        slot.state = 'ready'
+        console.log(`[Stacker] Slot ${i + 1} recharged → ready`)
+      }
+    }
+  }
+}
+
+/**
+ * Despawn the prism linked to a slot
+ */
+function despawnSlotPrism(slotIndex) {
+  const slot = slots[slotIndex]
+  if (!slot.prism) return
+  
+  const prism = slot.prism
+  const idx = placedPrisms.indexOf(prism)
+  if (idx !== -1) {
+    placedPrisms.splice(idx, 1)
+  }
+  
+  removePrismMesh(prism, `slot ${slotIndex + 1} drained`)
+  slot.prism = null
+}
+
+/**
+ * Get slot info for UI
+ */
+export function getSlotInfo() {
+  return slots.map((slot, i) => ({
+    index: i,
+    state: slot.state,
+    capacity: slot.capacity,
+    hasPrism: !!slot.prism,
+  }))
 }
 
 // ============================================================================
@@ -667,10 +800,7 @@ function finalizePrism() {
   // Calculate actual end point (may be clamped)
   const endPoint = startPoint.clone().addScaledVector(direction, length)
   
-  // Remove oldest prism if we've hit the limit
-  if (placedPrisms.length >= CONFIG.maxPrisms) {
-    removeOldestPrism()
-  }
+  // NOTE: Slot system now handles the prism limit, not maxPrisms
   
   // Determine final color - blend start and end if end hit a mesh (only if not clamped)
   let finalColor, finalRoughness, finalMetalness, finalEmissive
@@ -821,17 +951,16 @@ function removePrismMesh(prism, reason = 'unknown') {
   console.log(`[Stacker] Removed prism (${reason})`)
 }
 
-/**
- * Check for and remove expired prisms
- */
+// DEPRECATED: These functions are no longer used - slot system handles despawning
+// Kept for reference only
+/*
 function updateDespawnTimers() {
   if (placedPrisms.length === 0) return
-  if (CONFIG.prismDespawnTime <= 0) return  // Despawn disabled
+  if (CONFIG.prismDespawnTime <= 0) return
   
   const now = performance.now()
   const despawnMs = CONFIG.prismDespawnTime * 1000
   
-  // Check from oldest to newest
   const toRemove = []
   for (const prism of placedPrisms) {
     const age = now - prism.userData.spawnTime
@@ -840,27 +969,20 @@ function updateDespawnTimers() {
     }
   }
   
-  // Remove expired prisms and restore capacity for each
   for (const prism of toRemove) {
     const idx = placedPrisms.indexOf(prism)
     if (idx !== -1) {
       placedPrisms.splice(idx, 1)
     }
-    removePrismMesh(prism, 'despawned after ' + CONFIG.prismDespawnTime + 's')
-    
-    // Restore capacity when prism despawns naturally (not when replaced by new one)
-    const capacityPerPrism = getCapacityCostPerPrism()
-    restoreCapacity(capacityPerPrism)
+    removePrismMesh(prism, 'despawned')
   }
 }
 
-/**
- * Get cost per prism in capacity units (100 / maxPrisms)
- */
 function getCapacityCostPerPrism() {
   const config = getCapacityConfig()
   return config.max / CONFIG.maxPrisms
 }
+*/
 
 // ============================================================================
 // RAYCASTING
@@ -953,12 +1075,9 @@ function enterPlacing() {
 }
 
 function exitPlacing() {
-  // Calculate capacity cost for placing a prism
-  const cost = getCapacityCostPerPrism()
-  
-  // Check if we have enough capacity
-  if (!consumeCapacity(cost)) {
-    console.log(`[Stacker] Not enough capacity to place prism (need ${cost.toFixed(1)})`)
+  // Check if we have a ready slot
+  if (!hasReadySlot()) {
+    console.log(`[Stacker] No slot available - wait for one to recharge`)
     // Cancel placing but don't create the prism
     disposePreviewPrism()
     startPoint = null
@@ -972,10 +1091,13 @@ function exitPlacing() {
   }
   
   // Place the prism
-  finalizePrism()
+  const prism = finalizePrism()
   disposePreviewPrism()
   
-  console.log(`[Stacker] Consumed ${cost.toFixed(1)} capacity for prism placement`)
+  // Link prism to a slot (starts draining)
+  if (prism) {
+    useSlot(prism)
+  }
   
   startPoint = null
   startNormal = null
@@ -992,13 +1114,17 @@ function exitPlacing() {
 
 export default {
   name: 'Stacker',
-  description: 'Build prisms - Q to aim, Q to start, Q to place (uses capacity)',
-  capacityMode: 'perUse',  // One-time cost per placed prism
-  capacityConfig: CAPACITY_CONFIG,  // Per-ability capacity settings
+  description: 'Build prisms - Q to aim, Q to start, Q to place (5 independent slots)',
+  capacityMode: 'none',  // Stacker uses its own slot system, not the main capacity bar
+  capacityConfig: CAPACITY_CONFIG,  // Kept for compatibility
   
   onActivate: () => {
     if (state === 'idle') {
-      // First Q press - activate aiming mode
+      // First Q press - activate aiming mode (only if slot available)
+      if (!hasReadySlot()) {
+        console.log('[Stacker] No slots available - wait for one to recharge')
+        return
+      }
       enterAiming()
     } else if (state === 'aiming') {
       // Second Q press - select start point
@@ -1023,7 +1149,7 @@ export default {
         console.log('[Stacker] No surface hit')
       }
     } else if (state === 'placing') {
-      // Third Q press - finalize prism (consumes capacity)
+      // Third Q press - finalize prism (uses a slot)
       exitPlacing()
     }
   },
@@ -1037,8 +1163,8 @@ export default {
   },
   
   onPassiveUpdate: (delta) => {
-    // Check for expired prisms and remove them
-    updateDespawnTimers()
+    // Update slot system (drain active slots, recharge empty ones)
+    updateSlots(delta)
     
     // Update visuals based on current state
     if (state === 'aiming') {
@@ -1088,21 +1214,22 @@ export function debugStacker() {
   console.log('Scene Ref:', !!sceneRef)
   console.log('Fish Scale:', fishScale.toFixed(2))
   console.log('Sampled Color:', sampledColor ? '#' + sampledColor.getHexString() : 'none')
-  console.log('Sampled Roughness:', sampledRoughness)
-  console.log('Sampled Metalness:', sampledMetalness)
   console.groupEnd()
   
-  console.group('[Stacker] Config (base ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ scaled)')
-  console.log('Range:', CONFIG.baseRayMaxDistance, 'ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢', getRayMaxDistance().toFixed(1))
-  console.log('Prism Radius:', CONFIG.basePrismRadius, 'ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢', getPrismRadius().toFixed(2))
-  console.log('Pentagon Radius:', CONFIG.basePentagonRadius, 'ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢', getPentagonRadius().toFixed(2))
-  console.log('Max Prism Length:', CONFIG.baseMaxPrismLength, 'ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢', getMaxPrismLength().toFixed(1))
-  console.log('Max Prisms:', CONFIG.maxPrisms)
-  console.log('Capacity Cost Per Prism:', getCapacityCostPerPrism().toFixed(1))
-  console.log('Despawn Time:', CONFIG.prismDespawnTime + 's (' + (CONFIG.prismDespawnTime / 60).toFixed(1) + ' min)')
+  console.group('[Stacker] Slots')
+  for (let i = 0; i < slots.length; i++) {
+    const slot = slots[i]
+    const status = `${slot.capacity.toFixed(0)}% ${slot.state}${slot.prism ? ' [PRISM]' : ''}`
+    console.log(`Slot ${i + 1}: ${status}`)
+  }
+  console.log(`Drain Time: ${SLOT_CONFIG.drainTime}s | Recharge Time: ${SLOT_CONFIG.rechargeTime}s`)
+  console.groupEnd()
+  
+  console.group('[Stacker] Config (base -> scaled)')
+  console.log('Range:', CONFIG.baseRayMaxDistance, '->', getRayMaxDistance().toFixed(1))
+  console.log('Prism Radius:', CONFIG.basePrismRadius, '->', getPrismRadius().toFixed(2))
+  console.log('Max Prism Length:', CONFIG.baseMaxPrismLength, '->', getMaxPrismLength().toFixed(1))
   console.log('Color Blend Ratio:', CONFIG.colorBlendRatio, '(0=start, 1=end)')
-  console.log('Pentagon Offset:', CONFIG.pentagonSurfaceOffset, 'ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢', getPentagonOffset().toFixed(2))
-  console.log('Default Prism Color:', '0x' + CONFIG.prismFinalColor.toString(16))
   console.groupEnd()
 }
 
@@ -1113,32 +1240,32 @@ export function debugStacker() {
 if (typeof window !== 'undefined') {
   window.Stacker = {
     CONFIG,
+    SLOT_CONFIG,
     setRange,
     setPrismRadius,
     setPrismColor,
     setPreviewColor,
-    setMaxPrisms,
     setMaxPrismLength,
-    setDespawnTime,
+    setDespawnTime,      // Now sets slot drain time
+    setRechargeTime,
     setColorBlendRatio,
     clearAllPrisms,
     debugStacker,
+    getSlotInfo,
     // Scale helpers
     getFishScale,
     getPrismRadius,
-    getPentagonRadius,
-    getPentagonOffset,
     getRayMaxDistance,
     getMaxPrismLength,
   }
   
-  console.log(`[Stacker] Console access enabled (all dimensions scale with fish). Try:
-  - Stacker.setRange(75)           // Base ray range
-  - Stacker.setPrismRadius(1.0)    // Base prism radius
-  - Stacker.setMaxPrisms(10)       // Max prisms to keep
-  - Stacker.setMaxPrismLength(30)  // Base max length
-  - Stacker.setDespawnTime(300)    // Despawn after 5 min (0 = disable)
-  - Stacker.setColorBlendRatio(0.5)
+  console.log(`[Stacker] Console access enabled. Try:
+  - Stacker.setDespawnTime(30)      // How long prism lives (slot drain time)
+  - Stacker.setRechargeTime(10)     // How long slot takes to recharge
+  - Stacker.setRange(75)            // Base ray range
+  - Stacker.setPrismRadius(1.0)     // Base prism radius
+  - Stacker.setMaxPrismLength(30)   // Base max length
+  - Stacker.getSlotInfo()           // See all slot states
   - Stacker.clearAllPrisms()
   - Stacker.debugStacker()`)
 }

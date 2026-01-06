@@ -3,7 +3,8 @@ import { getPlayer, getCurrentCreature, getPlayerNormalizationInfo, getCurrentVa
 import { Feeding } from './Feeding.js'
 import { FishAdder } from './FishAdder.js'
 import { getCameraMode } from './camera.js'
-import { getActiveCapacityConfig } from './ExtraControls.js'
+import { getActiveCapacityConfig, getActiveAbilityName } from './ExtraControls.js'
+import { getSlotInfo } from './stacker.js'
 
 let stats
 
@@ -408,7 +409,7 @@ function createStyles() {
       background: rgba(0, 20, 40, 0.8);
       border: ${CAPACITY_BAR_STYLE.borderWidth}px solid rgba(0, 255, 170, 0.3);
       border-radius: ${CAPACITY_BAR_STYLE.borderRadius}px;
-      overflow: hidden;
+      overflow: visible;
       pointer-events: none;
       opacity: ${CAPACITY_BAR_STYLE.opacity};
       transition: opacity 0.2s ease-out;
@@ -444,6 +445,29 @@ function createStyles() {
     
     #capacity-bar.regenerating #capacity-fill {
       background: linear-gradient(90deg, #00ffaa 0%, #88ffcc 100%);
+    }
+    
+    /* Stacker segmented capacity display */
+    #capacity-segments {
+      display: flex;
+      gap: 4px;
+      height: 100%;
+      width: 100%;
+      box-sizing: border-box;
+    }
+    
+    .capacity-segment {
+      flex: 1;
+      height: 100%;
+      background: rgba(0, 40, 60, 0.5);
+      border-radius: ${CAPACITY_BAR_STYLE.borderRadius - 2}px;
+      overflow: hidden;
+    }
+    
+    .capacity-segment-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #00ffaa 0%, #00ddaa 100%);
+      transition: width 0.1s linear;
     }
   `
   document.head.appendChild(style)
@@ -672,7 +696,7 @@ function createMinimap() {
   
   const title = document.createElement('div')
   title.className = 'hud-title'
-  title.innerHTML = '<span>Map</span><span class="hud-title-controls"><span class="font-btn font-decrease">Ã¢Ë†â€™</span><span class="font-btn font-increase">+</span><span class="collapse-btn">Ã¢â€“Â¾</span><span class="grip">Ã¢â€¹Â®Ã¢â€¹Â®</span></span>'
+  title.innerHTML = '<span>Map</span><span class="hud-title-controls"><span class="font-btn font-decrease">-</span><span class="font-btn font-increase">+</span><span class="collapse-btn">v</span><span class="grip">::</span></span>'
   
   const collapsible = document.createElement('div')
   collapsible.className = 'hud-collapsible'
@@ -716,7 +740,7 @@ function createInfoPanel() {
   infoPanel.className = 'hud-panel'
   
   infoPanel.innerHTML = `
-    <div class="hud-title"><span>Info</span><span class="hud-title-controls"><span class="font-btn font-decrease">Ã¢Ë†â€™</span><span class="font-btn font-increase">+</span><span class="collapse-btn">Ã¢â€“Â¾</span><span class="grip">Ã¢â€¹Â®Ã¢â€¹Â®</span></span></div>
+    <div class="hud-title"><span>Info</span><span class="hud-title-controls"><span class="font-btn font-decrease">-</span><span class="font-btn font-increase">+</span><span class="collapse-btn">v</span><span class="grip">::</span></span></div>
     <div class="hud-collapsible">
       <div class="info-content">
         <div class="info-row">
@@ -763,7 +787,7 @@ function createChatPanel() {
   chatPanel.className = 'hud-panel'
   
   chatPanel.innerHTML = `
-    <div class="hud-title"><span>Chat</span><span class="hud-title-controls"><span class="font-btn font-decrease">Ã¢Ë†â€™</span><span class="font-btn font-increase">+</span><span class="collapse-btn">Ã¢â€“Â¾</span><span class="grip">Ã¢â€¹Â®Ã¢â€¹Â®</span></span></div>
+    <div class="hud-title"><span>Chat</span><span class="hud-title-controls"><span class="font-btn font-decrease">-</span><span class="font-btn font-increase">+</span><span class="collapse-btn">v</span><span class="grip">::</span></span></div>
     <div class="hud-collapsible">
       <div id="chat-messages"></div>
       <div id="chat-input-container">
@@ -828,27 +852,62 @@ function createCapacityBar() {
   capacityBar = document.createElement('div')
   capacityBar.id = 'capacity-bar'
   
+  // Normal single fill (for most abilities)
   capacityFill = document.createElement('div')
   capacityFill.id = 'capacity-fill'
-  
   capacityBar.appendChild(capacityFill)
+  
+  // Segmented container (for stacker - 5 slots)
+  const segmentContainer = document.createElement('div')
+  segmentContainer.id = 'capacity-segments'
+  // CSS handles the styling
+  
+  // Create 5 segment slots
+  const numSlots = 5
+  
+  for (let i = 0; i < numSlots; i++) {
+    const segment = document.createElement('div')
+    segment.className = 'capacity-segment'
+    
+    const segmentFill = document.createElement('div')
+    segmentFill.className = 'capacity-segment-fill'
+    segmentFill.dataset.slot = i
+    
+    segment.appendChild(segmentFill)
+    segmentContainer.appendChild(segment)
+  }
+  
+  capacityBar.appendChild(segmentContainer)
   document.body.appendChild(capacityBar)
 }
 
 function updateCapacityBar(delta) {
   if (!capacityBar || !capacityFill) return
   
-  // Get the current ability's capacity config
+  const abilityName = getActiveAbilityName()
+  const isStacker = abilityName === 'stacker'
+  
+  // Toggle between normal and segmented display
+  const segmentContainer = document.getElementById('capacity-segments')
+  if (segmentContainer) {
+    segmentContainer.style.display = isStacker ? 'flex' : 'none'
+    capacityFill.style.display = isStacker ? 'none' : 'block'
+  }
+  
+  if (isStacker) {
+    // Update segmented display for stacker
+    updateStackerSegments()
+    return
+  }
+  
+  // Normal capacity bar logic for other abilities
   const config = getActiveCapacityConfig()
   
   // Initialize capacity on first run, or handle ability switch
   if (currentCapacity === null) {
-    // First time - start at full capacity for this ability
     currentCapacity = config.max
     lastAbilityMax = config.max
   } else if (lastAbilityMax !== config.max) {
-    // Ability changed - scale capacity proportionally to new max
-    // e.g., if you had 50% capacity, you'll still have 50% in new ability
     const percent = currentCapacity / lastAbilityMax
     currentCapacity = percent * config.max
     lastAbilityMax = config.max
@@ -856,7 +915,6 @@ function updateCapacityBar(delta) {
   }
   
   if (isCapacityActive) {
-    // Deplete capacity while active
     currentCapacity -= config.depleteRate * delta
     currentCapacity = Math.max(0, currentCapacity)
     regenDelayTimer = 0
@@ -864,12 +922,10 @@ function updateCapacityBar(delta) {
     capacityBar.classList.add('active')
     capacityBar.classList.remove('regenerating')
     
-    // Auto-deactivate if depleted (controls will handle this via hasCapacity check)
     if (currentCapacity <= 0) {
       capacityBar.classList.add('depleted')
     }
   } else {
-    // Regenerate capacity when inactive (after delay)
     capacityBar.classList.remove('active')
     
     if (currentCapacity < config.max) {
@@ -884,15 +940,42 @@ function updateCapacityBar(delta) {
       capacityBar.classList.remove('regenerating')
     }
     
-    // Remove depleted state once we have some capacity back
     if (currentCapacity > 10) {
       capacityBar.classList.remove('depleted')
     }
   }
   
-  // Update fill bar width
   const percent = (currentCapacity / config.max) * 100
   capacityFill.style.width = percent + '%'
+}
+
+/**
+ * Update stacker's segmented capacity display
+ */
+function updateStackerSegments() {
+  const slots = getSlotInfo()
+  if (!slots) return
+  
+  const fills = document.querySelectorAll('.capacity-segment-fill')
+  
+  for (let i = 0; i < slots.length && i < fills.length; i++) {
+    const slot = slots[i]
+    const fill = fills[i]
+    if (!fill) continue
+    
+    // Update fill width based on slot capacity
+    fill.style.width = slot.capacity + '%'
+    
+    // Keep same green color for all states (as requested)
+    // Just vary the glow intensity based on state
+    if (slot.state === 'ready') {
+      fill.style.boxShadow = '0 0 10px rgba(0, 255, 170, 0.5)'
+    } else if (slot.state === 'active') {
+      fill.style.boxShadow = '0 0 15px rgba(0, 255, 170, 0.7)'
+    } else {
+      fill.style.boxShadow = '0 0 5px rgba(0, 255, 170, 0.3)'
+    }
+  }
 }
 
 // ============================================================================
