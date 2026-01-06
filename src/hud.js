@@ -2,9 +2,11 @@ import Stats from 'three/examples/jsm/libs/stats.module.js'
 import { getPlayer, getCurrentCreature, getPlayerNormalizationInfo, getCurrentVariantDisplayName } from './player.js'
 import { Feeding } from './Feeding.js'
 import { FishAdder } from './FishAdder.js'
-import { getCameraMode } from './camera.js'
+import { camera, getCameraMode } from './camera.js'
 import { getActiveCapacityConfig, getActiveAbilityName } from './ExtraControls.js'
 import { getSlotInfo } from './stacker.js'
+// Import core chat logic (separated for multiplayer support)
+import * as Chat from './chats.js'
 
 let stats
 
@@ -19,6 +21,13 @@ let chatInput = null
 let cursorRing = null
 let capacityBar = null
 let capacityFill = null
+
+// Proximity chat state
+let proximityCheckbox = null
+let proximityBubble = null
+let proximityBubbleTimeout = null
+const PROXIMITY_BUBBLE_DURATION = 4000 // How long bubble stays visible (ms)
+const PROXIMITY_BUBBLE_FADE = 300 // Fade out duration (ms)
 
 // Capacity system state - DEFAULT/FALLBACK config (per-ability configs override these)
 // Edit capacity settings in each ability file: sprinter.js, attacker.js, etc.
@@ -65,9 +74,8 @@ let pingIdCounter = 0
 const lastNpcPingTime = new Map()
 const PING_DEBOUNCE_MS = 500 // Minimum time between pings for same NPC
 
-// Chat message history
-const chatHistory = []
-const MAX_CHAT_MESSAGES = 50
+// Chat message history - now managed by chats.js module
+// (kept here for reference: Chat.getHistory(), Chat.addMessage(), etc.)
 
 export function initHUD() {
   createStyles()
@@ -295,6 +303,45 @@ function createStyles() {
       width: 280px;
     }
     
+    #chat-panel .hud-title {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    
+    #chat-panel .hud-title-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    .proximity-toggle {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 9px;
+      opacity: 0.7;
+      cursor: pointer;
+      user-select: none;
+    }
+    
+    .proximity-toggle:hover {
+      opacity: 1;
+    }
+    
+    .proximity-toggle input[type="checkbox"] {
+      display: none;
+    }
+    
+    .proximity-toggle .checkbox-icon {
+      font-size: 12px;
+      cursor: pointer;
+    }
+    
+    .proximity-toggle label {
+      cursor: pointer;
+    }
+    
     #chat-panel .hud-collapsible {
       display: flex;
       flex-direction: column;
@@ -468,6 +515,43 @@ function createStyles() {
       height: 100%;
       background: linear-gradient(90deg, #00ffaa 0%, #00ddaa 100%);
       transition: width 0.1s linear;
+    }
+    
+    /* Proximity Chat Bubble - floats near player in 3D space */
+    .proximity-bubble {
+      position: fixed;
+      background: rgba(0, 20, 40, 0.9);
+      border: 1px solid rgba(0, 255, 200, 0.5);
+      border-radius: 8px;
+      padding: 6px 12px;
+      color: #00ffc8;
+      font-family: 'Consolas', 'Monaco', monospace;
+      font-size: 12px;
+      max-width: 200px;
+      word-wrap: break-word;
+      pointer-events: none;
+      z-index: 1000;
+      transform: translate(-50%, -100%);
+      opacity: 1;
+      transition: opacity 0.3s ease-out;
+      box-shadow: 0 0 10px rgba(0, 255, 200, 0.3);
+    }
+    
+    .proximity-bubble::after {
+      content: '';
+      position: absolute;
+      bottom: -6px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 0;
+      height: 0;
+      border-left: 6px solid transparent;
+      border-right: 6px solid transparent;
+      border-top: 6px solid rgba(0, 255, 200, 0.5);
+    }
+    
+    .proximity-bubble.fading {
+      opacity: 0;
     }
   `
   document.head.appendChild(style)
@@ -787,7 +871,13 @@ function createChatPanel() {
   chatPanel.className = 'hud-panel'
   
   chatPanel.innerHTML = `
-    <div class="hud-title"><span>Chat</span><span class="hud-title-controls"><span class="font-btn font-decrease">-</span><span class="font-btn font-increase">+</span><span class="collapse-btn">v</span><span class="grip">::</span></span></div>
+    <div class="hud-title">
+      <span class="hud-title-left">
+        <span>Chat</span>
+        <span class="proximity-toggle">| <label for="proximity-checkbox">Proximity</label><input type="checkbox" id="proximity-checkbox" checked /><span class="checkbox-icon">☑</span></span>
+      </span>
+      <span class="hud-title-controls"><span class="font-btn font-decrease">-</span><span class="font-btn font-increase">+</span><span class="collapse-btn">v</span><span class="grip">::</span></span>
+    </div>
     <div class="hud-collapsible">
       <div id="chat-messages"></div>
       <div id="chat-input-container">
@@ -800,11 +890,49 @@ function createChatPanel() {
   
   chatMessages = document.getElementById('chat-messages')
   chatInput = document.getElementById('chat-input')
+  proximityCheckbox = document.getElementById('proximity-checkbox')
+  const checkboxIcon = chatPanel.querySelector('.checkbox-icon')
+  
+  // Toggle unicode checkbox icon when checkbox changes
+  proximityCheckbox.addEventListener('change', () => {
+    checkboxIcon.textContent = proximityCheckbox.checked ? '☑' : '☐'
+  })
+  
+  // Click on icon toggles checkbox
+  checkboxIcon.addEventListener('click', () => {
+    proximityCheckbox.checked = !proximityCheckbox.checked
+    checkboxIcon.textContent = proximityCheckbox.checked ? '☑' : '☐'
+  })
+  
+  // Global Enter key to focus chat input
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && document.activeElement !== chatInput) {
+      e.preventDefault()
+      chatInput.focus()
+    }
+  })
+  
+  // Create proximity bubble element (hidden by default)
+  proximityBubble = document.createElement('div')
+  proximityBubble.className = 'proximity-bubble'
+  proximityBubble.style.display = 'none'
+  document.body.appendChild(proximityBubble)
+  
+  // Subscribe to chat messages for UI rendering
+  // This allows the core chat logic (chats.js) to be decoupled from the UI
+  Chat.onMessage(renderChatMessage)
   
   // Chat input handling
   chatInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && chatInput.value.trim()) {
-      addChatMessage(chatInput.value.trim(), 'player')
+      const message = chatInput.value.trim()
+      addChatMessage(message, 'player')
+      
+      // Show proximity bubble if checkbox is checked
+      if (proximityCheckbox.checked) {
+        showProximityBubble(message)
+      }
+      
       chatInput.value = ''
       chatInput.blur()
     }
@@ -819,7 +947,7 @@ function createChatPanel() {
   chatInput.addEventListener('keypress', (e) => e.stopPropagation())
   
   // Welcome message
-  addChatMessage('Welcome to the ocean!', 'system')
+  Chat.systemMessage('Welcome to the ocean!')
   
   // Make draggable, resizable, collapsible, and font-resizable
   makeDraggable(chatPanel)
@@ -1104,27 +1232,90 @@ export function getCapacityConfig() {
   return { ...getActiveCapacityConfig() }
 }
 
+/**
+ * Add a chat message
+ * Core logic is handled by chats.js, this handles UI rendering
+ * @param {string} text - Message text
+ * @param {string} type - Message type ('player', 'system', 'event')
+ */
 export function addChatMessage(text, type = 'player') {
-  const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  // Add message using the core chat module
+  // The UI rendering is handled by the message listener set up in initChatPanel()
+  Chat.addMessage(text, type)
+}
+
+/**
+ * Render a message to the chat DOM
+ * Called by the Chat module's message listener
+ * @param {object} message - Message object from chats.js
+ */
+function renderChatMessage(message) {
+  if (!chatMessages) return
   
-  const message = {
-    text,
-    type,
-    timestamp,
+  const msgEl = document.createElement('div')
+  msgEl.className = 'chat-message ' + message.type
+  msgEl.innerHTML = '<span class="timestamp">' + message.timestamp + '</span>' + message.text
+  chatMessages.appendChild(msgEl)
+  chatMessages.scrollTop = chatMessages.scrollHeight
+}
+
+/**
+ * Show a proximity chat bubble near the player
+ * @param {string} text - The message to display
+ */
+function showProximityBubble(text) {
+  if (!proximityBubble) return
+  
+  // Clear any existing timeout
+  if (proximityBubbleTimeout) {
+    clearTimeout(proximityBubbleTimeout)
+    proximityBubble.classList.remove('fading')
   }
   
-  chatHistory.push(message)
-  if (chatHistory.length > MAX_CHAT_MESSAGES) {
-    chatHistory.shift()
+  // Set the message and show the bubble
+  proximityBubble.textContent = text
+  proximityBubble.style.display = 'block'
+  
+  // Start fade out after duration
+  proximityBubbleTimeout = setTimeout(() => {
+    proximityBubble.classList.add('fading')
+    
+    // Hide completely after fade
+    setTimeout(() => {
+      proximityBubble.style.display = 'none'
+      proximityBubble.classList.remove('fading')
+    }, PROXIMITY_BUBBLE_FADE)
+  }, PROXIMITY_BUBBLE_DURATION)
+}
+
+/**
+ * Update proximity bubble position to follow player
+ * Called each frame from updateHUD
+ */
+function updateProximityBubble() {
+  if (!proximityBubble || proximityBubble.style.display === 'none') return
+  if (!camera) return
+  
+  const player = getPlayer()
+  if (!player) return
+  
+  // Project player position to screen coordinates
+  const screenPos = player.position.clone()
+  screenPos.y += 3 // Offset above player head
+  screenPos.project(camera)
+  
+  // Convert to CSS coordinates
+  const x = (screenPos.x * 0.5 + 0.5) * window.innerWidth
+  const y = (-screenPos.y * 0.5 + 0.5) * window.innerHeight
+  
+  // Check if in front of camera
+  if (screenPos.z > 1) {
+    proximityBubble.style.display = 'none'
+    return
   }
   
-  if (chatMessages) {
-    const msgEl = document.createElement('div')
-    msgEl.className = 'chat-message ' + type
-    msgEl.innerHTML = '<span class="timestamp">' + timestamp + '</span>' + text
-    chatMessages.appendChild(msgEl)
-    chatMessages.scrollTop = chatMessages.scrollHeight
-  }
+  proximityBubble.style.left = x + 'px'
+  proximityBubble.style.top = y + 'px'
 }
 
 // Pre-computed constants for NPC colors (avoid object allocation in hot loop)
@@ -1464,9 +1655,14 @@ export function updateHUD(delta) {
   updateInfoPanel()
   updateCursorRing()
   updateCapacityBar(delta)
+  updateProximityBubble()
 }
 
 // Export for external use (e.g., feeding events)
 export function notifyEvent(message) {
-  addChatMessage(message, 'event')
+  Chat.eventMessage(message)
 }
+
+// Re-export Chat module for direct access to chat features
+// Useful for multiplayer integration, command systems, etc.
+export { Chat }
