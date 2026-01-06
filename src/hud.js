@@ -38,9 +38,13 @@ const CAPACITY_BAR_STYLE = {
   opacity: 0.7,       // Default opacity (0-1)
 }
 
-let currentCapacity = DEFAULT_CAPACITY_CONFIG.max
+// Capacity is initialized on first use - will be set to active ability's max
+let currentCapacity = null  // null = not yet initialized
 let isCapacityActive = false
 let regenDelayTimer = 0
+
+// Track which ability's max we're currently using (to detect ability switches)
+let lastAbilityMax = null
 
 // Minimap settings
 const MINIMAP_SIZE = 160
@@ -837,6 +841,20 @@ function updateCapacityBar(delta) {
   // Get the current ability's capacity config
   const config = getActiveCapacityConfig()
   
+  // Initialize capacity on first run, or handle ability switch
+  if (currentCapacity === null) {
+    // First time - start at full capacity for this ability
+    currentCapacity = config.max
+    lastAbilityMax = config.max
+  } else if (lastAbilityMax !== config.max) {
+    // Ability changed - scale capacity proportionally to new max
+    // e.g., if you had 50% capacity, you'll still have 50% in new ability
+    const percent = currentCapacity / lastAbilityMax
+    currentCapacity = percent * config.max
+    lastAbilityMax = config.max
+    console.log(`[Capacity] Ability switched - scaled to ${currentCapacity.toFixed(1)}/${config.max}`)
+  }
+  
   if (isCapacityActive) {
     // Deplete capacity while active
     currentCapacity -= config.depleteRate * delta
@@ -885,6 +903,13 @@ function updateCapacityBar(delta) {
  * Activate capacity consumption (called when Q is pressed)
  */
 export function activateCapacity() {
+  // Initialize if needed
+  if (currentCapacity === null) {
+    const config = getActiveCapacityConfig()
+    currentCapacity = config.max
+    lastAbilityMax = config.max
+  }
+  
   if (currentCapacity > 0) {
     isCapacityActive = true
     return true
@@ -903,6 +928,12 @@ export function deactivateCapacity() {
  * Check if there's enough capacity to use ability
  */
 export function hasCapacity() {
+  // Initialize if needed
+  if (currentCapacity === null) {
+    const config = getActiveCapacityConfig()
+    currentCapacity = config.max
+    lastAbilityMax = config.max
+  }
   return currentCapacity > 0
 }
 
@@ -910,7 +941,9 @@ export function hasCapacity() {
  * Get current capacity as percentage (0-100)
  */
 export function getCapacityPercent() {
-  return (currentCapacity / CAPACITY_CONFIG.max) * 100
+  const config = getActiveCapacityConfig()
+  if (currentCapacity === null) return 100
+  return (currentCapacity / config.max) * 100
 }
 
 /**
@@ -926,6 +959,13 @@ export function isCapacityDepleting() {
  * @returns {boolean} - True if had enough capacity and consumed
  */
 export function consumeCapacity(amount) {
+  // Initialize if needed
+  if (currentCapacity === null) {
+    const config = getActiveCapacityConfig()
+    currentCapacity = config.max
+    lastAbilityMax = config.max
+  }
+  
   if (currentCapacity < amount) {
     return false
   }
@@ -941,6 +981,36 @@ export function consumeCapacity(amount) {
  */
 export function setCapacityDepleting(depleting) {
   isCapacityActive = depleting
+}
+
+/**
+ * Reset capacity to full (for the current ability's max)
+ */
+export function resetCapacity() {
+  const config = getActiveCapacityConfig()
+  currentCapacity = config.max
+  lastAbilityMax = config.max
+  regenDelayTimer = 0
+  isCapacityActive = false
+}
+
+/**
+ * Restore a specific amount of capacity (for abilities like stacker where
+ * capacity is restored when objects despawn)
+ * @param {number} amount - Amount to restore
+ */
+export function restoreCapacity(amount) {
+  const config = getActiveCapacityConfig()
+  
+  // Initialize if needed
+  if (currentCapacity === null) {
+    currentCapacity = config.max
+    lastAbilityMax = config.max
+    return
+  }
+  
+  currentCapacity = Math.min(config.max, currentCapacity + amount)
+  console.log(`[Capacity] Restored ${amount.toFixed(1)} → ${currentCapacity.toFixed(1)}/${config.max}`)
 }
 
 /**

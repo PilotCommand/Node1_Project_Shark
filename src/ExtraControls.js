@@ -32,7 +32,7 @@ import Attacker, { init as initAttacker, debugAttacker } from './attacker.js'
  * 
  * Options: 'sprinter', 'stacker', 'camper', 'attacker', 'none'
  */
-const ACTIVE_ABILITY = 'camper'
+const ACTIVE_ABILITY = 'stacker'
 
 // ============================================================================
 // ABILITIES REGISTRY

@@ -15,9 +15,9 @@ import { setCapacityDepleting, hasCapacity } from './hud.js'
 // ============================================================================
 
 const CAPACITY_CONFIG = {
-  max: 100,              // Maximum capacity
-  depleteRate: 15,       // Units per second while camouflaged
-  regenRate: 8,          // Units per second when regenerating (after camo breaks)
+  max: 500,              // Maximum capacity
+  depleteRate: 10,       // Units per second while camouflaged
+  regenRate: 10,          // Units per second when regenerating (after camo breaks)
   regenDelay: 1.0,       // Seconds before regen starts after camo breaks
 }
 

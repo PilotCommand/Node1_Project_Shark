@@ -12,18 +12,19 @@ import { getPlayer } from './player.js'
 import { camera } from './camera.js'
 import { MeshRegistry, Category, Tag } from './MeshRegistry.js'
 import { createStaticCollider, removeStaticCollider, isPhysicsReady } from './Physics.js'
-import { consumeCapacity, getCapacityConfig } from './hud.js'
+import { consumeCapacity, getCapacityConfig, restoreCapacity } from './hud.js'
 
 // ============================================================================
 // ⭐ CAPACITY CONFIG - EASY TO EDIT! ⭐
 // ============================================================================
 
 const CAPACITY_CONFIG = {
-  max: 100,              // Maximum capacity
-  depleteRate: 20,       // Not used for perUse mode (instant consumption)
-  regenRate: 10,         // Units per second when regenerating (after placing prisms)
-  regenDelay: 1.5,       // Seconds before regen starts after placing a prism
+  max: 100,              // Maximum capacity (100 = can place maxPrisms prisms)
+  depleteRate: 0,        // Not used for perUse mode
+  regenRate: 0,          // NO time-based regen! Capacity only restores when prisms despawn
+  regenDelay: 0,         // Not used since regenRate is 0
 }
+// NOTE: Capacity restores by (max / maxPrisms) when a prism despawns after its timer
 
 // ============================================================================
 // CONFIG - Edit these values to customize the stacker!
@@ -789,7 +790,9 @@ function removeOldestPrism() {
   if (placedPrisms.length === 0) return
   
   const oldest = placedPrisms.shift()
-  removePrismMesh(oldest, 'oldest')
+  // NOTE: No capacity restore here - this is called when placing a NEW prism
+  // pushes out the oldest. Capacity only restores on natural despawn (timer).
+  removePrismMesh(oldest, 'oldest (replaced by new)')
 }
 
 /**
@@ -837,13 +840,17 @@ function updateDespawnTimers() {
     }
   }
   
-  // Remove expired prisms
+  // Remove expired prisms and restore capacity for each
   for (const prism of toRemove) {
     const idx = placedPrisms.indexOf(prism)
     if (idx !== -1) {
       placedPrisms.splice(idx, 1)
     }
     removePrismMesh(prism, 'despawned after ' + CONFIG.prismDespawnTime + 's')
+    
+    // Restore capacity when prism despawns naturally (not when replaced by new one)
+    const capacityPerPrism = getCapacityCostPerPrism()
+    restoreCapacity(capacityPerPrism)
   }
 }
 
