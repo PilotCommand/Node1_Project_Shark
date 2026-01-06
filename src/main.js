@@ -11,6 +11,10 @@ import {
   initPhysics, 
   buildTerrainCollider,
   createWorldBoundaryCollider,
+  createWaterSurfaceSensor,
+  updateWaterSurfaceDetection,
+  onExitWater,
+  onEnterWater,
   createPlayerBody,
   updatePhysics,
   debugPhysics,
@@ -104,6 +108,19 @@ initPhysics().then((success) => {
     // Create world boundary collider (invisible dome to keep players inside)
     createWorldBoundaryCollider({ radius: 500 })
     
+    // Create water surface sensor (detects player entering/exiting water)
+    createWaterSurfaceSensor({ yLevel: 30, size: 1000 })
+    
+    // Register water surface callbacks
+    onExitWater(({ y, waterLevel }) => {
+      console.log(`[Main] Player exited water! (y: ${y.toFixed(1)}, water level: ${waterLevel})`)
+      notifyEvent('Jumped out of water!')
+    })
+    
+    onEnterWater(({ y, waterLevel }) => {
+      console.log(`[Main] Player entered water (y: ${y.toFixed(1)}, water level: ${waterLevel})`)
+    })
+    
     // Create player physics body from capsule wireframe data
     createPlayerBody()
     
@@ -132,6 +149,9 @@ function animate() {
   
   // Update physics simulation (syncs physics bodies with Three.js meshes)
   updatePhysics(delta)
+  
+  // Update water surface detection (checks if player entered/exited water)
+  updateWaterSurfaceDetection(30)  // Water level at y=30
   
   // Update player movement (now applies forces instead of direct position)
   updateMovement(delta)

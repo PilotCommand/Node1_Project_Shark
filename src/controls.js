@@ -53,6 +53,8 @@ import {
   toggleStaticColliderWireframe,
   createWorldBoundaryCollider,
   removeWorldBoundaryCollider,
+  createWaterSurfaceSensor,
+  removeWaterSurfaceSensor,
 } from './Physics.js'
 import {
   initSwimming,
@@ -113,6 +115,7 @@ function rebuildTerrainPhysics() {
   if (isPhysicsReady()) {
     removeTerrainCollider()
     removeWorldBoundaryCollider()
+    removeWaterSurfaceSensor()
   }
   
   const meshData = rebuildTerrainMesh()
@@ -123,7 +126,8 @@ function rebuildTerrainPhysics() {
     if (isPhysicsReady()) {
       buildTerrainCollider()
       createWorldBoundaryCollider({ radius: 500 })
-      console.log('[Controls] Rebuilt terrain physics collider + world boundary')
+      createWaterSurfaceSensor({ yLevel: 30, size: 1000 })
+      console.log('[Controls] Rebuilt terrain physics collider + world boundary + water sensor')
     }
   }
 }

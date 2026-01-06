@@ -546,7 +546,17 @@ export function toggleStaticColliderWireframe() {
     worldBoundaryDebugMesh.visible = staticWireframeVisible
   }
   
-  console.log(`[Physics] Static collider wireframes: ${staticWireframeVisible ? 'ON' : 'OFF'} (${staticColliders.size} colliders${worldBoundaryCollider ? ' + world boundary' : ''})`)
+  // Toggle water surface wireframe
+  if (waterSurfaceDebugMesh) {
+    waterSurfaceDebugMesh.visible = staticWireframeVisible
+  }
+  
+  const extras = [
+    worldBoundaryCollider ? 'world boundary' : null,
+    waterSurfaceCollider ? 'water sensor' : null,
+  ].filter(Boolean).join(' + ')
+  
+  console.log(`[Physics] Static collider wireframes: ${staticWireframeVisible ? 'ON' : 'OFF'} (${staticColliders.size} colliders${extras ? ' + ' + extras : ''})`)
   return staticWireframeVisible
 }
 
@@ -566,6 +576,11 @@ export function setStaticColliderWireframeVisible(visible) {
   // Also update world boundary wireframe
   if (worldBoundaryDebugMesh) {
     worldBoundaryDebugMesh.visible = staticWireframeVisible
+  }
+  
+  // Also update water surface wireframe
+  if (waterSurfaceDebugMesh) {
+    waterSurfaceDebugMesh.visible = staticWireframeVisible
   }
 }
 
@@ -707,6 +722,190 @@ export function removeWorldBoundaryCollider() {
  */
 export function hasWorldBoundaryCollider() {
   return worldBoundaryCollider !== null
+}
+
+// ============================================================================
+// WATER SURFACE SENSOR (Detects when player exits/enters water)
+// ============================================================================
+
+// Storage for water surface sensor
+let waterSurfaceCollider = null
+let waterSurfaceDebugMesh = null
+let waterSurfaceCallbacks = {
+  onEnterWater: [],
+  onExitWater: [],
+}
+
+// Track player's water state
+let playerInWater = true  // Assume starting underwater
+
+/**
+ * Create a sensor plane at the water surface level
+ * Detects when entities cross the water surface but doesn't block movement
+ * 
+ * @param {object} options
+ * @param {number} [options.yLevel=30] - Y position of water surface
+ * @param {number} [options.size=1000] - Size of the detection plane
+ * @returns {boolean} Success
+ */
+export function createWaterSurfaceSensor(options = {}) {
+  if (!physicsReady) {
+    console.warn('[Physics] Not initialized - call initPhysics() first')
+    return false
+  }
+  
+  // Remove existing sensor if any
+  removeWaterSurfaceSensor()
+  
+  const {
+    yLevel = 30,
+    size = 1000,
+  } = options
+  
+  console.log(`[Physics] Creating water surface sensor (y: ${yLevel}, size: ${size})...`)
+  
+  try {
+    // Create a thin box as the sensor (Rapier doesn't have infinite planes)
+    // Using a very thin box (0.1 thick) centered at water level
+    const halfExtents = { x: size / 2, y: 0.05, z: size / 2 }
+    
+    const colliderDesc = RAPIER.ColliderDesc.cuboid(halfExtents.x, halfExtents.y, halfExtents.z)
+      .setTranslation(0, yLevel, 0)
+      .setSensor(true)  // SENSOR MODE - detects but doesn't block
+      .setCollisionGroups(createCollisionGroups(CONFIG.groups.TERRAIN, CONFIG.groups.PLAYER | CONFIG.groups.NPC))
+      .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS)
+    
+    waterSurfaceCollider = world.createCollider(colliderDesc)
+    
+    // Create debug wireframe mesh (flat plane outline)
+    if (sceneRef) {
+      const geometry = new THREE.PlaneGeometry(size, size)
+      geometry.rotateX(-Math.PI / 2)  // Make horizontal
+      
+      const wireframeGeometry = new THREE.WireframeGeometry(geometry)
+      const wireframeMaterial = new THREE.LineBasicMaterial({
+        color: 0x00ffff,  // Cyan for water sensor
+        transparent: true,
+        opacity: 0.5,
+        depthTest: DEBUG_WIREFRAME.depthTest,
+        depthWrite: DEBUG_WIREFRAME.depthWrite,
+      })
+      
+      waterSurfaceDebugMesh = new THREE.LineSegments(wireframeGeometry, wireframeMaterial)
+      waterSurfaceDebugMesh.position.y = yLevel
+      waterSurfaceDebugMesh.name = 'physics-debug-waterSurface'
+      waterSurfaceDebugMesh.renderOrder = 999
+      waterSurfaceDebugMesh.visible = staticWireframeVisible
+      sceneRef.add(waterSurfaceDebugMesh)
+      
+      // Clean up temp geometry
+      geometry.dispose()
+    }
+    
+    console.log('[Physics] Water surface sensor created successfully')
+    console.log(`  - Y Level: ${yLevel}`)
+    console.log(`  - Size: ${size}x${size}`)
+    console.log(`  - Debug wireframe: ${waterSurfaceDebugMesh ? 'YES' : 'NO'}`)
+    
+    return true
+  } catch (error) {
+    console.error('[Physics] Failed to create water surface sensor:', error)
+    return false
+  }
+}
+
+/**
+ * Remove water surface sensor
+ */
+export function removeWaterSurfaceSensor() {
+  if (waterSurfaceCollider) {
+    world.removeCollider(waterSurfaceCollider, true)
+    waterSurfaceCollider = null
+    console.log('[Physics] Water surface sensor removed')
+  }
+  
+  if (waterSurfaceDebugMesh && waterSurfaceDebugMesh.parent) {
+    waterSurfaceDebugMesh.parent.remove(waterSurfaceDebugMesh)
+    waterSurfaceDebugMesh.geometry?.dispose()
+    waterSurfaceDebugMesh.material?.dispose()
+    waterSurfaceDebugMesh = null
+  }
+}
+
+/**
+ * Check if water surface sensor exists
+ * @returns {boolean}
+ */
+export function hasWaterSurfaceSensor() {
+  return waterSurfaceCollider !== null
+}
+
+/**
+ * Register callback for when player exits water (goes above surface)
+ * @param {function} callback - Called with { y: playerY, waterLevel: number }
+ * @returns {function} Unsubscribe function
+ */
+export function onExitWater(callback) {
+  if (typeof callback === 'function') {
+    waterSurfaceCallbacks.onExitWater.push(callback)
+    return () => {
+      const idx = waterSurfaceCallbacks.onExitWater.indexOf(callback)
+      if (idx > -1) waterSurfaceCallbacks.onExitWater.splice(idx, 1)
+    }
+  }
+  return () => {}
+}
+
+/**
+ * Register callback for when player enters water (goes below surface)
+ * @param {function} callback - Called with { y: playerY, waterLevel: number }
+ * @returns {function} Unsubscribe function
+ */
+export function onEnterWater(callback) {
+  if (typeof callback === 'function') {
+    waterSurfaceCallbacks.onEnterWater.push(callback)
+    return () => {
+      const idx = waterSurfaceCallbacks.onEnterWater.indexOf(callback)
+      if (idx > -1) waterSurfaceCallbacks.onEnterWater.splice(idx, 1)
+    }
+  }
+  return () => {}
+}
+
+/**
+ * Check if player is currently underwater
+ * @returns {boolean}
+ */
+export function isPlayerInWater() {
+  return playerInWater
+}
+
+/**
+ * Update water surface detection (call each frame)
+ * Uses simple Y position check since sensor collision events can be unreliable
+ * @param {number} waterLevel - Y level of water surface
+ */
+export function updateWaterSurfaceDetection(waterLevel = 30) {
+  if (!playerBody) return
+  
+  const pos = playerBody.translation()
+  const wasInWater = playerInWater
+  playerInWater = pos.y < waterLevel
+  
+  // Detect state change
+  if (wasInWater && !playerInWater) {
+    // Exited water
+    const eventData = { y: pos.y, waterLevel }
+    waterSurfaceCallbacks.onExitWater.forEach(cb => {
+      try { cb(eventData) } catch (e) { console.error('[Physics] onExitWater callback error:', e) }
+    })
+  } else if (!wasInWater && playerInWater) {
+    // Entered water
+    const eventData = { y: pos.y, waterLevel }
+    waterSurfaceCallbacks.onEnterWater.forEach(cb => {
+      try { cb(eventData) } catch (e) { console.error('[Physics] onEnterWater callback error:', e) }
+    })
+  }
 }
 
 // ============================================================================
@@ -1263,6 +1462,8 @@ export function debugPhysics() {
   console.log(`Enabled: ${physicsEnabled}`)
   console.log(`Terrain colliders: ${terrainBodies.size}`)
   console.log(`World boundary: ${worldBoundaryCollider ? 'YES' : 'NO'}`)
+  console.log(`Water surface sensor: ${waterSurfaceCollider ? 'YES' : 'NO'}`)
+  console.log(`Player in water: ${playerInWater ? 'YES' : 'NO'}`)
   console.log(`Static colliders: ${staticColliders.size}`)
   console.log(`Creature bodies: ${creatureBodies.size}`)
   
@@ -1334,6 +1535,9 @@ export function disposePhysics() {
   // Remove world boundary
   removeWorldBoundaryCollider()
   
+  // Remove water surface sensor
+  removeWaterSurfaceSensor()
+  
   // Remove terrain
   removeTerrainCollider()
   
@@ -1368,6 +1572,15 @@ export default {
   createWorldBoundaryCollider,
   removeWorldBoundaryCollider,
   hasWorldBoundaryCollider,
+  
+  // Water surface sensor
+  createWaterSurfaceSensor,
+  removeWaterSurfaceSensor,
+  hasWaterSurfaceSensor,
+  onExitWater,
+  onEnterWater,
+  isPlayerInWater,
+  updateWaterSurfaceDetection,
   
   // Static colliders (player-placed structures)
   createStaticCollider,
