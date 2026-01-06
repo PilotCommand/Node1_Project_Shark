@@ -534,13 +534,19 @@ export function getStaticColliderCount() {
 export function toggleStaticColliderWireframe() {
   staticWireframeVisible = !staticWireframeVisible
   
+  // Toggle static colliders
   for (const [id, entry] of staticColliders) {
     if (entry.debugMesh) {
       entry.debugMesh.visible = staticWireframeVisible
     }
   }
   
-  console.log(`[Physics] Static collider wireframes: ${staticWireframeVisible ? 'ON' : 'OFF'} (${staticColliders.size} colliders)`)
+  // Toggle world boundary wireframe
+  if (worldBoundaryDebugMesh) {
+    worldBoundaryDebugMesh.visible = staticWireframeVisible
+  }
+  
+  console.log(`[Physics] Static collider wireframes: ${staticWireframeVisible ? 'ON' : 'OFF'} (${staticColliders.size} colliders${worldBoundaryCollider ? ' + world boundary' : ''})`)
   return staticWireframeVisible
 }
 
@@ -556,6 +562,11 @@ export function setStaticColliderWireframeVisible(visible) {
       entry.debugMesh.visible = staticWireframeVisible
     }
   }
+  
+  // Also update world boundary wireframe
+  if (worldBoundaryDebugMesh) {
+    worldBoundaryDebugMesh.visible = staticWireframeVisible
+  }
 }
 
 /**
@@ -564,6 +575,138 @@ export function setStaticColliderWireframeVisible(visible) {
  */
 export function isStaticColliderWireframeVisible() {
   return staticWireframeVisible
+}
+
+// ============================================================================
+// WORLD BOUNDARY COLLIDER (Invisible dome that keeps players inside)
+// ============================================================================
+
+// Storage for world boundary
+let worldBoundaryCollider = null
+let worldBoundaryDebugMesh = null
+
+/**
+ * Create an invisible sphere collider that keeps players inside the map
+ * Uses inverted normals so collision happens when trying to exit
+ * 
+ * @param {object} options
+ * @param {number} [options.radius=500] - Sphere radius (should match sky dome)
+ * @param {number} [options.segments=32] - Sphere detail level
+ * @param {number} [options.friction=0.3] - Surface friction
+ * @param {number} [options.restitution=0.5] - Bounciness when hitting boundary
+ * @returns {boolean} Success
+ */
+export function createWorldBoundaryCollider(options = {}) {
+  if (!physicsReady) {
+    console.warn('[Physics] Not initialized - call initPhysics() first')
+    return false
+  }
+  
+  // Remove existing boundary if any
+  removeWorldBoundaryCollider()
+  
+  const {
+    radius = 500,
+    segments = 32,
+    friction = 0.3,
+    restitution = 0.5,
+  } = options
+  
+  console.log(`[Physics] Creating world boundary collider (radius: ${radius})...`)
+  
+  try {
+    // Create a sphere geometry
+    const geometry = new THREE.SphereGeometry(radius, segments, segments)
+    
+    // Get position and index data
+    const posAttr = geometry.getAttribute('position')
+    const indexAttr = geometry.getIndex()
+    
+    // Copy vertices
+    const vertices = new Float32Array(posAttr.count * 3)
+    for (let i = 0; i < posAttr.count; i++) {
+      vertices[i * 3] = posAttr.getX(i)
+      vertices[i * 3 + 1] = posAttr.getY(i)
+      vertices[i * 3 + 2] = posAttr.getZ(i)
+    }
+    
+    // INVERT the triangle winding order so normals face INWARD
+    // This makes the collider keep things INSIDE the sphere
+    const originalIndices = indexAttr.array
+    const indices = new Uint32Array(originalIndices.length)
+    for (let i = 0; i < originalIndices.length; i += 3) {
+      // Swap second and third vertex of each triangle
+      indices[i] = originalIndices[i]
+      indices[i + 1] = originalIndices[i + 2]  // Swapped
+      indices[i + 2] = originalIndices[i + 1]  // Swapped
+    }
+    
+    // Create trimesh collider with inverted normals
+    const colliderDesc = RAPIER.ColliderDesc.trimesh(vertices, indices)
+      .setFriction(friction)
+      .setRestitution(restitution)
+      .setCollisionGroups(createCollisionGroups(CONFIG.groups.TERRAIN, 0xFFFF))
+    
+    worldBoundaryCollider = world.createCollider(colliderDesc)
+    
+    // Create debug wireframe mesh
+    if (sceneRef) {
+      // Create wireframe geometry from the sphere
+      const wireframeGeometry = new THREE.WireframeGeometry(geometry)
+      const wireframeMaterial = new THREE.LineBasicMaterial({
+        color: DEBUG_WIREFRAME.color,
+        transparent: true,
+        opacity: DEBUG_WIREFRAME.opacity,
+        depthTest: DEBUG_WIREFRAME.depthTest,
+        depthWrite: DEBUG_WIREFRAME.depthWrite,
+      })
+      
+      worldBoundaryDebugMesh = new THREE.LineSegments(wireframeGeometry, wireframeMaterial)
+      worldBoundaryDebugMesh.name = 'physics-debug-worldBoundary'
+      worldBoundaryDebugMesh.renderOrder = 999
+      worldBoundaryDebugMesh.visible = staticWireframeVisible
+      sceneRef.add(worldBoundaryDebugMesh)
+    }
+    
+    // Clean up the geometry (we've extracted what we need)
+    geometry.dispose()
+    
+    console.log('[Physics] World boundary collider created successfully')
+    console.log(`  - Radius: ${radius}`)
+    console.log(`  - Triangles: ${indices.length / 3}`)
+    console.log(`  - Debug wireframe: ${worldBoundaryDebugMesh ? 'YES' : 'NO'}`)
+    
+    return true
+  } catch (error) {
+    console.error('[Physics] Failed to create world boundary collider:', error)
+    return false
+  }
+}
+
+/**
+ * Remove world boundary collider
+ */
+export function removeWorldBoundaryCollider() {
+  if (worldBoundaryCollider) {
+    world.removeCollider(worldBoundaryCollider, true)
+    worldBoundaryCollider = null
+    console.log('[Physics] World boundary collider removed')
+  }
+  
+  if (worldBoundaryDebugMesh && worldBoundaryDebugMesh.parent) {
+    worldBoundaryDebugMesh.parent.remove(worldBoundaryDebugMesh)
+    worldBoundaryDebugMesh.geometry?.dispose()
+    worldBoundaryDebugMesh.material?.dispose()
+    worldBoundaryDebugMesh = null
+  }
+}
+
+/**
+ * Check if world boundary collider exists
+ * @returns {boolean}
+ */
+export function hasWorldBoundaryCollider() {
+  return worldBoundaryCollider !== null
 }
 
 // ============================================================================
@@ -624,7 +767,7 @@ export function createPlayerBody(overrideCapsuleParams = null) {
       .setMass(CONFIG.player.mass)
       .setCollisionGroups(createCollisionGroups(CONFIG.groups.PLAYER, CONFIG.groups.TERRAIN | CONFIG.groups.NPC))
       // Rotate capsule to align with Z axis (fish forward direction)
-      .setRotation({ x: 0.7071068, y: 0, z: 0, w: 0.7071068 })  // 90Ã‚Â° around X
+      .setRotation({ x: 0.7071068, y: 0, z: 0, w: 0.7071068 })  // 90Ãƒâ€šÃ‚Â° around X
       // Enable collision events for debugging
       .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS)
     
@@ -779,7 +922,7 @@ export function updatePhysics(delta) {
 
 /**
  * Sync rigid body rotation to match mesh rotation
- * For player: combines mesh rotation with capsule's initial 90Ãƒâ€šÃ‚Â° X offset
+ * For player: combines mesh rotation with capsule's initial 90ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â° X offset
  */
 function syncBodyRotation(body, mesh, isPlayer) {
   // Get mesh rotation as quaternion
@@ -787,7 +930,7 @@ function syncBodyRotation(body, mesh, isPlayer) {
   meshQuat.setFromEuler(mesh.rotation)
   
   if (isPlayer) {
-    // Player capsule has a 90Ãƒâ€šÃ‚Â° X rotation offset (capsule aligned to Z axis)
+    // Player capsule has a 90ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â° X rotation offset (capsule aligned to Z axis)
     // We need to combine: meshRotation * capsuleOffset
     const capsuleOffset = new THREE.Quaternion()
     capsuleOffset.setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2)
@@ -1119,6 +1262,7 @@ export function debugPhysics() {
   console.group('[Physics] Debug Info')
   console.log(`Enabled: ${physicsEnabled}`)
   console.log(`Terrain colliders: ${terrainBodies.size}`)
+  console.log(`World boundary: ${worldBoundaryCollider ? 'YES' : 'NO'}`)
   console.log(`Static colliders: ${staticColliders.size}`)
   console.log(`Creature bodies: ${creatureBodies.size}`)
   
@@ -1187,6 +1331,9 @@ export function disposePhysics() {
     removeStaticCollider(id)
   }
   
+  // Remove world boundary
+  removeWorldBoundaryCollider()
+  
   // Remove terrain
   removeTerrainCollider()
   
@@ -1216,6 +1363,11 @@ export default {
   // Terrain
   buildTerrainCollider,
   removeTerrainCollider,
+  
+  // World boundary (dome)
+  createWorldBoundaryCollider,
+  removeWorldBoundaryCollider,
+  hasWorldBoundaryCollider,
   
   // Static colliders (player-placed structures)
   createStaticCollider,

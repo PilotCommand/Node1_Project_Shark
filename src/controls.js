@@ -11,7 +11,7 @@
  *   T           - Increase scale
  *   G           - Mutate creature (new random of same type)
  *   N / B       - Next / Previous species
- *   Z           - Cycle variant (e.g., Yellowfin ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ Bluefin)
+ *   Z           - Cycle variant (e.g., Yellowfin ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ Bluefin)
  *   M           - New map
  *   P           - Toggle debug overlays (wireframes + volume labels)
  *   V           - Toggle debug viz (spawn grid + fish paths)
@@ -51,6 +51,8 @@ import {
   removeTerrainCollider,
   buildTerrainCollider,
   toggleStaticColliderWireframe,
+  createWorldBoundaryCollider,
+  removeWorldBoundaryCollider,
 } from './Physics.js'
 import {
   initSwimming,
@@ -110,6 +112,7 @@ function rebuildTerrainPhysics() {
   
   if (isPhysicsReady()) {
     removeTerrainCollider()
+    removeWorldBoundaryCollider()
   }
   
   const meshData = rebuildTerrainMesh()
@@ -119,7 +122,8 @@ function rebuildTerrainPhysics() {
     
     if (isPhysicsReady()) {
       buildTerrainCollider()
-      console.log('[Controls] Rebuilt terrain physics collider')
+      createWorldBoundaryCollider({ radius: 500 })
+      console.log('[Controls] Rebuilt terrain physics collider + world boundary')
     }
   }
 }
@@ -222,7 +226,7 @@ export function initControls() {
         if (scaleDownResult) {
           rebuildPlayerPhysics()
           showNotification(
-            `Scale: ${scaleDownResult.scalePercent.toFixed(0)}% | Vol: ${scaleDownResult.volume.toFixed(2)} mÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³`,
+            `Scale: ${scaleDownResult.scalePercent.toFixed(0)}% | Vol: ${scaleDownResult.volume.toFixed(2)} mÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³`,
             '#ff8888'
           )
         }
@@ -234,7 +238,7 @@ export function initControls() {
         if (scaleUpResult) {
           rebuildPlayerPhysics()
           showNotification(
-            `Scale: ${scaleUpResult.scalePercent.toFixed(0)}% | Vol: ${scaleUpResult.volume.toFixed(2)} mÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³`,
+            `Scale: ${scaleUpResult.scalePercent.toFixed(0)}% | Vol: ${scaleUpResult.volume.toFixed(2)} mÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³`,
             '#88ff88'
           )
         }
@@ -278,7 +282,7 @@ export function initControls() {
         }
         break
       
-      // Z = Cycle variant (e.g., Yellowfin Tuna ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ Bluefin Tuna)
+      // Z = Cycle variant (e.g., Yellowfin Tuna ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ Bluefin Tuna)
       case 'KeyZ':
         const variantResult = cycleVariant()
         if (variantResult.hasVariants) {
