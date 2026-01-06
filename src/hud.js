@@ -26,6 +26,16 @@ const CAPACITY_CONFIG = {
   regenDelay: 0.5,   // Seconds before regen starts after deactivation
 }
 
+// Capacity bar visual settings (easy to edit!)
+const CAPACITY_BAR_STYLE = {
+  width: 500,         // Bar width in pixels
+  height: 12,         // Bar height in pixels
+  bottom: 10,         // Distance from bottom of screen
+  borderRadius: 8,    // Corner roundness
+  borderWidth: 2,     // Border thickness
+  opacity: 0.7,       // Default opacity (0-1)
+}
+
 let currentCapacity = CAPACITY_CONFIG.max
 let isCapacityActive = false
 let regenDelayTimer = 0
@@ -384,17 +394,17 @@ function createStyles() {
     /* Capacity Bar - Lower center of screen */
     #capacity-bar {
       position: fixed;
-      bottom: 10px;
+      bottom: ${CAPACITY_BAR_STYLE.bottom}px;
       left: 50%;
       transform: translateX(-50%);
-      width: 400px;
-      height: 16px;
+      width: ${CAPACITY_BAR_STYLE.width}px;
+      height: ${CAPACITY_BAR_STYLE.height}px;
       background: rgba(0, 20, 40, 0.8);
-      border: 2px solid rgba(0, 255, 170, 0.3);
-      border-radius: 8px;
+      border: ${CAPACITY_BAR_STYLE.borderWidth}px solid rgba(0, 255, 170, 0.3);
+      border-radius: ${CAPACITY_BAR_STYLE.borderRadius}px;
       overflow: hidden;
       pointer-events: none;
-      opacity: 0.7;
+      opacity: ${CAPACITY_BAR_STYLE.opacity};
       transition: opacity 0.2s ease-out;
       z-index: 100;
     }
@@ -416,7 +426,7 @@ function createStyles() {
       height: 100%;
       width: 100%;
       background: linear-gradient(90deg, #00ffaa 0%, #00ddaa 100%);
-      border-radius: 6px;
+      border-radius: ${CAPACITY_BAR_STYLE.borderRadius - 2}px;
       transition: width 0.05s linear;
       box-shadow: 0 0 10px rgba(0, 255, 170, 0.5);
     }
@@ -656,7 +666,7 @@ function createMinimap() {
   
   const title = document.createElement('div')
   title.className = 'hud-title'
-  title.innerHTML = '<span>Map</span><span class="hud-title-controls"><span class="font-btn font-decrease">âˆ’</span><span class="font-btn font-increase">+</span><span class="collapse-btn">v</span><span class="grip">::</span></span>'
+  title.innerHTML = '<span>Map</span><span class="hud-title-controls"><span class="font-btn font-decrease">−</span><span class="font-btn font-increase">+</span><span class="collapse-btn">▾</span><span class="grip">⋮⋮</span></span>'
   
   const collapsible = document.createElement('div')
   collapsible.className = 'hud-collapsible'
@@ -700,7 +710,7 @@ function createInfoPanel() {
   infoPanel.className = 'hud-panel'
   
   infoPanel.innerHTML = `
-    <div class="hud-title"><span>Info</span><span class="hud-title-controls"><span class="font-btn font-decrease">âˆ’</span><span class="font-btn font-increase">+</span><span class="collapse-btn">v</span><span class="grip">::</span></span></div>
+    <div class="hud-title"><span>Info</span><span class="hud-title-controls"><span class="font-btn font-decrease">−</span><span class="font-btn font-increase">+</span><span class="collapse-btn">▾</span><span class="grip">⋮⋮</span></span></div>
     <div class="hud-collapsible">
       <div class="info-content">
         <div class="info-row">
@@ -747,7 +757,7 @@ function createChatPanel() {
   chatPanel.className = 'hud-panel'
   
   chatPanel.innerHTML = `
-    <div class="hud-title"><span>Chat</span><span class="hud-title-controls"><span class="font-btn font-decrease">âˆ’</span><span class="font-btn font-increase">+</span><span class="collapse-btn">v</span><span class="grip">::</span></span></div>
+    <div class="hud-title"><span>Chat</span><span class="hud-title-controls"><span class="font-btn font-decrease">−</span><span class="font-btn font-increase">+</span><span class="collapse-btn">▾</span><span class="grip">⋮⋮</span></span></div>
     <div class="hud-collapsible">
       <div id="chat-messages"></div>
       <div id="chat-input-container">
