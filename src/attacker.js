@@ -581,6 +581,7 @@ export function debugAttacker() {
 export default {
   name: 'Attacker',
   description: 'Hold Q for predator vision',
+  capacityMode: 'hold',  // Continuous drain while Q held
   onActivate: startActivation,
   onDeactivate: startDeactivation,
   onUpdate: updateVision,

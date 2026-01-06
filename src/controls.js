@@ -70,6 +70,7 @@ import {
   updateExtra,
   getActiveExtra,
   getActiveAbilityName,
+  getActiveCapacityMode,
   debugExtra,
 } from './ExtraControls.js'
 import { SpawnFactory } from './SpawnFactory.js'
@@ -188,12 +189,26 @@ export function initControls() {
         shiftHeld = true
         break
       
-      // Q = Extra ability (hold)
+      // Q = Extra ability
       case 'KeyQ':
-        if (!keys.q && hasCapacity()) {
+        if (!keys.q) {
+          const capacityMode = getActiveCapacityMode()
+          
+          // For 'hold' mode, require capacity to activate
+          // For other modes, ability manages its own capacity
+          if (capacityMode === 'hold' && !hasCapacity()) {
+            break  // No capacity for hold-type ability
+          }
+          
           keys.q = true
-          activateCapacity()
+          
+          // Only activate capacity drain for 'hold' mode abilities
+          if (capacityMode === 'hold') {
+            activateCapacity()
+          }
+          
           activateExtra()
+          
           // Only boost speed when sprinter ability is active
           if (getActiveAbilityName() === 'sprinter') {
             setBoosting(true)
@@ -370,7 +385,13 @@ export function initControls() {
         break
       case 'KeyQ':
         keys.q = false
-        deactivateCapacity()
+        
+        // Only deactivate capacity for 'hold' mode abilities
+        const capacityModeUp = getActiveCapacityMode()
+        if (capacityModeUp === 'hold') {
+          deactivateCapacity()
+        }
+        
         deactivateExtra()
         // Only stop boosting if sprinter ability was active
         if (getActiveAbilityName() === 'sprinter') {
@@ -386,8 +407,9 @@ export function initControls() {
 // ============================================================================
 
 export function updateMovement(delta) {
-  // Auto-deactivate ability if capacity runs out while Q is held
-  if (keys.q && !hasCapacity()) {
+  // Auto-deactivate ability if capacity runs out while Q is held (only for 'hold' mode)
+  const capacityMode = getActiveCapacityMode()
+  if (keys.q && capacityMode === 'hold' && !hasCapacity()) {
     keys.q = false
     deactivateCapacity()
     deactivateExtra()

@@ -666,7 +666,7 @@ function createMinimap() {
   
   const title = document.createElement('div')
   title.className = 'hud-title'
-  title.innerHTML = '<span>Map</span><span class="hud-title-controls"><span class="font-btn font-decrease">−</span><span class="font-btn font-increase">+</span><span class="collapse-btn">▾</span><span class="grip">⋮⋮</span></span>'
+  title.innerHTML = '<span>Map</span><span class="hud-title-controls"><span class="font-btn font-decrease">âˆ’</span><span class="font-btn font-increase">+</span><span class="collapse-btn">â–¾</span><span class="grip">â‹®â‹®</span></span>'
   
   const collapsible = document.createElement('div')
   collapsible.className = 'hud-collapsible'
@@ -710,7 +710,7 @@ function createInfoPanel() {
   infoPanel.className = 'hud-panel'
   
   infoPanel.innerHTML = `
-    <div class="hud-title"><span>Info</span><span class="hud-title-controls"><span class="font-btn font-decrease">−</span><span class="font-btn font-increase">+</span><span class="collapse-btn">▾</span><span class="grip">⋮⋮</span></span></div>
+    <div class="hud-title"><span>Info</span><span class="hud-title-controls"><span class="font-btn font-decrease">âˆ’</span><span class="font-btn font-increase">+</span><span class="collapse-btn">â–¾</span><span class="grip">â‹®â‹®</span></span></div>
     <div class="hud-collapsible">
       <div class="info-content">
         <div class="info-row">
@@ -757,7 +757,7 @@ function createChatPanel() {
   chatPanel.className = 'hud-panel'
   
   chatPanel.innerHTML = `
-    <div class="hud-title"><span>Chat</span><span class="hud-title-controls"><span class="font-btn font-decrease">−</span><span class="font-btn font-increase">+</span><span class="collapse-btn">▾</span><span class="grip">⋮⋮</span></span></div>
+    <div class="hud-title"><span>Chat</span><span class="hud-title-controls"><span class="font-btn font-decrease">âˆ’</span><span class="font-btn font-increase">+</span><span class="collapse-btn">â–¾</span><span class="grip">â‹®â‹®</span></span></div>
     <div class="hud-collapsible">
       <div id="chat-messages"></div>
       <div id="chat-input-container">
@@ -913,6 +913,36 @@ export function getCapacityPercent() {
  */
 export function isCapacityDepleting() {
   return isCapacityActive
+}
+
+/**
+ * Consume a specific amount of capacity instantly (for one-time costs)
+ * @param {number} amount - Amount to consume (0-100 scale)
+ * @returns {boolean} - True if had enough capacity and consumed
+ */
+export function consumeCapacity(amount) {
+  if (currentCapacity < amount) {
+    return false
+  }
+  currentCapacity = Math.max(0, currentCapacity - amount)
+  regenDelayTimer = 0  // Reset regen delay
+  return true
+}
+
+/**
+ * Set whether capacity is actively depleting (for toggle abilities)
+ * Unlike activateCapacity, this can be called from ability code directly
+ * @param {boolean} depleting - Whether capacity should be depleting
+ */
+export function setCapacityDepleting(depleting) {
+  isCapacityActive = depleting
+}
+
+/**
+ * Get the capacity config (for calculating per-use costs)
+ */
+export function getCapacityConfig() {
+  return { ...CAPACITY_CONFIG }
 }
 
 export function addChatMessage(text, type = 'player') {

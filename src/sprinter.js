@@ -275,6 +275,7 @@ export function clear() {
 export default {
   name: 'Sprinter',
   description: 'Hold to swim faster with trail',
+  capacityMode: 'hold',  // Continuous drain while Q held
   
   onActivate: () => {
     startRibbon()

@@ -2,9 +2,9 @@
  * stacker.js - Stacker Ability
  * 
  * Build pentagonal prisms by:
- * 1. Press Q â†’ Activate aiming mode (shows ray pointer with pentagon)
- * 2. Press Q â†’ Select start point on a surface
- * 3. Press Q â†’ Finalize and place the prism
+ * 1. Press Q Ã¢â€ â€™ Activate aiming mode (shows ray pointer with pentagon)
+ * 2. Press Q Ã¢â€ â€™ Select start point on a surface
+ * 3. Press Q Ã¢â€ â€™ Finalize and place the prism
  */
 
 import * as THREE from 'three'
@@ -12,6 +12,7 @@ import { getPlayer } from './player.js'
 import { camera } from './camera.js'
 import { MeshRegistry, Category, Tag } from './MeshRegistry.js'
 import { createStaticCollider, removeStaticCollider, isPhysicsReady } from './Physics.js'
+import { consumeCapacity, getCapacityConfig } from './hud.js'
 
 // ============================================================================
 // CONFIG - Edit these values to customize the stacker!
@@ -41,6 +42,9 @@ export const CONFIG = {
   baseMaxPrismLength: 20,           // Base maximum length a prism can extend (scales with fish)
   colorBlendRatio: 0.5,             // How much to blend end color (0 = start only, 1 = end only, 0.5 = 50/50)
   flatShading: true,                // Use flat shading (hard edges) vs smooth shading
+  
+  // === DESPAWN ===
+  prismDespawnTime: 300,            // Seconds before prisms despawn (300 = 5 minutes)
 }
 
 // ============================================================================
@@ -134,6 +138,15 @@ export function setColorBlendRatio(ratio) {
 export function setMaxPrismLength(length) {
   CONFIG.baseMaxPrismLength = Math.max(0.1, length)
   console.log(`[Stacker] Base max prism length set to ${CONFIG.baseMaxPrismLength} (scales with fish)`)
+}
+
+export function setDespawnTime(seconds) {
+  CONFIG.prismDespawnTime = Math.max(0, seconds)
+  if (seconds === 0) {
+    console.log(`[Stacker] Prism despawn DISABLED (prisms persist until maxPrisms exceeded)`)
+  } else {
+    console.log(`[Stacker] Prism despawn time set to ${seconds}s (${(seconds / 60).toFixed(1)} min)`)
+  }
 }
 
 // ============================================================================
@@ -713,10 +726,11 @@ function finalizePrism() {
   
   sceneRef.add(finalPrism)
   
-  // Track with unique ID
+  // Track with unique ID and spawn time for despawn
   prismIdCounter++
   const prismId = `stacker-prism-${prismIdCounter}`
   finalPrism.userData.prismId = prismId
+  finalPrism.userData.spawnTime = performance.now()  // Track when prism was placed
   placedPrisms.push(finalPrism)
   
   // Create physics collider for the prism
@@ -764,7 +778,14 @@ function removeOldestPrism() {
   if (placedPrisms.length === 0) return
   
   const oldest = placedPrisms.shift()
-  const prismId = oldest.userData.prismId
+  removePrismMesh(oldest, 'oldest')
+}
+
+/**
+ * Remove a specific prism mesh
+ */
+function removePrismMesh(prism, reason = 'unknown') {
+  const prismId = prism.userData.prismId
   
   // Remove physics collider first
   if (prismId) {
@@ -777,13 +798,50 @@ function removeOldestPrism() {
   }
   
   // Remove from scene and dispose
-  if (oldest.parent) {
-    oldest.parent.remove(oldest)
+  if (prism.parent) {
+    prism.parent.remove(prism)
   }
-  oldest.geometry.dispose()
-  oldest.material.dispose()
+  prism.geometry.dispose()
+  prism.material.dispose()
   
-  console.log('[Stacker] Removed oldest prism')
+  console.log(`[Stacker] Removed prism (${reason})`)
+}
+
+/**
+ * Check for and remove expired prisms
+ */
+function updateDespawnTimers() {
+  if (placedPrisms.length === 0) return
+  if (CONFIG.prismDespawnTime <= 0) return  // Despawn disabled
+  
+  const now = performance.now()
+  const despawnMs = CONFIG.prismDespawnTime * 1000
+  
+  // Check from oldest to newest
+  const toRemove = []
+  for (const prism of placedPrisms) {
+    const age = now - prism.userData.spawnTime
+    if (age >= despawnMs) {
+      toRemove.push(prism)
+    }
+  }
+  
+  // Remove expired prisms
+  for (const prism of toRemove) {
+    const idx = placedPrisms.indexOf(prism)
+    if (idx !== -1) {
+      placedPrisms.splice(idx, 1)
+    }
+    removePrismMesh(prism, 'despawned after ' + CONFIG.prismDespawnTime + 's')
+  }
+}
+
+/**
+ * Get cost per prism in capacity units (100 / maxPrisms)
+ */
+function getCapacityCostPerPrism() {
+  const config = getCapacityConfig()
+  return config.max / CONFIG.maxPrisms
 }
 
 // ============================================================================
@@ -877,8 +935,29 @@ function enterPlacing() {
 }
 
 function exitPlacing() {
+  // Calculate capacity cost for placing a prism
+  const cost = getCapacityCostPerPrism()
+  
+  // Check if we have enough capacity
+  if (!consumeCapacity(cost)) {
+    console.log(`[Stacker] Not enough capacity to place prism (need ${cost.toFixed(1)})`)
+    // Cancel placing but don't create the prism
+    disposePreviewPrism()
+    startPoint = null
+    startNormal = null
+    sampledColor = null
+    sampledRoughness = 0.5
+    sampledMetalness = 0.0
+    sampledEmissive = null
+    state = 'idle'
+    return
+  }
+  
+  // Place the prism
   finalizePrism()
   disposePreviewPrism()
+  
+  console.log(`[Stacker] Consumed ${cost.toFixed(1)} capacity for prism placement`)
   
   startPoint = null
   startNormal = null
@@ -895,7 +974,8 @@ function exitPlacing() {
 
 export default {
   name: 'Stacker',
-  description: 'Build pentagonal prisms - Q to activate, Q to set start, Q to place',
+  description: 'Build prisms - Q to aim, Q to start, Q to place (uses capacity)',
+  capacityMode: 'perUse',  // One-time cost per placed prism
   
   onActivate: () => {
     if (state === 'idle') {
@@ -924,7 +1004,7 @@ export default {
         console.log('[Stacker] No surface hit')
       }
     } else if (state === 'placing') {
-      // Third Q press - finalize prism
+      // Third Q press - finalize prism (consumes capacity)
       exitPlacing()
     }
   },
@@ -938,7 +1018,10 @@ export default {
   },
   
   onPassiveUpdate: (delta) => {
-    // Always update visuals based on current state
+    // Check for expired prisms and remove them
+    updateDespawnTimers()
+    
+    // Update visuals based on current state
     if (state === 'aiming') {
       updateRayVisuals()
     } else if (state === 'placing') {
@@ -990,14 +1073,16 @@ export function debugStacker() {
   console.log('Sampled Metalness:', sampledMetalness)
   console.groupEnd()
   
-  console.group('[Stacker] Config (base â†’ scaled)')
-  console.log('Range:', CONFIG.baseRayMaxDistance, 'â†’', getRayMaxDistance().toFixed(1))
-  console.log('Prism Radius:', CONFIG.basePrismRadius, 'â†’', getPrismRadius().toFixed(2))
-  console.log('Pentagon Radius:', CONFIG.basePentagonRadius, 'â†’', getPentagonRadius().toFixed(2))
-  console.log('Max Prism Length:', CONFIG.baseMaxPrismLength, 'â†’', getMaxPrismLength().toFixed(1))
+  console.group('[Stacker] Config (base Ã¢â€ â€™ scaled)')
+  console.log('Range:', CONFIG.baseRayMaxDistance, 'Ã¢â€ â€™', getRayMaxDistance().toFixed(1))
+  console.log('Prism Radius:', CONFIG.basePrismRadius, 'Ã¢â€ â€™', getPrismRadius().toFixed(2))
+  console.log('Pentagon Radius:', CONFIG.basePentagonRadius, 'Ã¢â€ â€™', getPentagonRadius().toFixed(2))
+  console.log('Max Prism Length:', CONFIG.baseMaxPrismLength, 'Ã¢â€ â€™', getMaxPrismLength().toFixed(1))
   console.log('Max Prisms:', CONFIG.maxPrisms)
+  console.log('Capacity Cost Per Prism:', getCapacityCostPerPrism().toFixed(1))
+  console.log('Despawn Time:', CONFIG.prismDespawnTime + 's (' + (CONFIG.prismDespawnTime / 60).toFixed(1) + ' min)')
   console.log('Color Blend Ratio:', CONFIG.colorBlendRatio, '(0=start, 1=end)')
-  console.log('Pentagon Offset:', CONFIG.pentagonSurfaceOffset, 'â†’', getPentagonOffset().toFixed(2))
+  console.log('Pentagon Offset:', CONFIG.pentagonSurfaceOffset, 'Ã¢â€ â€™', getPentagonOffset().toFixed(2))
   console.log('Default Prism Color:', '0x' + CONFIG.prismFinalColor.toString(16))
   console.groupEnd()
 }
@@ -1015,6 +1100,7 @@ if (typeof window !== 'undefined') {
     setPreviewColor,
     setMaxPrisms,
     setMaxPrismLength,
+    setDespawnTime,
     setColorBlendRatio,
     clearAllPrisms,
     debugStacker,
@@ -1032,6 +1118,7 @@ if (typeof window !== 'undefined') {
   - Stacker.setPrismRadius(1.0)    // Base prism radius
   - Stacker.setMaxPrisms(10)       // Max prisms to keep
   - Stacker.setMaxPrismLength(30)  // Base max length
+  - Stacker.setDespawnTime(300)    // Despawn after 5 min (0 = disable)
   - Stacker.setColorBlendRatio(0.5)
   - Stacker.clearAllPrisms()
   - Stacker.debugStacker()`)

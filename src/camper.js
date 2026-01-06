@@ -3,11 +3,12 @@
  * 
  * Tap Q to scan nearby meshes and blend into the environment.
  * The fish changes color to match surrounding objects.
- * Color stays until the fish moves.
+ * Color stays until the fish moves OR capacity runs out.
  */
 
 import * as THREE from 'three'
 import { getPlayer } from './player.js'
+import { setCapacityDepleting, hasCapacity } from './hud.js'
 
 // ============================================================================
 // CONFIGURATION
@@ -1105,7 +1106,8 @@ function storePosition(player) {
  * Break camouflage and start fading back to original
  */
 function breakCamouflage() {
-  console.log('[Camper] Movement detected - breaking camouflage')
+  console.log('[Camper] Breaking camouflage')
+  setCapacityDepleting(false)  // Stop capacity drain
   makeDisguiseMimicTransparent()  // Switch to transparent for fade out
   camoState = 'idle'
   isCamouflaged = false
@@ -1119,6 +1121,7 @@ function breakCamouflage() {
 export default {
   name: 'Camper',
   description: 'Tap to blend into surroundings (stay still to keep camo)',
+  capacityMode: 'toggle',  // Ability manages its own capacity drain
   
   // One-tap activation
   onActivate: () => {
@@ -1245,13 +1248,18 @@ export default {
           camoState = 'camouflaged'
           isCamouflaged = true
           storePosition(player)  // Store position to track movement
-          console.log('[Camper] Camouflaged! Stay still to maintain')
+          setCapacityDepleting(true)  // Start depleting capacity while camo
+          console.log('[Camper] Camouflaged! Stay still to maintain (capacity draining)')
         }
         break
         
       case 'camouflaged':
-        // Check for movement
+        // Check for movement OR capacity depletion
         if (hasPlayerMoved(player)) {
+          breakCamouflage()
+        } else if (!hasCapacity()) {
+          // Out of capacity - break camouflage
+          console.log('[Camper] Capacity depleted - breaking camouflage')
           breakCamouflage()
         }
         break

@@ -32,7 +32,7 @@ import Attacker, { init as initAttacker, debugAttacker } from './attacker.js'
  * 
  * Options: 'sprinter', 'stacker', 'camper', 'attacker', 'none'
  */
-const ACTIVE_ABILITY = 'sprinter'
+const ACTIVE_ABILITY = 'attacker'
 
 // ============================================================================
 // ABILITIES REGISTRY
@@ -47,6 +47,7 @@ const ABILITIES = {
   none: {
     name: 'None',
     description: 'No ability',
+    capacityMode: 'none',
     onActivate: () => {},
     onDeactivate: () => {},
     onUpdate: () => {},
@@ -98,6 +99,19 @@ export function getActiveAbility() {
  */
 export function getActiveAbilityName() {
   return ACTIVE_ABILITY
+}
+
+/**
+ * Get the active ability's capacity mode
+ * @returns {'hold' | 'toggle' | 'perUse' | 'none'} - How capacity is consumed
+ *   - 'hold': Continuous drain while Q held (sprinter, attacker)
+ *   - 'toggle': Ability manages its own drain (camper)
+ *   - 'perUse': One-time cost per use (stacker)
+ *   - 'none': No capacity cost
+ */
+export function getActiveCapacityMode() {
+  const ability = getActiveAbility()
+  return ability.capacityMode || 'hold'  // Default to 'hold' for backwards compatibility
 }
 
 /**
