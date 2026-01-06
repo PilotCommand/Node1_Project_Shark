@@ -6,6 +6,7 @@
  *   Space       - Up
  *   Shift       - Down
  *   Q (hold)    - Extra ability (see ExtraControls.js)
+ *   E           - Emoji wheel (1-9, 0 to select)
  *   
  *   R           - Decrease scale
  *   T           - Increase scale
@@ -76,6 +77,7 @@ import {
 import { SpawnFactory } from './SpawnFactory.js'
 import { FishAdder } from './FishAdder.js'
 import { activateCapacity, deactivateCapacity, hasCapacity } from './hud.js'
+import * as Chat from './chats.js'
 
 // ============================================================================
 // STATE
@@ -169,8 +171,45 @@ function showNotification(message, color = '#00ff88') {
 // INITIALIZATION
 // ============================================================================
 
+// Track mouse position for emoji wheel
+let mouseX = 0
+let mouseY = 0
+
+/**
+ * Check if pointer is currently locked (in-game cursor mode)
+ */
+function isPointerLocked() {
+  return document.pointerLockElement !== null
+}
+
 export function initControls() {
   initSwimming()
+  
+  // Track mouse position and movement for emoji wheel
+  document.addEventListener('mousemove', (e) => {
+    mouseX = e.clientX
+    mouseY = e.clientY
+    
+    // If emoji wheel is open and pointer is locked, use movement deltas
+    if (Chat.isEmojiWheelOpen() && isPointerLocked()) {
+      Chat.addWheelMovement(e.movementX, e.movementY)
+    }
+  })
+  
+  // Click to select highlighted emoji when wheel is open
+  document.addEventListener('mousedown', (e) => {
+    if (Chat.isEmojiWheelOpen() && e.button === 0) {
+      // If pointer is locked, select whatever is highlighted
+      if (isPointerLocked()) {
+        const highlighted = Chat.getHighlightedSegment()
+        if (highlighted >= 0) {
+          e.preventDefault()
+          Chat.selectEmoji(highlighted)
+        }
+      }
+      // If pointer is NOT locked, the SVG click handlers in hud.js handle it
+    }
+  })
   
   window.addEventListener('keydown', (e) => {
     switch(e.code) {
@@ -213,6 +252,33 @@ export function initControls() {
           if (getActiveAbilityName() === 'sprinter') {
             setBoosting(true)
           }
+        }
+        break
+      
+      // E = Emoji wheel
+      case 'KeyE':
+        e.preventDefault()
+        if (!Chat.isEmojiWheelOpen()) {
+          // Set start position for direction detection
+          Chat.setWheelMouseStart(mouseX, mouseY)
+        }
+        Chat.toggleEmojiWheel()
+        break
+      
+      // Number keys 0-9 = Select emoji (when wheel open)
+      case 'Digit1': case 'Digit2': case 'Digit3': case 'Digit4': case 'Digit5':
+      case 'Digit6': case 'Digit7': case 'Digit8': case 'Digit9': case 'Digit0':
+        if (Chat.isEmojiWheelOpen()) {
+          e.preventDefault()
+          Chat.selectEmojiByKey(e.key)
+        }
+        break
+      
+      // Escape = Close emoji wheel (among other things)
+      case 'Escape':
+        if (Chat.isEmojiWheelOpen()) {
+          e.preventDefault()
+          Chat.closeEmojiWheel()
         }
         break
       

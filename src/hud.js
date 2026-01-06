@@ -85,6 +85,7 @@ export function initHUD() {
   createChatPanel()
   createCursorRing()
   createCapacityBar()
+  createEmojiWheel()
 }
 
 function createStyles() {
@@ -553,6 +554,8 @@ function createStyles() {
     .proximity-bubble.fading {
       opacity: 0;
     }
+    
+    ${Chat.EMOJI_WHEEL_CSS}
   `
   document.head.appendChild(style)
 }
@@ -1009,6 +1012,179 @@ function createCapacityBar() {
   document.body.appendChild(capacityBar)
 }
 
+// ============================================================================
+// EMOJI WHEEL (logic in chats.js, this is just DOM creation)
+// ============================================================================
+
+function createEmojiWheel() {
+  const config = Chat.getEmojiConfig()
+  const geo = Chat.getWheelGeometry()
+  
+  // Create wheel container
+  const wheel = document.createElement('div')
+  wheel.id = 'emoji-wheel'
+  
+  // Create SVG
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+  svg.setAttribute('viewBox', `0 0 ${geo.centerX * 2} ${geo.centerY * 2}`)
+  
+  // Store arc elements for highlighting
+  const arcElements = []
+  
+  // Create segments
+  for (let i = 0; i < config.emojis.length; i++) {
+    const emoji = config.emojis[i]
+    
+    // Create group for this segment
+    const group = document.createElementNS('http://www.w3.org/2000/svg', 'g')
+    
+    // Arc path
+    const arc = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+    arc.setAttribute('d', Chat.getSegmentPath(i))
+    arc.setAttribute('class', 'emoji-arc')
+    arc.dataset.index = i
+    
+    // Hover handlers for unlocked cursor mode
+    arc.addEventListener('mouseenter', () => {
+      // Only use hover when pointer is NOT locked
+      if (!document.pointerLockElement) {
+        Chat.setHighlightedSegment(i)
+      }
+    })
+    
+    arc.addEventListener('mouseleave', () => {
+      if (!document.pointerLockElement) {
+        // Only clear if we're still the highlighted one
+        if (Chat.getHighlightedSegment() === i) {
+          Chat.setHighlightedSegment(-1)
+        }
+      }
+    })
+    
+    // Click on arc selects it (for unlocked cursor mode)
+    arc.addEventListener('click', (e) => {
+      e.stopPropagation()
+      Chat.selectEmoji(i)
+    })
+    
+    group.appendChild(arc)
+    arcElements.push(arc)
+    
+    // Emoji label
+    const center = Chat.getSegmentCenter(i)
+    const label = document.createElementNS('http://www.w3.org/2000/svg', 'text')
+    label.setAttribute('x', center.x)
+    label.setAttribute('y', center.y)
+    label.setAttribute('class', 'emoji-label')
+    label.textContent = emoji.emoji
+    group.appendChild(label)
+    
+    // Key hint
+    const keyPos = Chat.getSegmentKeyPosition(i)
+    const keyHint = document.createElementNS('http://www.w3.org/2000/svg', 'text')
+    keyHint.setAttribute('x', keyPos.x)
+    keyHint.setAttribute('y', keyPos.y)
+    keyHint.setAttribute('class', 'emoji-key')
+    keyHint.textContent = emoji.key
+    group.appendChild(keyHint)
+    
+    svg.appendChild(group)
+  }
+  
+  // Create direction visualizer (for pointer-locked mode)
+  const visualizerGroup = document.createElementNS('http://www.w3.org/2000/svg', 'g')
+  visualizerGroup.id = 'direction-visualizer'
+  
+  const directionLine = document.createElementNS('http://www.w3.org/2000/svg', 'line')
+  directionLine.id = 'direction-line'
+  directionLine.setAttribute('x1', geo.centerX)
+  directionLine.setAttribute('y1', geo.centerY)
+  directionLine.setAttribute('x2', geo.centerX)
+  directionLine.setAttribute('y2', geo.centerY)
+  visualizerGroup.appendChild(directionLine)
+  
+  const centerDot = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
+  centerDot.id = 'direction-dot-center'
+  centerDot.setAttribute('cx', geo.centerX)
+  centerDot.setAttribute('cy', geo.centerY)
+  centerDot.setAttribute('r', 4)
+  visualizerGroup.appendChild(centerDot)
+  
+  const cursorDot = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
+  cursorDot.id = 'direction-dot-cursor'
+  cursorDot.setAttribute('cx', geo.centerX)
+  cursorDot.setAttribute('cy', geo.centerY)
+  cursorDot.setAttribute('r', 6)
+  visualizerGroup.appendChild(cursorDot)
+  
+  svg.appendChild(visualizerGroup)
+  
+  wheel.appendChild(svg)
+  
+  // Click in center area closes wheel
+  wheel.addEventListener('click', (e) => {
+    if (e.target === wheel || e.target === svg) {
+      // Check if click is in center (empty area)
+      const rect = wheel.getBoundingClientRect()
+      const cx = rect.left + rect.width / 2
+      const cy = rect.top + rect.height / 2
+      const dx = e.clientX - cx
+      const dy = e.clientY - cy
+      const dist = Math.sqrt(dx * dx + dy * dy)
+      const innerRadiusPixels = geo.innerRadius * (rect.width / (geo.centerX * 2))
+      
+      if (dist < innerRadiusPixels) {
+        Chat.closeEmojiWheel()
+      }
+    }
+  })
+  
+  document.body.appendChild(wheel)
+  
+  // Subscribe to Chat events
+  Chat.onEmojiWheel('open', () => {
+    wheel.classList.add('visible')
+    // Reset highlight and visualizer
+    arcElements.forEach(arc => arc.classList.remove('highlighted'))
+    directionLine.setAttribute('x2', geo.centerX)
+    directionLine.setAttribute('y2', geo.centerY)
+    cursorDot.setAttribute('cx', geo.centerX)
+    cursorDot.setAttribute('cy', geo.centerY)
+  })
+  
+  Chat.onEmojiWheel('close', () => {
+    wheel.classList.remove('visible')
+  })
+  
+  Chat.onEmojiWheel('hover', (index) => {
+    // Update arc highlighting
+    arcElements.forEach((arc, i) => {
+      arc.classList.toggle('highlighted', i === index)
+    })
+  })
+  
+  Chat.onEmojiWheel('movement', (movement) => {
+    // Update direction visualizer
+    const targetX = geo.centerX + movement.x
+    const targetY = geo.centerY + movement.y
+    
+    directionLine.setAttribute('x2', targetX)
+    directionLine.setAttribute('y2', targetY)
+    cursorDot.setAttribute('cx', targetX)
+    cursorDot.setAttribute('cy', targetY)
+  })
+  
+  // Show proximity bubble on emoji select
+  Chat.onEmojiWheel('select', (data) => {
+    if (proximityCheckbox && proximityCheckbox.checked) {
+      showProximityBubble(data.emoji)
+    }
+  })
+  
+  // Tell Chat module about the chat input element
+  Chat.setChatInputElement(chatInput)
+}
+
 function updateCapacityBar(delta) {
   if (!capacityBar || !capacityFill) return
   
@@ -1221,7 +1397,7 @@ export function restoreCapacity(amount) {
   }
   
   currentCapacity = Math.min(config.max, currentCapacity + amount)
-  console.log(`[Capacity] Restored ${amount.toFixed(1)} → ${currentCapacity.toFixed(1)}/${config.max}`)
+  console.log(`[Capacity] Restored ${amount.toFixed(1)} â†’ ${currentCapacity.toFixed(1)}/${config.max}`)
 }
 
 /**
