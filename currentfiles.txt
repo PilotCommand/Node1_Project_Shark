@@ -211,6 +211,7 @@ C:.
     NormalScale.js
     Physics.js
     player.js
+    PlayerRegistry.js
     Regions.js
     ScaleMesh.js
     SeaCucumbers.js
