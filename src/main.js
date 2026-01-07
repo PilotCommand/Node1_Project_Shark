@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { clock } from './clock.js'
+import { networkManager } from '../network/NetworkManager.js'
 import { createMap } from './map.js'
 import { initPlayer, getPlayer, getPlayerCapsuleParams, getNaturalCapsuleParams, getCreatureParts } from './player.js'
 import { camera, initCameraControls, updateCamera } from './camera.js'
@@ -127,7 +128,7 @@ initMenu()
 showMenu()
 
 // Handle spawn request from menu
-onSpawnRequested(() => {
+onSpawnRequested(async () => {
   if (playerSpawned) {
     console.warn('[Main] Player already spawned')
     return
@@ -189,7 +190,7 @@ onSpawnRequested(() => {
   // Notify HUD when player eats something
   Feeding.onEat((meal) => {
     if (meal.type === 'npc') {
-      notifyEvent(`Ate a ${meal.preyDisplayName}! +${meal.volumeGained.toFixed(2)} m³`)
+      notifyEvent(`Ate a ${meal.preyDisplayName}! +${meal.volumeGained.toFixed(2)} mÂ³`)
     }
     
     // Update PlayerRegistry with meal data
@@ -205,6 +206,28 @@ onSpawnRequested(() => {
   
   playerSpawned = true
   console.log('[Main] Player spawned as:', selection.creature.displayName, 'with ability:', selection.ability.name)
+  
+  // ═══════════════════════════════════════════════════════════════════════════
+  // MULTIPLAYER: Connect to server
+  // ═══════════════════════════════════════════════════════════════════════════
+  try {
+    await networkManager.connect('ws://localhost:9001', scene)
+    
+    // Tell server about our creature
+    const currentCreature = PlayerRegistry.getLocal()
+    networkManager.joinGame({
+      type: selection.creature.type,
+      class: selection.creature.class,
+      variantIndex: selection.creature.variantIndex,
+      seed: currentCreature?.creature?.seed || Math.floor(Math.random() * 0xFFFFFFFF),
+    }, selection.creature.displayName || 'Player')
+    
+    console.log('[Main] Connected to multiplayer server!')
+    notifyEvent('Connected to server!')
+  } catch (err) {
+    console.warn('[Main] Multiplayer connection failed:', err.message)
+    console.log('[Main] Playing in single-player mode')
+  }
 })
 
 // Resize handler
@@ -241,6 +264,18 @@ function animate() {
       PlayerRegistry.updatePosition(localPlayer.id, player.position, player.rotation)
     }
     
+    // ═══════════════════════════════════════════════════════════════════════
+    // MULTIPLAYER: Send position & update remote players
+    // ═══════════════════════════════════════════════════════════════════════
+    if (networkManager.isConnected() && player) {
+      networkManager.sendPosition(
+        { x: player.position.x, y: player.position.y, z: player.position.z },
+        { x: player.rotation.x, y: player.rotation.y, z: player.rotation.z },
+        localPlayer?.volume || 1
+      )
+    }
+    networkManager.update(delta)
+    
     updateCamera()
     updateHUD(delta)
   }
@@ -260,7 +295,7 @@ window.PlayerRegistry = PlayerRegistry
 
 // Controls documentation
 console.log(`
-🐟🐠🦈 OCEAN CREATURE SIMULATOR
+ðŸŸðŸ ðŸ¦ˆ OCEAN CREATURE SIMULATOR
 
   MOVEMENT:
     WASD              - Swim
