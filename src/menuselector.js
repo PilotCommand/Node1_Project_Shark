@@ -56,34 +56,41 @@ let previewMesh = null
 let previewAnimationId = null
 let previewSeed = Math.floor(Math.random() * 0xFFFFFFFF)
 
+// Preview drag controls
+let isDragging = false
+let previousMouseX = 0
+let previousMouseY = 0
+let meshQuaternion = new THREE.Quaternion()
+let autoRotate = true
+
 // Ability definitions (mirrored from ExtraControls.js)
 const ABILITIES = [
   {
     key: 'sprinter',
-    name: 'Sprinter',
+    name: 'Speed',
     emoji: '\u26A1',        // ⚡
-    description: 'Hold Q to boost speed with a trail effect',
+    description: 'Boost movement',
     color: '#00ffaa',
   },
   {
     key: 'stacker',
-    name: 'Stacker',
+    name: 'Build',
     emoji: '\uD83D\uDD37',  // 🔷
-    description: 'Press Q to build pentagonal prisms',
+    description: 'Place structures',
     color: '#aa88ff',
   },
   {
     key: 'camper',
-    name: 'Camouflage',
+    name: 'Hide',
     emoji: '\uD83D\uDC41',  // 👁
-    description: 'Toggle Q to blend into environment',
+    description: 'Become surroundings',
     color: '#88aa55',
   },
   {
     key: 'attacker',
-    name: 'Predator Vision',
+    name: 'Detect',
     emoji: '\uD83C\uDFAF',  // 🎯
-    description: 'Hold Q for threat detection overlay',
+    description: 'Reveal threats',
     color: '#ff5555',
   },
 ]
@@ -246,15 +253,15 @@ function generateStyles() {
       display: flex;
       flex-direction: column;
       align-items: center;
-      gap: 20px;
-      max-width: 850px;
+      gap: 30px;
+      max-width: 1275px;
       width: 95%;
     }
     
     .selector-title {
-      font-size: 28px;
+      font-size: 42px;
       font-weight: 800;
-      letter-spacing: 4px;
+      letter-spacing: 6px;
       color: transparent;
       background: linear-gradient(135deg, 
         #00d4ff 0%, 
@@ -280,7 +287,7 @@ function generateStyles() {
     .selector-main {
       display: flex;
       flex-direction: row;
-      gap: 15px;
+      gap: 22px;
       width: 100%;
     }
     
@@ -304,7 +311,7 @@ function generateStyles() {
         rgba(0, 20, 45, 0.95) 100%
       );
       border: 2px solid rgba(0, 200, 255, 0.25);
-      border-radius: 12px;
+      border-radius: 18px;
       overflow: hidden;
       display: flex;
     }
@@ -317,13 +324,13 @@ function generateStyles() {
     }
     
     .panel-right {
-      width: 220px;
+      width: 330px;
       display: flex;
       flex-direction: column;
     }
     
     .panel-section {
-      padding: 10px 12px;
+      padding: 15px 18px;
     }
     
     .panel-section:not(:last-child) {
@@ -331,11 +338,11 @@ function generateStyles() {
     }
     
     .panel-section-header {
-      font-size: 10px;
+      font-size: 15px;
       text-transform: uppercase;
-      letter-spacing: 2px;
+      letter-spacing: 3px;
       color: rgba(0, 200, 255, 0.8);
-      margin-bottom: 8px;
+      margin-bottom: 12px;
       font-weight: 600;
     }
     
@@ -345,22 +352,22 @@ function generateStyles() {
     
     .type-tabs {
       display: flex;
-      gap: 8px;
+      gap: 12px;
       flex-wrap: wrap;
     }
     
     .type-tab {
-      padding: 8px 14px;
+      padding: 12px 21px;
       background: rgba(0, 50, 80, 0.5);
       border: 2px solid rgba(0, 200, 255, 0.2);
-      border-radius: 20px;
+      border-radius: 30px;
       cursor: pointer;
-      font-size: 12px;
+      font-size: 18px;
       font-weight: 500;
       transition: all 0.2s ease;
       display: flex;
       align-items: center;
-      gap: 6px;
+      gap: 9px;
       color: rgba(180, 210, 230, 0.8);
     }
     
@@ -378,7 +385,7 @@ function generateStyles() {
     }
     
     .type-tab .emoji {
-      font-size: 14px;
+      font-size: 21px;
     }
     
     /* ========================================
@@ -386,36 +393,36 @@ function generateStyles() {
        ======================================== */
     
     .class-list {
-      max-height: 150px;
+      max-height: 225px;
       overflow-y: auto;
-      margin: -4px;
-      padding: 4px;
+      margin: -6px;
+      padding: 6px;
     }
     
     .class-list::-webkit-scrollbar {
-      width: 6px;
+      width: 9px;
     }
     
     .class-list::-webkit-scrollbar-track {
       background: rgba(0, 40, 70, 0.5);
-      border-radius: 3px;
+      border-radius: 4px;
     }
     
     .class-list::-webkit-scrollbar-thumb {
       background: rgba(0, 150, 200, 0.5);
-      border-radius: 3px;
+      border-radius: 4px;
     }
     
     .class-item {
-      padding: 8px 10px;
+      padding: 12px 15px;
       cursor: pointer;
-      border-radius: 6px;
-      font-size: 12px;
+      border-radius: 9px;
+      font-size: 18px;
       display: flex;
       align-items: center;
-      gap: 10px;
+      gap: 15px;
       transition: all 0.15s;
-      margin-bottom: 2px;
+      margin-bottom: 3px;
       color: rgba(220, 235, 245, 0.9);
     }
     
@@ -426,7 +433,7 @@ function generateStyles() {
     
     .class-item.selected {
       background: linear-gradient(90deg, rgba(0, 150, 200, 0.5), rgba(0, 100, 150, 0.3));
-      border-left: 3px solid #00d4ff;
+      border-left: 4px solid #00d4ff;
       color: #fff;
     }
     
@@ -435,11 +442,11 @@ function generateStyles() {
     }
     
     .class-item .count {
-      font-size: 10px;
+      font-size: 15px;
       color: rgba(150, 200, 230, 0.6);
       background: rgba(0, 80, 120, 0.4);
-      padding: 2px 8px;
-      border-radius: 10px;
+      padding: 3px 12px;
+      border-radius: 15px;
     }
     
     /* ========================================
@@ -449,18 +456,18 @@ function generateStyles() {
     .variant-carousel {
       display: flex;
       align-items: center;
-      gap: 10px;
+      gap: 15px;
     }
     
     .variant-nav {
-      width: 36px;
-      height: 36px;
+      width: 54px;
+      height: 54px;
       background: linear-gradient(135deg, rgba(0, 100, 150, 0.7), rgba(0, 70, 120, 0.6));
       border: 2px solid rgba(0, 200, 255, 0.4);
       border-radius: 50%;
       cursor: pointer;
       color: #00d4ff;
-      font-size: 16px;
+      font-size: 24px;
       display: flex;
       align-items: center;
       justify-content: center;
@@ -487,21 +494,21 @@ function generateStyles() {
       flex: 1;
       background: rgba(0, 50, 80, 0.5);
       border: 1px solid rgba(0, 200, 255, 0.2);
-      border-radius: 8px;
-      padding: 8px 12px;
+      border-radius: 12px;
+      padding: 12px 18px;
       text-align: center;
     }
     
     .variant-display .variant-name {
-      font-size: 13px;
+      font-size: 20px;
       font-weight: 600;
       color: #fff;
     }
     
     .variant-display .variant-counter {
-      font-size: 9px;
+      font-size: 14px;
       color: rgba(150, 200, 230, 0.5);
-      margin-top: 2px;
+      margin-top: 3px;
     }
     
     .variant-display.disabled {
@@ -522,52 +529,59 @@ function generateStyles() {
       flex: 1;
       background: linear-gradient(180deg, rgba(0, 15, 30, 0.9), rgba(0, 25, 45, 0.95));
       position: relative;
-      min-height: 180px;
+      min-height: 270px;
     }
     
     .preview-box canvas {
       width: 100% !important;
       height: 100% !important;
+      cursor: grab;
+      user-select: none;
+    }
+    
+    .preview-box canvas:active {
+      cursor: grabbing;
     }
     
     .preview-label {
       position: absolute;
-      top: 8px;
-      left: 8px;
-      font-size: 9px;
+      top: 12px;
+      left: 12px;
+      font-size: 12px;
       text-transform: uppercase;
       letter-spacing: 1px;
       color: rgba(0, 200, 255, 0.6);
       background: rgba(0, 20, 40, 0.8);
-      padding: 3px 6px;
-      border-radius: 4px;
+      padding: 5px 10px;
+      border-radius: 6px;
       z-index: 10;
+      pointer-events: none;
     }
     
     .preview-info {
-      padding: 10px 12px;
+      padding: 15px 18px;
       text-align: center;
       border-top: 1px solid rgba(0, 200, 255, 0.15);
     }
     
     .preview-info .creature-name {
-      font-size: 14px;
+      font-size: 21px;
       font-weight: 700;
       color: #fff;
-      margin-bottom: 2px;
+      margin-bottom: 3px;
     }
     
     .preview-info .creature-type {
-      font-size: 10px;
+      font-size: 15px;
       color: rgba(0, 200, 255, 0.7);
       text-transform: uppercase;
-      letter-spacing: 1px;
+      letter-spacing: 1.5px;
     }
     
     .preview-info .creature-variant {
-      font-size: 10px;
+      font-size: 15px;
       color: rgba(150, 200, 230, 0.5);
-      margin-top: 3px;
+      margin-top: 5px;
     }
     
     /* ========================================
@@ -575,8 +589,9 @@ function generateStyles() {
        ======================================== */
     
     .ability-panel {
-      width: 200px;
+      width: 280px;
       flex-shrink: 0;
+      display: flex;
     }
     
     .ability-section {
@@ -585,40 +600,44 @@ function generateStyles() {
         rgba(0, 20, 45, 0.95) 100%
       );
       border: 2px solid rgba(0, 200, 255, 0.25);
-      border-radius: 12px;
-      padding: 12px 15px;
-      height: 100%;
+      border-radius: 18px;
+      padding: 18px 22px;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
       box-sizing: border-box;
     }
     
     .ability-header {
-      font-size: 11px;
+      font-size: 16px;
       text-transform: uppercase;
-      letter-spacing: 2px;
+      letter-spacing: 3px;
       color: rgba(0, 200, 255, 0.8);
-      margin-bottom: 10px;
+      margin-bottom: 15px;
       font-weight: 600;
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 12px;
     }
     
     .ability-list {
       display: flex;
       flex-direction: column;
-      gap: 8px;
+      gap: 10px;
+      flex: 1;
     }
     
     .ability-item {
       display: flex;
       align-items: center;
-      gap: 10px;
-      padding: 10px 12px;
+      gap: 12px;
+      padding: 12px 14px;
       background: rgba(0, 40, 70, 0.5);
       border: 2px solid transparent;
-      border-radius: 8px;
+      border-radius: 12px;
       cursor: pointer;
       transition: all 0.2s ease;
+      flex: 1;
     }
     
     .ability-item:hover {
@@ -632,12 +651,12 @@ function generateStyles() {
         rgba(0, 80, 130, 0.4) 100%
       );
       border-color: var(--ability-color, #00d4ff);
-      box-shadow: 0 0 12px rgba(0, 200, 255, 0.2);
+      box-shadow: 0 0 18px rgba(0, 200, 255, 0.2);
     }
     
     .ability-emoji {
-      font-size: 18px;
-      width: 24px;
+      font-size: 24px;
+      width: 32px;
       text-align: center;
     }
     
@@ -647,28 +666,25 @@ function generateStyles() {
     }
     
     .ability-name {
-      font-size: 12px;
+      font-size: 18px;
       font-weight: 600;
       color: #fff;
     }
     
     .ability-desc {
-      font-size: 9px;
-      color: rgba(150, 200, 230, 0.5);
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
+      font-size: 15px;
+      color: rgba(150, 200, 230, 0.6);
     }
     
     .ability-check {
-      width: 18px;
-      height: 18px;
+      width: 24px;
+      height: 24px;
       border-radius: 50%;
       border: 2px solid rgba(0, 200, 255, 0.3);
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: 10px;
+      font-size: 14px;
       color: transparent;
       transition: all 0.2s ease;
     }
@@ -685,19 +701,19 @@ function generateStyles() {
     
     .selector-buttons {
       display: flex;
-      gap: 15px;
-      margin-top: 5px;
+      gap: 22px;
+      margin-top: 8px;
     }
     
     .selector-btn {
-      padding: 10px 28px;
-      font-size: 12px;
+      padding: 15px 42px;
+      font-size: 18px;
       font-weight: 700;
-      letter-spacing: 2px;
+      letter-spacing: 3px;
       text-transform: uppercase;
       cursor: pointer;
       border: 2px solid rgba(0, 200, 255, 0.4);
-      border-radius: 20px;
+      border-radius: 30px;
       background: linear-gradient(135deg, 
         rgba(0, 60, 100, 0.8) 0%, 
         rgba(0, 100, 150, 0.6) 100%
@@ -775,24 +791,24 @@ function generateStyles() {
     
     .keyboard-hints {
       display: flex;
-      gap: 20px;
+      gap: 30px;
       justify-content: center;
-      margin-top: 10px;
+      margin-top: 15px;
     }
     
     .key-hint {
       display: flex;
       align-items: center;
-      gap: 6px;
-      font-size: 11px;
+      gap: 9px;
+      font-size: 16px;
       color: rgba(150, 200, 230, 0.4);
     }
     
     .key-hint kbd {
-      padding: 3px 8px;
+      padding: 5px 12px;
       background: rgba(0, 60, 100, 0.5);
       border: 1px solid rgba(0, 200, 255, 0.2);
-      border-radius: 4px;
+      border-radius: 6px;
       font-family: inherit;
       color: rgba(0, 200, 255, 0.7);
     }
@@ -887,7 +903,7 @@ function buildSelectorHTML() {
             <div class="panel-right">
               <div class="preview-section">
                 <div class="preview-box" id="preview-box">
-                  <span class="preview-label">Preview</span>
+                  <span class="preview-label">Drag to rotate \u2022 Scroll to zoom</span>
                 </div>
                 <div class="preview-info">
                   <div class="creature-name" id="preview-name">Shark</div>
@@ -951,21 +967,16 @@ function initPreview() {
   const container = document.getElementById('preview-box')
   if (!container) return
   
-  const rect = container.getBoundingClientRect()
-  const width = rect.width || 280
-  const height = rect.height || 280
-  
   // Scene
   previewScene = new THREE.Scene()
   
-  // Camera
-  previewCamera = new THREE.PerspectiveCamera(45, width / height, 0.1, 100)
+  // Camera - will set aspect ratio on resize
+  previewCamera = new THREE.PerspectiveCamera(45, 1, 0.1, 100)
   previewCamera.position.set(0, 0.5, 4)
   previewCamera.lookAt(0, 0, 0)
   
   // Renderer
   previewRenderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
-  previewRenderer.setSize(width, height)
   previewRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
   previewRenderer.setClearColor(0x000000, 0)
   container.appendChild(previewRenderer.domElement)
@@ -986,15 +997,163 @@ function initPreview() {
   rimLight.position.set(0, -5, 2)
   previewScene.add(rimLight)
   
+  // Handle resize with ResizeObserver for proper aspect ratio
+  const resizeObserver = new ResizeObserver((entries) => {
+    for (const entry of entries) {
+      const { width, height } = entry.contentRect
+      if (width > 0 && height > 0) {
+        previewCamera.aspect = width / height
+        previewCamera.updateProjectionMatrix()
+        previewRenderer.setSize(width, height)
+      }
+    }
+  })
+  resizeObserver.observe(container)
+  
+  // Initial size
+  const rect = container.getBoundingClientRect()
+  if (rect.width > 0 && rect.height > 0) {
+    previewCamera.aspect = rect.width / rect.height
+    previewCamera.updateProjectionMatrix()
+    previewRenderer.setSize(rect.width, rect.height)
+  }
+  
+  // Setup drag controls
+  setupPreviewDragControls(container)
+  
   // Start animation
   animatePreview()
+}
+
+function setupPreviewDragControls(container) {
+  const canvas = previewRenderer.domElement
+  
+  // Mouse events
+  canvas.addEventListener('mousedown', (e) => {
+    isDragging = true
+    autoRotate = false
+    previousMouseX = e.clientX
+    previousMouseY = e.clientY
+    canvas.style.cursor = 'grabbing'
+  })
+  
+  window.addEventListener('mousemove', (e) => {
+    if (!isDragging) return
+    
+    const deltaX = e.clientX - previousMouseX
+    const deltaY = e.clientY - previousMouseY
+    
+    // Google Earth / globe style rotation
+    // Both rotations are in world space
+    const rotationSpeed = 0.01
+    
+    // Rotate around world Y axis (horizontal drag = spin left/right)
+    const yawQuat = new THREE.Quaternion().setFromAxisAngle(
+      new THREE.Vector3(0, 1, 0), 
+      deltaX * rotationSpeed
+    )
+    
+    // Rotate around world X axis (vertical drag = tilt toward/away)
+    const pitchQuat = new THREE.Quaternion().setFromAxisAngle(
+      new THREE.Vector3(1, 0, 0), 
+      deltaY * rotationSpeed
+    )
+    
+    // Apply both rotations in world space (premultiply)
+    meshQuaternion.premultiply(pitchQuat)
+    meshQuaternion.premultiply(yawQuat)
+    meshQuaternion.normalize()
+    
+    previousMouseX = e.clientX
+    previousMouseY = e.clientY
+  })
+  
+  window.addEventListener('mouseup', () => {
+    if (isDragging) {
+      isDragging = false
+      canvas.style.cursor = 'grab'
+    }
+  })
+  
+  // Scroll wheel zoom
+  canvas.addEventListener('wheel', (e) => {
+    e.preventDefault()
+    
+    const zoomSpeed = 0.001
+    const delta = e.deltaY * zoomSpeed
+    
+    // Adjust camera distance
+    previewCamera.position.z = Math.max(2, Math.min(8, previewCamera.position.z + delta * 3))
+  }, { passive: false })
+  
+  // Touch events for mobile
+  canvas.addEventListener('touchstart', (e) => {
+    if (e.touches.length === 1) {
+      isDragging = true
+      autoRotate = false
+      previousMouseX = e.touches[0].clientX
+      previousMouseY = e.touches[0].clientY
+    }
+  }, { passive: true })
+  
+  canvas.addEventListener('touchmove', (e) => {
+    if (!isDragging || e.touches.length !== 1) return
+    
+    const deltaX = e.touches[0].clientX - previousMouseX
+    const deltaY = e.touches[0].clientY - previousMouseY
+    
+    const rotationSpeed = 0.01
+    
+    const yawQuat = new THREE.Quaternion().setFromAxisAngle(
+      new THREE.Vector3(0, 1, 0), 
+      deltaX * rotationSpeed
+    )
+    
+    const pitchQuat = new THREE.Quaternion().setFromAxisAngle(
+      new THREE.Vector3(1, 0, 0), 
+      deltaY * rotationSpeed
+    )
+    
+    meshQuaternion.premultiply(pitchQuat)
+    meshQuaternion.premultiply(yawQuat)
+    meshQuaternion.normalize()
+    
+    previousMouseX = e.touches[0].clientX
+    previousMouseY = e.touches[0].clientY
+  }, { passive: true })
+  
+  canvas.addEventListener('touchend', () => {
+    isDragging = false
+  })
+  
+  // Double click to reset and re-enable auto rotation
+  canvas.addEventListener('dblclick', () => {
+    meshQuaternion.identity()
+    autoRotate = true
+    previewCamera.position.z = 4  // Reset zoom too
+  })
+  
+  // Set initial cursor
+  canvas.style.cursor = 'grab'
 }
 
 function animatePreview() {
   previewAnimationId = requestAnimationFrame(animatePreview)
   
   if (previewMesh) {
-    previewMesh.rotation.y += 0.008
+    if (autoRotate) {
+      // Auto rotation around Y axis
+      const autoRotateQuat = new THREE.Quaternion().setFromAxisAngle(
+        new THREE.Vector3(0, 1, 0), 
+        0.008
+      )
+      meshQuaternion.multiply(autoRotateQuat)
+      meshQuaternion.normalize()
+    }
+    
+    // Apply quaternion rotation to mesh
+    previewMesh.quaternion.copy(meshQuaternion)
+    
     // Gentle bobbing
     previewMesh.position.y = Math.sin(Date.now() * 0.002) * 0.05
   }
@@ -1049,6 +1208,15 @@ function updatePreviewMesh() {
       // Center the mesh
       const center = box.getCenter(new THREE.Vector3())
       previewMesh.position.sub(center.multiplyScalar(scale))
+      
+      // Reset rotation for new creature and re-enable auto rotate
+      meshQuaternion.identity()
+      autoRotate = true
+      
+      // Reset camera zoom
+      if (previewCamera) {
+        previewCamera.position.z = 4
+      }
       
       previewScene.add(previewMesh)
     }
