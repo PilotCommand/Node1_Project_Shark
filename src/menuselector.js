@@ -314,6 +314,7 @@ function generateStyles() {
       border-radius: 18px;
       overflow: hidden;
       display: flex;
+      min-height: 480px;
     }
     
     .panel-left {
@@ -321,12 +322,14 @@ function generateStyles() {
       display: flex;
       flex-direction: column;
       border-right: 1px solid rgba(0, 200, 255, 0.15);
+      min-width: 0;
     }
     
     .panel-right {
       width: 330px;
       display: flex;
       flex-direction: column;
+      flex-shrink: 0;
     }
     
     .panel-section {
@@ -523,13 +526,14 @@ function generateStyles() {
       flex: 1;
       display: flex;
       flex-direction: column;
+      min-height: 0;
     }
     
     .preview-box {
       flex: 1;
       background: linear-gradient(180deg, rgba(0, 15, 30, 0.9), rgba(0, 25, 45, 0.95));
       position: relative;
-      min-height: 270px;
+      min-height: 200px;
     }
     
     .preview-box canvas {
@@ -559,29 +563,35 @@ function generateStyles() {
     }
     
     .preview-info {
-      padding: 15px 18px;
+      padding: 12px 15px;
       text-align: center;
       border-top: 1px solid rgba(0, 200, 255, 0.15);
+      min-height: 85px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
     }
     
     .preview-info .creature-name {
-      font-size: 21px;
+      font-size: 18px;
       font-weight: 700;
       color: #fff;
       margin-bottom: 3px;
+      line-height: 1.2;
+      word-wrap: break-word;
     }
     
     .preview-info .creature-type {
-      font-size: 15px;
+      font-size: 14px;
       color: rgba(0, 200, 255, 0.7);
       text-transform: uppercase;
       letter-spacing: 1.5px;
     }
     
     .preview-info .creature-variant {
-      font-size: 15px;
+      font-size: 14px;
       color: rgba(150, 200, 230, 0.5);
-      margin-top: 5px;
+      margin-top: 4px;
     }
     
     /* ========================================
@@ -592,6 +602,7 @@ function generateStyles() {
       width: 280px;
       flex-shrink: 0;
       display: flex;
+      min-height: 480px;
     }
     
     .ability-section {
@@ -785,33 +796,6 @@ function generateStyles() {
       50% { box-shadow: 0 0 25px rgba(0, 255, 180, 0.4); }
     }
     
-    /* ========================================
-       KEYBOARD HINTS
-       ======================================== */
-    
-    .keyboard-hints {
-      display: flex;
-      gap: 30px;
-      justify-content: center;
-      margin-top: 15px;
-    }
-    
-    .key-hint {
-      display: flex;
-      align-items: center;
-      gap: 9px;
-      font-size: 16px;
-      color: rgba(150, 200, 230, 0.4);
-    }
-    
-    .key-hint kbd {
-      padding: 5px 12px;
-      background: rgba(0, 60, 100, 0.5);
-      border: 1px solid rgba(0, 200, 255, 0.2);
-      border-radius: 6px;
-      font-family: inherit;
-      color: rgba(0, 200, 255, 0.7);
-    }
   `
 }
 
@@ -947,13 +931,6 @@ function buildSelectorHTML() {
         <button class="selector-btn selector-btn-confirm" id="selector-confirm">
           Confirm \u2714
         </button>
-      </div>
-      
-      <div class="keyboard-hints">
-        <div class="key-hint"><kbd>\u2190</kbd> <kbd>\u2192</kbd> Variant</div>
-        <div class="key-hint"><kbd>\u2191</kbd> <kbd>\u2193</kbd> Ability</div>
-        <div class="key-hint"><kbd>Enter</kbd> Confirm</div>
-        <div class="key-hint"><kbd>Esc</kbd> Back</div>
       </div>
     </div>
   `
