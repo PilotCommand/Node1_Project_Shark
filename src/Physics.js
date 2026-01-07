@@ -25,6 +25,7 @@ import * as THREE from 'three'
 import { getTerrainTrimeshData } from './TerrainMesher.js'
 import { getPlayerCapsuleParams, getPlayer } from './player.js'
 import { MeshRegistry, Category, Tag } from './MeshRegistry.js'
+import { PlayerRegistry } from './PlayerRegistry.js'
 
 // ============================================================================
 // RAPIER IMPORT (Dynamic - WASM module)
@@ -966,7 +967,7 @@ export function createPlayerBody(overrideCapsuleParams = null) {
       .setMass(CONFIG.player.mass)
       .setCollisionGroups(createCollisionGroups(CONFIG.groups.PLAYER, CONFIG.groups.TERRAIN | CONFIG.groups.NPC))
       // Rotate capsule to align with Z axis (fish forward direction)
-      .setRotation({ x: 0.7071068, y: 0, z: 0, w: 0.7071068 })  // 90Ãƒâ€šÃ‚Â° around X
+      .setRotation({ x: 0.7071068, y: 0, z: 0, w: 0.7071068 })  // 90° around X
       // Enable collision events for debugging
       .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS)
     
@@ -981,6 +982,15 @@ export function createPlayerBody(overrideCapsuleParams = null) {
     })
     
     console.log('[Physics] Player body created successfully')
+    
+    // Update PlayerRegistry with physics references
+    const localId = PlayerRegistry.getLocalId()
+    if (localId) {
+      PlayerRegistry.updatePhysics(localId, {
+        body: playerBody,
+        collider: playerCollider,
+      })
+    }
     
     if (CONFIG.debug) {
       debugBodyInfo('player', playerBody, playerCollider)
@@ -1002,6 +1012,16 @@ export function removePlayerBody() {
     playerBody = null
     playerCollider = null
     creatureBodies.delete('player')
+    
+    // Clear physics in PlayerRegistry
+    const localId = PlayerRegistry.getLocalId()
+    if (localId) {
+      PlayerRegistry.updatePhysics(localId, {
+        body: null,
+        collider: null,
+      })
+    }
+    
     console.log('[Physics] Player body removed')
   }
 }
@@ -1121,7 +1141,7 @@ export function updatePhysics(delta) {
 
 /**
  * Sync rigid body rotation to match mesh rotation
- * For player: combines mesh rotation with capsule's initial 90ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â° X offset
+ * For player: combines mesh rotation with capsule's initial 90° X offset
  */
 function syncBodyRotation(body, mesh, isPlayer) {
   // Get mesh rotation as quaternion
@@ -1129,7 +1149,7 @@ function syncBodyRotation(body, mesh, isPlayer) {
   meshQuat.setFromEuler(mesh.rotation)
   
   if (isPlayer) {
-    // Player capsule has a 90ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â° X rotation offset (capsule aligned to Z axis)
+    // Player capsule has a 90° X rotation offset (capsule aligned to Z axis)
     // We need to combine: meshRotation * capsuleOffset
     const capsuleOffset = new THREE.Quaternion()
     capsuleOffset.setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2)

@@ -1,0 +1,229 @@
+Microsoft Windows [Version 10.0.26100.7462]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Users\melas>cd C:\Users\melas\OneDrive\Documents\Node1_Projects\shark
+
+C:\Users\melas\OneDrive\Documents\Node1_Projects\shark>tree
+Folder PATH listing for volume OS
+Volume serial number is B0B5-C2BE
+C:.
+├───node_modules
+│   ├───.bin
+│   ├───.vite
+│   │   └───deps
+│   ├───@dimforge
+│   │   └───rapier3d-compat
+│   │       ├───control
+│   │       ├───dynamics
+│   │       ├───geometry
+│   │       └───pipeline
+│   ├───@esbuild
+│   │   └───win32-x64
+│   ├───@rollup
+│   │   ├───rollup-win32-x64-gnu
+│   │   └───rollup-win32-x64-msvc
+│   ├───@types
+│   │   └───estree
+│   ├───esbuild
+│   │   ├───bin
+│   │   └───lib
+│   ├───fdir
+│   │   └───dist
+│   ├───nanoid
+│   │   ├───async
+│   │   ├───bin
+│   │   ├───non-secure
+│   │   └───url-alphabet
+│   ├───picocolors
+│   ├───picomatch
+│   │   └───lib
+│   ├───postcss
+│   │   └───lib
+│   ├───rollup
+│   │   └───dist
+│   │       ├───bin
+│   │       ├───es
+│   │       │   └───shared
+│   │       └───shared
+│   ├───source-map-js
+│   │   └───lib
+│   ├───three
+│   │   ├───build
+│   │   ├───examples
+│   │   │   ├───fonts
+│   │   │   │   ├───droid
+│   │   │   │   ├───MPLUSRounded1c
+│   │   │   │   └───ttf
+│   │   │   └───jsm
+│   │   │       ├───animation
+│   │   │       ├───capabilities
+│   │   │       ├───controls
+│   │   │       ├───csm
+│   │   │       ├───curves
+│   │   │       ├───effects
+│   │   │       ├───environments
+│   │   │       ├───exporters
+│   │   │       ├───geometries
+│   │   │       ├───gpgpu
+│   │   │       ├───helpers
+│   │   │       ├───inspector
+│   │   │       │   ├───tabs
+│   │   │       │   └───ui
+│   │   │       ├───interactive
+│   │   │       ├───libs
+│   │   │       │   ├───basis
+│   │   │       │   ├───draco
+│   │   │       │   │   └───gltf
+│   │   │       │   └───rhino3dm
+│   │   │       ├───lighting
+│   │   │       ├───lights
+│   │   │       ├───lines
+│   │   │       │   └───webgpu
+│   │   │       ├───loaders
+│   │   │       │   ├───lwo
+│   │   │       │   └───usd
+│   │   │       ├───materials
+│   │   │       ├───math
+│   │   │       ├───misc
+│   │   │       ├───modifiers
+│   │   │       ├───objects
+│   │   │       ├───offscreen
+│   │   │       ├───physics
+│   │   │       ├───postprocessing
+│   │   │       ├───renderers
+│   │   │       ├───shaders
+│   │   │       ├───textures
+│   │   │       ├───transpiler
+│   │   │       ├───tsl
+│   │   │       │   ├───display
+│   │   │       │   ├───lighting
+│   │   │       │   ├───math
+│   │   │       │   ├───shadows
+│   │   │       │   └───utils
+│   │   │       ├───utils
+│   │   │       └───webxr
+│   │   └───src
+│   │       ├───animation
+│   │       │   └───tracks
+│   │       ├───audio
+│   │       ├───cameras
+│   │       ├───core
+│   │       ├───extras
+│   │       │   ├───core
+│   │       │   ├───curves
+│   │       │   └───lib
+│   │       ├───geometries
+│   │       ├───helpers
+│   │       ├───lights
+│   │       │   └───webgpu
+│   │       ├───loaders
+│   │       │   └───nodes
+│   │       ├───materials
+│   │       │   └───nodes
+│   │       │       └───manager
+│   │       ├───math
+│   │       │   └───interpolants
+│   │       ├───nodes
+│   │       │   ├───accessors
+│   │       │   ├───code
+│   │       │   ├───core
+│   │       │   ├───display
+│   │       │   ├───fog
+│   │       │   ├───functions
+│   │       │   │   ├───BSDF
+│   │       │   │   └───material
+│   │       │   ├───geometry
+│   │       │   ├───gpgpu
+│   │       │   ├───lighting
+│   │       │   ├───materialx
+│   │       │   │   └───lib
+│   │       │   ├───math
+│   │       │   ├───parsers
+│   │       │   ├───pmrem
+│   │       │   ├───procedural
+│   │       │   ├───shapes
+│   │       │   ├───tsl
+│   │       │   └───utils
+│   │       ├───objects
+│   │       ├───renderers
+│   │       │   ├───common
+│   │       │   │   ├───extras
+│   │       │   │   └───nodes
+│   │       │   ├───shaders
+│   │       │   │   ├───ShaderChunk
+│   │       │   │   └───ShaderLib
+│   │       │   ├───webgl
+│   │       │   ├───webgl-fallback
+│   │       │   │   ├───nodes
+│   │       │   │   └───utils
+│   │       │   ├───webgpu
+│   │       │   │   ├───nodes
+│   │       │   │   └───utils
+│   │       │   └───webxr
+│   │       ├───scenes
+│   │       └───textures
+│   ├───tinyglobby
+│   │   └───dist
+│   └───vite
+│       ├───bin
+│       ├───dist
+│       │   ├───client
+│       │   └───node
+│       │       └───chunks
+│       ├───misc
+│       └───types
+│           └───internal
+├───public
+└───src
+
+C:\Users\melas\OneDrive\Documents\Node1_Projects\shark>cd C:\Users\melas\OneDrive\Documents\Node1_Projects\shark\src
+
+C:\Users\melas\OneDrive\Documents\Node1_Projects\shark\src>tree /f
+Folder PATH listing for volume OS
+Volume serial number is B0B5-C2BE
+C:.
+    accountmenu.js
+    attacker.js
+    Boulders.js
+    camera.js
+    camper.js
+    Cephalopods.js
+    chats.js
+    clock.js
+    controls.js
+    Corals.js
+    Crustaceans.js
+    Encyclopedia.js
+    ExtraControls.js
+    Feeding.js
+    FishAdder.js
+    Fishes.js
+    hud.js
+    Jellies.js
+    Kelp.js
+    main.js
+    Mammals.js
+    map.js
+    menu.js
+    menuselector.js
+    MeshRegistry.js
+    MeshVolume.js
+    NormalScale.js
+    Physics.js
+    player.js
+    Regions.js
+    ScaleMesh.js
+    SeaCucumbers.js
+    SpawnFactory.js
+    sprinter.js
+    stacker.js
+    style.css
+    Swimming.js
+    TerrainMaker.js
+    TerrainMesher.js
+    utilitymenu.js
+
+No subfolders exist
+
+
+C:\Users\melas\OneDrive\Documents\Node1_Projects\shark\src>

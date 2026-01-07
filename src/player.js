@@ -14,6 +14,7 @@ import {
   hasVariants,
 } from './Encyclopedia.js'
 import { MeshRegistry, Category, Tag } from './MeshRegistry.js'
+import { PlayerRegistry } from './PlayerRegistry.js'
 import { 
   attachCapsuleWireframe, 
   computeCapsuleParams,
@@ -126,12 +127,12 @@ export function initPlayer(scene, spawnPosition = null, options = {}) {
   console.log(`[Player] Natural capsule:`, {
     radius: naturalCapsuleParams.radius.toFixed(3),
     halfHeight: naturalCapsuleParams.halfHeight.toFixed(3),
-    volume: normalization.naturalVolume.toFixed(3) + ' m³',
+    volume: normalization.naturalVolume.toFixed(3) + ' mÂ³',
   })
   console.log(`[Player] Normalized capsule:`, {
     radius: normalizedCapsuleParams.radius.toFixed(3),
     halfHeight: normalizedCapsuleParams.halfHeight.toFixed(3),
-    volume: normalization.targetVolume.toFixed(3) + ' m³',
+    volume: normalization.targetVolume.toFixed(3) + ' mÂ³',
     scaleFactor: normalization.scaleFactor.toFixed(3),
   })
   
@@ -157,7 +158,7 @@ export function initPlayer(scene, spawnPosition = null, options = {}) {
   
   const naturalSize = currentCreature.traits.length?.toFixed(1) || '1.5'
   const gameplayVolume = normalization.targetVolume.toFixed(2)
-  console.log(`Player: ${currentClass} | Natural: ${naturalSize}m | Vol: ${gameplayVolume}m³ | Seed: ${seedToString(currentCreature.seed)}`)
+  console.log(`Player: ${currentClass} | Natural: ${naturalSize}m | Vol: ${gameplayVolume}mÂ³ | Seed: ${seedToString(currentCreature.seed)}`)
   
   return currentCreature.mesh
 }
@@ -229,6 +230,23 @@ function swapCreature(newCreatureData, newType, newClass) {
       normalization: normalization,
     }
   }, true)
+  
+  // Notify PlayerRegistry of creature change
+  const localId = PlayerRegistry.getLocalId()
+  if (localId) {
+    PlayerRegistry.updateMesh(localId, currentCreature.mesh, creatureParts)
+    PlayerRegistry.updateCreature(localId, {
+      type: currentType,
+      class: currentClass,
+      variant: currentVariantIndex,
+      seed: currentCreature.seed,
+      displayName: currentClass,
+    })
+    PlayerRegistry.update(localId, {
+      capsuleParams: normalizedCapsuleParams,
+      naturalCapsuleParams: naturalCapsuleParams,
+    })
+  }
   
   return {
     seed: currentCreature.seed,
@@ -584,6 +602,18 @@ export function applyCurrentScale() {
     entry.metadata.normalization = getNormalizationInfo(naturalCapsuleParams)
   }
   
+  // Sync to PlayerRegistry
+  const localId = PlayerRegistry.getLocalId()
+  if (localId) {
+    PlayerRegistry.update(localId, {
+      capsuleParams: normalizedCapsuleParams,
+      physics: { scaleFactor },
+    })
+    PlayerRegistry.updateStats(localId, {
+      volume: getNormalizationInfo(naturalCapsuleParams).gameplay.volume,
+    })
+  }
+  
   return {
     scaleFactor,
     normalizedCapsuleParams,
@@ -634,7 +664,7 @@ export function addFood(foodValue) {
   const result = normalAddFood(foodValue)
   applyCurrentScale()
   
-  console.log(`[Player] Ate food: +${result.volumeGained.toFixed(3)} m³ | Total: ${result.totalVolume.toFixed(2)} m³`)
+  console.log(`[Player] Ate food: +${result.volumeGained.toFixed(3)} mÂ³ | Total: ${result.totalVolume.toFixed(2)} mÂ³`)
   
   return result
 }
@@ -659,11 +689,11 @@ export function debugPlayerScale() {
     console.log('Natural (META FACT):')
     console.log(`  Length: ${currentCreature?.traits?.length?.toFixed(2) || '?'}m`)
     console.log(`  Capsule: r=${info.natural.radius.toFixed(3)}, h=${info.natural.halfHeight.toFixed(3)}`)
-    console.log(`  Volume: ${info.natural.volume.toFixed(3)} m³`)
+    console.log(`  Volume: ${info.natural.volume.toFixed(3)} mÂ³`)
     console.log('Gameplay (Normalized):')
     console.log(`  Scale factor: ${info.scaleFactor.toFixed(3)}×`)
     console.log(`  Capsule: r=${info.gameplay.radius.toFixed(3)}, h=${info.gameplay.halfHeight.toFixed(3)}`)
-    console.log(`  Volume: ${info.gameplay.volume.toFixed(3)} m³`)
+    console.log(`  Volume: ${info.gameplay.volume.toFixed(3)} mÂ³`)
     console.log('Multipliers:')
     console.log(`  Growth: ${info.growthMultiplier.toFixed(2)}× (${info.growthPercent.toFixed(0)}%)`)
     console.log(`  Manual: ${info.manualScaleMultiplier.toFixed(2)}× (${(info.manualScaleMultiplier * 100).toFixed(0)}%)`)

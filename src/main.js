@@ -1,11 +1,12 @@
 import * as THREE from 'three'
 import { clock } from './clock.js'
 import { createMap } from './map.js'
-import { initPlayer, getPlayer } from './player.js'
+import { initPlayer, getPlayer, getPlayerCapsuleParams, getNaturalCapsuleParams, getCreatureParts } from './player.js'
 import { camera, initCameraControls, updateCamera } from './camera.js'
 import { initControls, updateMovement } from './controls.js'
 import { initHUD, updateHUD, notifyEvent } from './hud.js'
 import { MeshRegistry } from './MeshRegistry.js'
+import { PlayerRegistry } from './PlayerRegistry.js'
 import { buildTerrainMesh, debugTerrainMesh } from './TerrainMesher.js'
 import { 
   initPhysics, 
@@ -66,6 +67,9 @@ scene.add(map)
 // Initialize SpawnFactory and analyze BEFORE player spawns
 SpawnFactory.init(scene)
 SpawnFactory.analyzePlayableSpace()
+
+// Initialize PlayerRegistry with scene
+PlayerRegistry.init(scene)
 
 // Initialize FishAdder (uses SpawnFactory grid)
 FishAdder.init(scene)
@@ -146,11 +150,29 @@ onSpawnRequested(() => {
   
   // Initialize player with creature selection
   // Pass creature type, class, and variant from menu selection
-  initPlayer(scene, spawnPoint, {
+  const playerMesh = initPlayer(scene, spawnPoint, {
     creatureType: selection.creature.type,
     creatureClass: selection.creature.class,
     variantIndex: selection.creature.variantIndex,
   })
+  
+  // Register local player with PlayerRegistry
+  const playerId = crypto.randomUUID()
+  PlayerRegistry.registerLocal(playerId, {
+    displayName: selection.creature.displayName || 'Player',
+    mesh: playerMesh,
+    parts: getCreatureParts(),
+    creature: {
+      type: selection.creature.type,
+      class: selection.creature.class,
+      variant: selection.creature.variantIndex,
+      displayName: selection.creature.displayName,
+    },
+    position: spawnPoint,
+    capsuleParams: getPlayerCapsuleParams(),
+    naturalCapsuleParams: getNaturalCapsuleParams(),
+  })
+  
   initControls()
   initTrail(scene)
   initHUD()
@@ -167,7 +189,17 @@ onSpawnRequested(() => {
   // Notify HUD when player eats something
   Feeding.onEat((meal) => {
     if (meal.type === 'npc') {
-      notifyEvent(`Ate a ${meal.preyDisplayName}! +${meal.volumeGained.toFixed(2)} mÂ³`)
+      notifyEvent(`Ate a ${meal.preyDisplayName}! +${meal.volumeGained.toFixed(2)} m³`)
+    }
+    
+    // Update PlayerRegistry with meal data
+    const localId = PlayerRegistry.getLocalId()
+    if (localId) {
+      PlayerRegistry.eat(localId, {
+        type: meal.type,
+        targetId: meal.preyId,
+        volumeGained: meal.volumeGained,
+      })
     }
   })
   
@@ -202,6 +234,13 @@ function animate() {
     // Update feeding system (player eating NPCs)
     Feeding.update(delta)
     
+    // Sync local player position to PlayerRegistry
+    const localPlayer = PlayerRegistry.getLocal()
+    const player = getPlayer()
+    if (localPlayer && player) {
+      PlayerRegistry.updatePosition(localPlayer.id, player.position, player.rotation)
+    }
+    
     updateCamera()
     updateHUD(delta)
   }
@@ -217,10 +256,11 @@ animate()
 // Expose FishAdder globally for console access
 window.FishAdder = FishAdder
 window.Feeding = Feeding
+window.PlayerRegistry = PlayerRegistry
 
 // Controls documentation
 console.log(`
-ðŸŒŠðŸ ðŸ¦ˆ OCEAN CREATURE SIMULATOR
+🐟🐠🦈 OCEAN CREATURE SIMULATOR
 
   MOVEMENT:
     WASD              - Swim
