@@ -512,7 +512,7 @@ function cullContainedBoulders(boulders) {
 // MAP REGENERATION
 // =============================================================================
 
-export function regenerateMap() {
+export function regenerateMap(providedSeed = null) {
   if (!currentScene || !currentMapGroup) {
     console.warn('Map not initialized')
     return null
@@ -548,8 +548,8 @@ export function regenerateMap() {
     }
   })
   
-  // Generate new seed
-  const newSeed = Math.floor(Math.random() * 0xFFFFFFFF)
+  // Use provided seed (multiplayer) or generate random (singleplayer)
+  const newSeed = providedSeed !== null ? providedSeed : Math.floor(Math.random() * 0xFFFFFFFF)
   
   // Create new map
   const newMap = createMap(currentScene, newSeed)

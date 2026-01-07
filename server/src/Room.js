@@ -13,13 +13,16 @@ export class Room {
     this.players = new Map()
     this.playerIdCounter = 0
     
+    // World seed - all players share this for consistent map generation
+    this.worldSeed = options.worldSeed || 12345  // Default matches map.js DEFAULT_SEED
+    
     this.tickCount = 0
     this.tickRate = NETWORK_CONFIG.tickRate
     this.tickInterval = null
     
     this.startGameLoop()
     
-    console.log(`[Room ${id}] Created (max ${this.maxPlayers} players)`)
+    console.log(`[Room ${id}] Created (max ${this.maxPlayers} players, seed: ${this.worldSeed})`)
   }
   
   addPlayer(ws, name = 'Player') {
@@ -43,6 +46,7 @@ export class Room {
     this.send(ws, MSG.WELCOME, {
       id: playerId,
       roomId: this.id,
+      worldSeed: this.worldSeed,
       players: existingPlayers,
     })
     
@@ -111,6 +115,10 @@ export class Room {
         
       case MSG.EAT_PLAYER:
         this.handleEatPlayer(ws, data)
+        break
+        
+      case MSG.REQUEST_MAP_CHANGE:
+        this.handleMapChangeRequest(ws)
         break
         
       default:
@@ -210,6 +218,20 @@ export class Room {
     // TODO: Phase 4
   }
   
+  handleMapChangeRequest(ws) {
+    // Generate new random seed
+    const newSeed = Math.floor(Math.random() * 0xFFFFFFFF)
+    this.worldSeed = newSeed
+    
+    // Broadcast to ALL players (including the requester)
+    this.broadcast(MSG.MAP_CHANGE, {
+      seed: newSeed,
+      requestedBy: ws.id,
+    })
+    
+    console.log(`[Room ${this.id}] Map changed to seed ${newSeed.toString(16).toUpperCase()} (requested by player ${ws.id})`)
+  }
+  
   startGameLoop() {
     this.tickInterval = setInterval(() => {
       this.tick()
@@ -246,15 +268,16 @@ export class Room {
     
     if (positions.length > 0) {
       this.broadcast(MSG.BATCH_POSITIONS, {
-        t: serverTime,
+        time: serverTime,  // Changed from 't' to 'time' to avoid collision with message type
         p: positions,
       })
     }
     
-    if (this.tickCount % (this.tickRate * 5) === 0) {
+    // Log every 30 seconds instead of 5
+    if (this.tickCount % (this.tickRate * 30) === 0) {
       const playerCount = this.getPlayerCount()
       if (playerCount > 0) {
-        console.log(`[Room ${this.id}] Tick ${this.tickCount}, ${playerCount} players`)
+        console.log(`[Room ${this.id}] ${playerCount} players active`)
       }
     }
   }

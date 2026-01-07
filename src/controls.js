@@ -12,8 +12,8 @@
  *   T           - Increase scale
  *   G           - Mutate creature (new random of same type)
  *   N / B       - Next / Previous species
- *   Z           - Cycle variant (e.g., Yellowfin ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ Bluefin)
- *   M           - New map
+ *   Z           - Cycle variant (e.g., Yellowfin → Bluefin)
+ *   M           - New map (synced in multiplayer)
  *   P           - Toggle debug overlays (wireframes + volume labels)
  *   V           - Toggle debug viz (spawn grid + fish paths)
  *   F           - Debug
@@ -39,6 +39,7 @@ import {
   getCreatureShortName,
 } from './Encyclopedia.js'
 import { regenerateMap } from './map.js'
+import { networkManager } from '../network/NetworkManager.js'
 import { 
   toggleTerrainWireframe,
   rebuildTerrainMesh,
@@ -167,6 +168,36 @@ function showNotification(message, color = '#00ff88') {
   }, 2500)
 }
 
+/**
+ * Perform map regeneration with a specific seed
+ * Used by both local M key press (singleplayer) and network MAP_CHANGE event (multiplayer)
+ */
+export function performMapRegeneration(seed) {
+  // Check if visualization was on before map change
+  const wasVisualized = SpawnFactory.isVisualized
+  
+  const newSeed = regenerateMap(seed)
+  if (newSeed !== null) {
+    rebuildTerrainPhysics()
+    
+    // Reset SpawnFactory when map changes
+    SpawnFactory.reset()
+    
+    // If visualization was on, re-analyze and re-visualize the new map
+    if (wasVisualized) {
+      SpawnFactory.analyzePlayableSpace()
+      SpawnFactory.visualize()
+    }
+    
+    showNotification(
+      `New terrain | Seed: ${newSeed.toString(16).toUpperCase().padStart(8, '0')}`,
+      '#00ffff'
+    )
+  }
+  
+  return newSeed
+}
+
 // ============================================================================
 // INITIALIZATION
 // ============================================================================
@@ -184,6 +215,12 @@ function isPointerLocked() {
 
 export function initControls() {
   initSwimming()
+  
+  // Set up multiplayer map change callback
+  networkManager.onMapChange((seed, requestedBy) => {
+    console.log(`[Controls] Map change from server (seed: ${seed}, requested by player ${requestedBy})`)
+    performMapRegeneration(seed)
+  })
   
   // Track mouse position and movement for emoji wheel
   document.addEventListener('mousemove', (e) => {
@@ -282,28 +319,15 @@ export function initControls() {
         }
         break
       
-      // M = New Map
+      // M = New Map (synced in multiplayer)
       case 'KeyM':
-        // Check if visualization was on before map change
-        const wasVisualized = SpawnFactory.isVisualized
-        
-        const newSeed = regenerateMap()
-        if (newSeed !== null) {
-          rebuildTerrainPhysics()
-          
-          // Reset SpawnFactory when map changes
-          SpawnFactory.reset()
-          
-          // If visualization was on, re-analyze and re-visualize the new map
-          if (wasVisualized) {
-            SpawnFactory.analyzePlayableSpace()
-            SpawnFactory.visualize()
-          }
-          
-          showNotification(
-            `New terrain | Seed: ${newSeed.toString(16).toUpperCase().padStart(8, '0')}`,
-            '#00ffff'
-          )
+        // In multiplayer: request map change from server (syncs to all players)
+        if (networkManager && networkManager.isConnected()) {
+          networkManager.requestMapChange()
+          showNotification('Requesting new map...', '#ffff00')
+        } else {
+          // Singleplayer: regenerate locally with random seed
+          performMapRegeneration(null)
         }
         break
       
@@ -313,7 +337,7 @@ export function initControls() {
         if (scaleDownResult) {
           rebuildPlayerPhysics()
           showNotification(
-            `Scale: ${scaleDownResult.scalePercent.toFixed(0)}% | Vol: ${scaleDownResult.volume.toFixed(2)} mÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³`,
+            `Scale: ${scaleDownResult.scalePercent.toFixed(0)}% | Vol: ${scaleDownResult.volume.toFixed(2)} m³`,
             '#ff8888'
           )
         }
@@ -325,7 +349,7 @@ export function initControls() {
         if (scaleUpResult) {
           rebuildPlayerPhysics()
           showNotification(
-            `Scale: ${scaleUpResult.scalePercent.toFixed(0)}% | Vol: ${scaleUpResult.volume.toFixed(2)} mÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³`,
+            `Scale: ${scaleUpResult.scalePercent.toFixed(0)}% | Vol: ${scaleUpResult.volume.toFixed(2)} m³`,
             '#88ff88'
           )
         }
@@ -369,7 +393,7 @@ export function initControls() {
         }
         break
       
-      // Z = Cycle variant (e.g., Yellowfin Tuna ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ Bluefin Tuna)
+      // Z = Cycle variant (e.g., Yellowfin Tuna → Bluefin Tuna)
       case 'KeyZ':
         const variantResult = cycleVariant()
         if (variantResult.hasVariants) {

@@ -50,8 +50,9 @@ class NetworkManager {
     this.onDisconnectedCallback = null
     this.onPlayerJoinCallback = null
     this.onPlayerLeaveCallback = null
+    this.onMapChangeCallback = null
     
-    this.debug = false
+    this.debug = false  // Set to true for verbose logging
   }
   
   // ──────────────────────────────────────────────────────────────────────────
@@ -221,6 +222,10 @@ class NetworkManager {
         this.handleLeaderboard(data)
         break
         
+      case MSG.MAP_CHANGE:
+        this.handleMapChange(data)
+        break
+        
       default:
         if (this.debug) {
           console.log(`[Network] Unhandled message type: ${data.type}`)
@@ -243,11 +248,12 @@ class NetworkManager {
   handleBatchPositions(data) {
     if (!data.p || !Array.isArray(data.p)) return
     
-    if (data.t) {
-      this.clock.syncServerTime(data.t)
+    // Server sends 'time' for timestamp (not 't' which conflicts with message type)
+    if (data.time) {
+      this.clock.syncServerTime(data.time)
     }
     
-    const serverTime = data.t || Date.now()
+    const serverTime = data.time || Date.now()
     
     data.p.forEach(pos => {
       if (pos.id === this.playerId) return
@@ -289,6 +295,11 @@ class NetworkManager {
     // TODO: Phase 4
   }
   
+  handleMapChange(data) {
+    console.log(`[Network] Map change received - new seed: ${data.seed}`)
+    this.onMapChangeCallback?.(data.seed, data.requestedBy)
+  }
+  
   // ──────────────────────────────────────────────────────────────────────────
   // SENDING MESSAGES
   // ──────────────────────────────────────────────────────────────────────────
@@ -320,6 +331,12 @@ class NetworkManager {
         seed: creature.seed,
       },
     })
+  }
+  
+  requestMapChange() {
+    if (!this.connected) return false
+    console.log(`[Network] Requesting map change...`)
+    return this.send(MSG.REQUEST_MAP_CHANGE, {})
   }
   
   sendPosition(position, rotation, scale) {
@@ -456,6 +473,10 @@ class NetworkManager {
   
   onPlayerLeave(callback) {
     this.onPlayerLeaveCallback = callback
+  }
+  
+  onMapChange(callback) {
+    this.onMapChangeCallback = callback
   }
   
   setDebug(enabled) {

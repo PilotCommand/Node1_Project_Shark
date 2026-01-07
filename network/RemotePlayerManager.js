@@ -76,7 +76,9 @@ class RemotePlayer {
     if (this.mesh) {
       this.mesh.position.copy(this.position)
       this.mesh.rotation.copy(this.rotation)
-      this.mesh.scale.setScalar(this.scale)
+      // Use a minimum scale of 3 so players are visible
+      const displayScale = Math.max(this.scale, 3)
+      this.mesh.scale.setScalar(displayScale)
       this.scene.add(this.mesh)
     }
   }
@@ -98,12 +100,15 @@ class RemotePlayer {
    */
   createCreatureMesh(creature) {
     try {
-      // Placeholder fish-like shape (replace with Encyclopedia call)
-      const bodyGeo = new THREE.CapsuleGeometry(0.3, 1, 8, 16)
+      // Placeholder fish-like shape - BIGGER so it's visible!
+      // Body is now 1m radius, 3m long = ~5m total fish
+      const bodyGeo = new THREE.CapsuleGeometry(1, 3, 8, 16)
       const bodyMat = new THREE.MeshStandardMaterial({
         color: this.getCreatureColor(creature),
         roughness: 0.6,
         metalness: 0.2,
+        emissive: this.getCreatureColor(creature),
+        emissiveIntensity: 0.3,  // Slight glow so it's easier to see
       })
       
       this.mesh = new THREE.Group()
@@ -112,10 +117,10 @@ class RemotePlayer {
       body.rotation.z = Math.PI / 2
       this.mesh.add(body)
       
-      // Tail fin
-      const tailGeo = new THREE.ConeGeometry(0.2, 0.5, 8)
+      // Tail fin - bigger
+      const tailGeo = new THREE.ConeGeometry(0.8, 2, 8)
       const tail = new THREE.Mesh(tailGeo, bodyMat)
-      tail.position.x = -0.7
+      tail.position.x = -2.5
       tail.rotation.z = -Math.PI / 2
       this.mesh.add(tail)
       
@@ -128,10 +133,13 @@ class RemotePlayer {
   }
   
   createPlaceholderMesh() {
-    const geometry = new THREE.BoxGeometry(1, 0.6, 2)
+    // Bigger placeholder box so it's visible (3x2x6 meters)
+    const geometry = new THREE.BoxGeometry(3, 2, 6)
     const material = new THREE.MeshStandardMaterial({
-      color: 0x888888,
+      color: 0xff00ff,  // Bright magenta so it's obvious
       roughness: 0.7,
+      emissive: 0xff00ff,
+      emissiveIntensity: 0.2,
     })
     
     this.mesh = new THREE.Mesh(geometry, material)
@@ -306,6 +314,7 @@ export class RemotePlayerManager {
     if (player) {
       player.updateFromServer(data, serverTime)
     }
+    // Silently ignore updates for unknown players (can happen during join race condition)
   }
   
   updateCreature(id, creature) {

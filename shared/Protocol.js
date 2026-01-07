@@ -44,6 +44,10 @@ export const MSG = {
   ROOM_INFO: 60,
   ROOM_LIST: 61,
   SWITCH_ROOM: 62,
+  
+  // World sync (70-79)
+  REQUEST_MAP_CHANGE: 70,  // Client → Server: Request new map
+  MAP_CHANGE: 71,          // Server → All Clients: New map seed
 }
 
 // ============================================================================
