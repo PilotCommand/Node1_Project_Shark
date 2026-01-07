@@ -1,5 +1,5 @@
 /**
- * menu.js — Main Menu State Controller
+ * menu.js â€” Main Menu State Controller
  *
  * Responsibilities:
  * - Display a stylish shark-themed main menu
@@ -13,6 +13,8 @@
  */
 
 import * as Selector from './menuselector.js'
+import * as UtilityMenu from './utilitymenu.js'
+import * as AccountMenu from './accountmenu.js'
 
 let menuRoot = null
 let transitionOverlay = null
@@ -1189,6 +1191,15 @@ export function initMenu() {
     showMainContent()
   })
 
+  // Initialize utility menu panels
+  UtilityMenu.initUtilityMenu()
+  
+  // Initialize account menu and register callback
+  AccountMenu.initAccountMenu()
+  AccountMenu.onBack(() => {
+    showMainContent()
+  })
+
   hideMenu()
   console.log('[Menu] Initialized with corner buttons and nickname input')
 }
@@ -1231,63 +1242,22 @@ function handleSpawn() {
 
 function handleSettings() {
   console.log('[Menu] Settings clicked')
-  // TODO: Implement settings panel
-  alert('⚙️ Settings\n\nComing soon!\n\nThis will include:\n• Graphics quality\n• Sound volume\n• Controls remapping\n• Accessibility options')
+  UtilityMenu.showSettingsPanel()
 }
 
 function handleServers() {
   console.log('[Menu] Servers clicked')
-  // TODO: Implement server browser
-  alert('🌐 Server Browser\n\nComing soon!\n\nThis will include:\n• Server list\n• Create private room\n• Join with code\n• Region selection')
+  UtilityMenu.showServersPanel()
 }
 
 function handleHelp() {
   console.log('[Menu] Help clicked')
-  alert(`
-❓ HOW TO PLAY
-
-🎯 OBJECTIVE:
-Survive and grow by eating smaller creatures!
-Avoid larger predators that can eat you.
-
-🦈 GAMEPLAY:
-• Start as a small creature
-• Eat fish smaller than you to grow
-• The bigger you get, the more you can eat
-• Watch out for creatures larger than you!
-
-💡 TIPS:
-• Green dots on radar = safe to eat
-• Red dots = DANGER! They can eat you
-• Yellow dots = similar size (risky)
-• Use boost (Q) to escape or chase
-
-🎯 GOAL:
-Become the biggest predator in the ocean!
-  `)
+  UtilityMenu.showHelpPanel()
 }
 
 function handleDonate() {
   console.log('[Menu] Donate clicked')
-  // TODO: Implement donation link/system
-  alert(`
-💚 SUPPORT SHARKY
-
-Thank you for considering a donation!
-
-Your support helps us:
-• Keep servers running
-• Add new creatures & features
-• Improve game performance
-• Stay ad-free
-
-Coming soon:
-• Ko-fi / Patreon links
-• In-game supporter badge
-• Exclusive color variants
-
-Thank you for playing! 🦈
-  `)
+  UtilityMenu.showDonatePanel()
 }
 
 function showSelector() {
@@ -1346,21 +1316,27 @@ function showMainContent() {
 }
 
 function showAccount() {
-  console.log('[Menu] Account clicked')
-  // TODO: Implement account system
-  alert(`
-🪪 ACCOUNT
-
-Coming soon!
-
-This will include:
-• Sign in / Sign up
-• Player statistics
-• Achievements & badges
-• Customization unlocks
-• Friends list
-• Match history
-  `)
+  console.log('[Menu] Opening account')
+  
+  // Fade out main menu content (same as selector)
+  const content = menuRoot.querySelector('.menu-content')
+  const footer = menuRoot.querySelector('.menu-footer')
+  const cornerBtns = menuRoot.querySelectorAll('.menu-corner-btn')
+  
+  if (content) content.style.opacity = '0'
+  if (footer) footer.style.opacity = '0'
+  cornerBtns.forEach(btn => btn.style.opacity = '0')
+  
+  mainContentVisible = false
+  
+  // Show account page after brief delay for fade
+  setTimeout(() => {
+    if (content) content.style.display = 'none'
+    if (footer) footer.style.display = 'none'
+    cornerBtns.forEach(btn => btn.style.display = 'none')
+    
+    AccountMenu.show()
+  }, 300)
 }
 
 // ============================================================================
