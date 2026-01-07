@@ -12,12 +12,15 @@
  * - Does NOT manage camera logic
  */
 
+import * as Selector from './menuselector.js'
+
 let menuRoot = null
 let transitionOverlay = null
 let nicknameInput = null
 let active = false
 let spawnRequested = false
 let spawnCallbacks = []
+let mainContentVisible = true  // Track if main menu content is visible
 
 // ============================================================================
 // EASY-TO-EDIT CONFIGURATION
@@ -461,6 +464,7 @@ function generateStyles() {
       opacity: 0;
       animation: contentFadeIn 1s ease-out forwards;
       animation-delay: 0.8s;
+      transition: opacity 0.3s ease;
     }
 
     .menu-title {
@@ -741,6 +745,7 @@ function generateStyles() {
       opacity: 0;
       animation: contentFadeIn 1s ease-out forwards;
       animation-delay: 1.2s;
+      transition: opacity 0.3s ease;
     }
 
     .menu-controls-hint {
@@ -1178,6 +1183,12 @@ export function initMenu() {
 
   document.body.appendChild(menuRoot)
 
+  // Initialize selector and register callback
+  Selector.initSelector()
+  Selector.onBack(() => {
+    showMainContent()
+  })
+
   hideMenu()
   console.log('[Menu] Initialized with corner buttons and nickname input')
 }
@@ -1227,7 +1238,7 @@ function handleSettings() {
 function handleServers() {
   console.log('[Menu] Servers clicked')
   // TODO: Implement server browser
-  alert('🌐 Server Browser\n\nComing soon!\n\nThis will include:\n• Server list\n• Create private room\n• Join with code\n• Region selection')
+  alert('🌐 Server Browser\n\nComing soon!\n\nThis will include:\n• Server list\n• Create private room\n• Join with code\n• Region selection')
 }
 
 function handleHelp() {
@@ -1251,7 +1262,7 @@ Avoid larger predators that can eat you.
 • Yellow dots = similar size (risky)
 • Use boost (Q) to escape or chase
 
-🏆 GOAL:
+🎯 GOAL:
 Become the biggest predator in the ocean!
   `)
 }
@@ -1280,24 +1291,58 @@ Thank you for playing! 🦈
 }
 
 function showSelector() {
-  console.log('[Menu] Selector clicked')
-  // TODO: Implement fish/class selector
-  alert(`
-🐟 CREATURE SELECTOR
+  console.log('[Menu] Opening selector')
+  
+  // Fade out main menu content
+  const content = menuRoot.querySelector('.menu-content')
+  const footer = menuRoot.querySelector('.menu-footer')
+  const cornerBtns = menuRoot.querySelectorAll('.menu-corner-btn')
+  
+  if (content) content.style.opacity = '0'
+  if (footer) footer.style.opacity = '0'
+  cornerBtns.forEach(btn => btn.style.opacity = '0')
+  
+  mainContentVisible = false
+  
+  // Show selector after brief delay for fade
+  setTimeout(() => {
+    if (content) content.style.display = 'none'
+    if (footer) footer.style.display = 'none'
+    cornerBtns.forEach(btn => btn.style.display = 'none')
+    
+    Selector.show()
+  }, 300)
+}
 
-Coming soon!
-
-This will let you choose:
-• Species (Shark, Tuna, Dolphin, etc.)
-• Class variants (Great White, Hammerhead, etc.)
-• Starting size
-• Color variations
-
-For now, use these in-game:
-• N/B - Next/Previous species
-• Z - Cycle variants
-• R - Random mutation
-  `)
+function showMainContent() {
+  const content = menuRoot.querySelector('.menu-content')
+  const footer = menuRoot.querySelector('.menu-footer')
+  const cornerBtns = menuRoot.querySelectorAll('.menu-corner-btn')
+  
+  // Restore display
+  if (content) {
+    content.style.display = 'flex'
+    content.style.opacity = '0'
+  }
+  if (footer) {
+    footer.style.display = 'flex'
+    footer.style.opacity = '0'
+  }
+  cornerBtns.forEach(btn => {
+    btn.style.display = 'flex'
+    btn.style.opacity = '0'
+  })
+  
+  // Trigger reflow then fade in
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      if (content) content.style.opacity = '1'
+      if (footer) footer.style.opacity = '1'
+      cornerBtns.forEach(btn => btn.style.opacity = '1')
+    })
+  })
+  
+  mainContentVisible = true
 }
 
 function showAccount() {
@@ -1387,4 +1432,12 @@ export function onSpawnRequested(callback) {
     const idx = spawnCallbacks.indexOf(callback)
     if (idx !== -1) spawnCallbacks.splice(idx, 1)
   }
+}
+
+/**
+ * Get the player's creature and ability selection from the selector
+ * @returns {{ creature: object, ability: object }}
+ */
+export function getPlayerSelection() {
+  return Selector.getSelection()
 }
