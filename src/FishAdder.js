@@ -18,7 +18,6 @@ import {
   generateCreature,
   getAllCreatureClasses,
   getVariantCount,
-  randomSeed,
   CreatureType,
   getTypeFromClass,
 } from './Encyclopedia.js'
@@ -27,6 +26,7 @@ import { SpawnFactory } from './SpawnFactory.js'
 import { computeCapsuleParams } from './ScaleMesh.js'
 import { computeCapsuleVolume, getNPCNormalDistributedScale } from './NormalScale.js'
 import { computeGroupVolume, getMeshVolumeBreakdown } from './MeshVolume.js'
+import { Determine } from './determine.js'
 
 // ============================================================================
 // SPECIES BEHAVIOR CLASSIFICATION
@@ -293,7 +293,7 @@ function getFishInNearbyCells(pos, rangeSq) {
 
 /**
  * Build adjacency map from SpawnFactory grid
- * Uses spatial hashing for O(k) neighbor lookup instead of O(nÃƒâ€šÃ‚Â²)
+ * Uses spatial hashing for O(k) neighbor lookup instead of O(nÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â²)
  */
 function buildAdjacencyMap() {
   gridPoints = SpawnFactory.playablePoints
@@ -315,7 +315,7 @@ function buildAdjacencyMap() {
   
   adjacencyMap.clear()
   
-  // Use spatial hash to find neighbors (much faster than O(nÃƒâ€šÃ‚Â²))
+  // Use spatial hash to find neighbors (much faster than O(nÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â²))
   for (let i = 0; i < gridPoints.length; i++) {
     const neighbors = []
     const p1 = gridPoints[i]
@@ -417,7 +417,7 @@ function findNearestGridIndex(position) {
  * Get a random grid point index
  */
 function getRandomGridIndex() {
-  return Math.floor(Math.random() * gridPoints.length)
+  return Determine.index(gridPoints.length)
 }
 
 /**
@@ -471,7 +471,7 @@ function pickNextGridStep(currentIdx, forwardDir, biasTarget = null, avoidTarget
     
     // Randomness
     if (CONFIG.randomness > 0) {
-      score += Math.random() * CONFIG.randomness
+      score += Determine.random() * CONFIG.randomness
     }
     
     if (score > bestScore) {
@@ -538,7 +538,7 @@ function spawnInitialFish() {
   
   // Spawn mix of schools and individuals up to target
   while (spawned < count) {
-    if (Math.random() < CONFIG.schoolChance && spawned + CONFIG.schoolSize.min <= count) {
+    if (Determine.chance(CONFIG.schoolChance) && spawned + CONFIG.schoolSize.min <= count) {
       const schoolResult = spawnSchool()
       if (schoolResult) spawned += schoolResult.count
     } else {
@@ -567,13 +567,13 @@ function spawnSchool() {
   const schoolingCreatures = allCreatures.filter(c => SCHOOLING_SPECIES.has(c.class))
   if (schoolingCreatures.length === 0) return null
   
-  const creature = schoolingCreatures[Math.floor(Math.random() * schoolingCreatures.length)]
+  const creature = Determine.pick(schoolingCreatures)
   const variantCount = getVariantCount(creature.class)
-  const variantIndex = Math.floor(Math.random() * variantCount)
+  const variantIndex = Determine.index(variantCount)
   const scaleMultiplier = pickRandomSize(creature.class)
   
   const schoolSize = CONFIG.schoolSize.min + 
-    Math.floor(Math.random() * (CONFIG.schoolSize.max - CONFIG.schoolSize.min + 1))
+    Determine.rangeInt(0, CONFIG.schoolSize.max - CONFIG.schoolSize.min + 1)
   
   const schoolId = `school_${schoolIdCounter++}`
   const memberIds = []
@@ -611,7 +611,7 @@ function spawnSchool() {
       creatureType: creature.type,
       creatureClass: creature.class,
       variantIndex,
-      scaleMultiplier: scaleMultiplier * (0.9 + Math.random() * 0.2),
+      scaleMultiplier: scaleMultiplier * Determine.variation(0.1),
       schoolId,
       isLeader: i === 0,
     })
@@ -640,7 +640,7 @@ function spawnOneCreature(options = {}) {
   // Pick random creature if not specified
   let creature = null
   if (!options.creatureClass) {
-    creature = allCreatures[Math.floor(Math.random() * allCreatures.length)]
+    creature = Determine.pick(allCreatures)
   } else {
     creature = allCreatures.find(c => c.class === options.creatureClass)
   }
@@ -650,7 +650,7 @@ function spawnOneCreature(options = {}) {
   const {
     creatureType = creature.type,
     creatureClass = creature.class,
-    variantIndex = Math.floor(Math.random() * getVariantCount(creatureClass)),
+    variantIndex = Determine.index(getVariantCount(creatureClass)),
     scaleMultiplier = pickRandomSize(creatureClass),
     schoolId = null,
     isLeader = false,
@@ -667,7 +667,8 @@ function spawnOneCreature(options = {}) {
   // Spawn position is ALWAYS a grid point
   const spawnPosition = gridPoints[gridIdx].clone()
   
-  const seed = randomSeed()
+  // Generate deterministic seed for creature mesh
+  const seed = Determine.rangeInt(0, 0xFFFFFFFF)
   const creatureData = generateCreature(seed, creatureType, creatureClass, variantIndex)
   
   if (!creatureData?.mesh) return null
@@ -675,14 +676,14 @@ function spawnOneCreature(options = {}) {
   // Compute NATURAL visual volume at scale=1 (before any scaling)
   const naturalVisualVolume = computeGroupVolume(creatureData.mesh, false)
   
-  // Get normally distributed scale (volumes from 1 to 1000 mÃ‚Â³)
+  // Get normally distributed scale (volumes from 1 to 1000 mÃƒâ€šÃ‚Â³)
   const normalization = getNPCNormalDistributedScale(naturalVisualVolume)
   const finalScaleMultiplier = normalization.scaleFactor
   
   // Apply normalized scale
   creatureData.mesh.scale.setScalar(finalScaleMultiplier)
   creatureData.mesh.position.copy(spawnPosition)  // Always at grid point
-  creatureData.mesh.rotation.y = Math.random() * Math.PI * 2
+  creatureData.mesh.rotation.y = Determine.rotation()
   
   sceneRef.add(creatureData.mesh)
   
@@ -726,14 +727,14 @@ function spawnOneCreature(options = {}) {
     
     // Movement
     direction: new THREE.Vector3(0, 0, 1),
-    speed: CONFIG.baseSpeed * speedMult * (0.7 + Math.random() * CONFIG.speedVariation),
-    baseSpeed: CONFIG.baseSpeed * speedMult * (0.7 + Math.random() * CONFIG.speedVariation),
+    speed: CONFIG.baseSpeed * speedMult * Determine.range(0.7, 0.7 + CONFIG.speedVariation),
+    baseSpeed: CONFIG.baseSpeed * speedMult * Determine.range(0.7, 0.7 + CONFIG.speedVariation),
     
     // Preferred direction (each creature has its own bias - makes them turn less)
     preferredDirection: new THREE.Vector3(
-      Math.random() - 0.5,
-      (Math.random() - 0.5) * 0.3,  // Less vertical bias
-      Math.random() - 0.5
+      Determine.plusMinus(0.5),
+      Determine.plusMinus(0.5) * 0.3,  // Less vertical bias
+      Determine.plusMinus(0.5)
     ).normalize(),
     
     // Behavior flags
@@ -793,14 +794,14 @@ function spawnOneFish(options = {}) {
 function pickRandomSize(creatureClass = null) {
   const dist = CONFIG.sizeDistribution
   const totalWeight = Object.values(dist).reduce((sum, d) => sum + d.weight, 0)
-  let roll = Math.random() * totalWeight
+  let roll = Determine.random() * totalWeight
   
   let baseScale = 1.0
   for (const [, data] of Object.entries(dist)) {
     roll -= data.weight
     if (roll <= 0) {
       const [min, max] = data.scale
-      baseScale = min + Math.random() * (max - min)
+      baseScale = Determine.range(min, max)
       break
     }
   }
@@ -909,7 +910,7 @@ function maintainPopulation() {
   
   let spawned = 0
   while (spawned < needed) {
-    if (Math.random() < CONFIG.schoolChance && needed - spawned >= CONFIG.schoolSize.min) {
+    if (Determine.chance(CONFIG.schoolChance) && needed - spawned >= CONFIG.schoolSize.min) {
       const result = spawnSchool()
       if (result) spawned += result.count
       else spawned++
@@ -984,7 +985,7 @@ function planWanderPath(npc) {
   let forwardDir = npc.direction.clone()
   
   if (forwardDir.lengthSq() < 0.01) {
-    forwardDir.set(Math.random() - 0.5, 0, Math.random() - 0.5).normalize()
+    forwardDir.set(Determine.plusMinus(0.5), 0, Determine.plusMinus(0.5)).normalize()
   }
   
   // For FIRST step, pick neighbor that's in front of the fish's ACTUAL position
@@ -1007,7 +1008,7 @@ function planWanderPath(npc) {
         score += npc.preferredDirection.dot(_v1) * CONFIG.preferredDirBias
       }
       
-      score += Math.random() * CONFIG.randomness
+      score += Determine.random() * CONFIG.randomness
       
       if (score > bestScore) {
         bestScore = score
@@ -1072,7 +1073,7 @@ function planFleePath(npc, threat) {
       let score = _v1.dot(_v2) * CONFIG.targetBias
       // Also prefer forward momentum
       score += forwardDir.dot(_v1) * 2
-      score += Math.random() * CONFIG.randomness
+      score += Determine.random() * CONFIG.randomness
       
       if (score > bestScore) {
         bestScore = score
@@ -1142,7 +1143,7 @@ function planChasePath(npc, prey) {
       let score = _v1.dot(_v2) * CONFIG.targetBias
       // Also prefer forward momentum
       score += forwardDir.dot(_v1) * 2
-      score += Math.random() * CONFIG.randomness
+      score += Determine.random() * CONFIG.randomness
       
       if (score > bestScore) {
         bestScore = score
@@ -1632,22 +1633,22 @@ function debugVolumes() {
   const mean = volumes.length > 0 ? totalVisual / volumes.length : 0
   
   console.log(`Total NPCs: ${npcs.size}`)
-  console.log(`Total Visual Volume: ${totalVisual.toFixed(3)} mÃ‚Â³`)
-  console.log(`Total Capsule Volume: ${totalCapsule.toFixed(3)} mÃ‚Â³`)
+  console.log(`Total Visual Volume: ${totalVisual.toFixed(3)} mÃƒâ€šÃ‚Â³`)
+  console.log(`Total Capsule Volume: ${totalCapsule.toFixed(3)} mÃƒâ€šÃ‚Â³`)
   console.log(`Total Meshes: ${totalMeshes}`)
-  console.log(`Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬`)
+  console.log(`ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬`)
   console.log(`Volume Distribution:`)
-  console.log(`  Min: ${minVolume.toFixed(2)} mÃ‚Â³`)
-  console.log(`  Max: ${maxVolume.toFixed(2)} mÃ‚Â³`)
-  console.log(`  Mean: ${mean.toFixed(2)} mÃ‚Â³`)
-  console.log(`  Median: ${median.toFixed(2)} mÃ‚Â³`)
+  console.log(`  Min: ${minVolume.toFixed(2)} mÃƒâ€šÃ‚Â³`)
+  console.log(`  Max: ${maxVolume.toFixed(2)} mÃƒâ€šÃ‚Â³`)
+  console.log(`  Mean: ${mean.toFixed(2)} mÃƒâ€šÃ‚Â³`)
+  console.log(`  Median: ${median.toFixed(2)} mÃƒâ€šÃ‚Â³`)
   
   console.group('By Species')
   const sortedClasses = [...byClass.entries()].sort((a, b) => b[1].visualVolume - a[1].visualVolume)
   for (const [className, data] of sortedClasses) {
     const avgVol = (data.visualVolume / data.count).toFixed(2)
     const avgMeshes = (data.meshCount / data.count).toFixed(1)
-    console.log(`${className}: ${data.count} creatures | avg: ${avgVol} mÃ‚Â³ | range: [${data.minVol.toFixed(1)}, ${data.maxVol.toFixed(1)}] | meshes: ${avgMeshes}`)
+    console.log(`${className}: ${data.count} creatures | avg: ${avgVol} mÃƒâ€šÃ‚Â³ | range: [${data.minVol.toFixed(1)}, ${data.maxVol.toFixed(1)}] | meshes: ${avgMeshes}`)
   }
   console.groupEnd()
   
@@ -2076,7 +2077,7 @@ function setPopulation(count) {
     // Spawn more
     const toSpawn = count - current
     for (let i = 0; i < toSpawn; i++) {
-      if (Math.random() < CONFIG.schoolChance && npcs.size + CONFIG.schoolSize.min <= count) {
+      if (Determine.chance(CONFIG.schoolChance) && npcs.size + CONFIG.schoolSize.min <= count) {
         spawnSchool()
       } else {
         spawnOneCreature()
@@ -2088,7 +2089,7 @@ function setPopulation(count) {
     const toRemove = current - count
     const ids = [...npcs.keys()]
     for (let i = 0; i < toRemove && ids.length > 0; i++) {
-      const idx = Math.floor(Math.random() * ids.length)
+      const idx = Determine.index(ids.length)
       removeFish(ids[idx], false)
       ids.splice(idx, 1)
     }

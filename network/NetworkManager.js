@@ -21,6 +21,7 @@ import {
 } from '../shared/Protocol.js'
 import { RemotePlayerManager } from './RemotePlayerManager.js'
 import { NetworkClock } from './NetworkClock.js'
+import { Determine } from '../src/determine.js'
 
 // ============================================================================
 // NETWORK MANAGER CLASS
@@ -35,6 +36,7 @@ class NetworkManager {
     
     this.playerId = null
     this.roomId = null
+    this.npcSeed = null  // Seed for deterministic NPC spawning
     
     this.remotePlayers = null
     this.scene = null
@@ -51,13 +53,14 @@ class NetworkManager {
     this.onPlayerJoinCallback = null
     this.onPlayerLeaveCallback = null
     this.onMapChangeCallback = null
+    this.onNPCSeedReadyCallback = null  // Called when NPC seed is received
     
     this.debug = false  // Set to true for verbose logging
   }
   
-  // ──────────────────────────────────────────────────────────────────────────
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // CONNECTION
-  // ──────────────────────────────────────────────────────────────────────────
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   
   async connect(serverUrl, scene, options = {}) {
     if (this.connected || this.connecting) {
@@ -109,6 +112,13 @@ class NetworkManager {
           this.playerId = data.id
           this.roomId = data.roomId
           
+          // Initialize deterministic RNG for NPCs
+          if (data.npcSeed !== undefined) {
+            this.npcSeed = data.npcSeed
+            Determine.init(data.npcSeed)
+            console.log(`[Network] NPC seed initialized: ${data.npcSeed} (0x${(data.npcSeed >>> 0).toString(16).toUpperCase()})`)
+          }
+          
           console.log(`[Network] Connected! Player ID: ${this.playerId}, Room: ${this.roomId}`)
           
           if (data.players && data.players.length > 0) {
@@ -119,6 +129,12 @@ class NetworkManager {
           }
           
           this.onConnectedCallback?.(this.playerId, this.roomId)
+          
+          // Notify that NPC seed is ready (after connected callback)
+          if (this.npcSeed !== null) {
+            this.onNPCSeedReadyCallback?.(this.npcSeed)
+          }
+          
           resolve(this.playerId)
           return
         }
@@ -166,6 +182,7 @@ class NetworkManager {
     this.connecting = false
     this.playerId = null
     this.roomId = null
+    this.npcSeed = null
     
     this.remotePlayers?.destroy()
     this.remotePlayers = null
@@ -176,9 +193,9 @@ class NetworkManager {
     }
   }
   
-  // ──────────────────────────────────────────────────────────────────────────
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // MESSAGE HANDLING
-  // ──────────────────────────────────────────────────────────────────────────
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   
   handleMessage(data) {
     switch (data.type) {
@@ -297,12 +314,20 @@ class NetworkManager {
   
   handleMapChange(data) {
     console.log(`[Network] Map change received - new seed: ${data.seed}`)
-    this.onMapChangeCallback?.(data.seed, data.requestedBy)
+    
+    // Reset NPC deterministic RNG if new npcSeed provided
+    if (data.npcSeed !== undefined) {
+      this.npcSeed = data.npcSeed
+      Determine.reset(data.npcSeed)
+      console.log(`[Network] NPC seed reset: ${data.npcSeed} (0x${(data.npcSeed >>> 0).toString(16).toUpperCase()})`)
+    }
+    
+    this.onMapChangeCallback?.(data.seed, data.requestedBy, data.npcSeed)
   }
   
-  // ──────────────────────────────────────────────────────────────────────────
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // SENDING MESSAGES
-  // ──────────────────────────────────────────────────────────────────────────
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   
   send(type, data = {}) {
     if (!this.connected || !this.socket) {
@@ -394,9 +419,9 @@ class NetworkManager {
     })
   }
   
-  // ──────────────────────────────────────────────────────────────────────────
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // UPDATE LOOP
-  // ──────────────────────────────────────────────────────────────────────────
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   
   update(delta) {
     if (!this.connected) return
@@ -409,9 +434,9 @@ class NetworkManager {
     }
   }
   
-  // ──────────────────────────────────────────────────────────────────────────
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // HELPERS
-  // ──────────────────────────────────────────────────────────────────────────
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   
   hasPositionChanged(pos) {
     const threshold = NETWORK_CONFIG.positionThreshold
@@ -455,9 +480,13 @@ class NetworkManager {
     return this.clock.getLatency()
   }
   
-  // ──────────────────────────────────────────────────────────────────────────
+  getNPCSeed() {
+    return this.npcSeed
+  }
+  
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // CALLBACKS
-  // ──────────────────────────────────────────────────────────────────────────
+  // â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   
   onConnected(callback) {
     this.onConnectedCallback = callback
@@ -477,6 +506,10 @@ class NetworkManager {
   
   onMapChange(callback) {
     this.onMapChangeCallback = callback
+  }
+  
+  onNPCSeedReady(callback) {
+    this.onNPCSeedReadyCallback = callback
   }
   
   setDebug(enabled) {

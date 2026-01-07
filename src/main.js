@@ -26,6 +26,7 @@ import {
 import { SpawnFactory } from './SpawnFactory.js'
 import { FishAdder } from './FishAdder.js'
 import { Feeding } from './Feeding.js'
+import { Determine } from './determine.js'
 import { initTrail, setActiveAbility } from './ExtraControls.js'
 
 // Import menu
@@ -73,8 +74,8 @@ SpawnFactory.analyzePlayableSpace()
 PlayerRegistry.init(scene)
 
 // Initialize FishAdder (uses SpawnFactory grid)
+// NOTE: Don't spawn fish here - wait for network to provide npcSeed for deterministic spawning
 FishAdder.init(scene)
-FishAdder.spawnInitialFish()
 
 // Build unified terrain collision mesh (after map is created)
 const terrainMeshData = buildTerrainMesh(scene)
@@ -190,7 +191,7 @@ onSpawnRequested(async () => {
   // Notify HUD when player eats something
   Feeding.onEat((meal) => {
     if (meal.type === 'npc') {
-      notifyEvent(`Ate a ${meal.preyDisplayName}! +${meal.volumeGained.toFixed(2)} mÂ³`)
+      notifyEvent(`Ate a ${meal.preyDisplayName}! +${meal.volumeGained.toFixed(2)} mÃ‚Â³`)
     }
     
     // Update PlayerRegistry with meal data
@@ -207,9 +208,9 @@ onSpawnRequested(async () => {
   playerSpawned = true
   console.log('[Main] Player spawned as:', selection.creature.displayName, 'with ability:', selection.ability.name)
   
-  // ═══════════════════════════════════════════════════════════════════════════
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
   // MULTIPLAYER: Connect to server
-  // ═══════════════════════════════════════════════════════════════════════════
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
   try {
     await networkManager.connect('ws://localhost:9001', scene)
     
@@ -224,9 +225,37 @@ onSpawnRequested(async () => {
     
     console.log('[Main] Connected to multiplayer server!')
     notifyEvent('Connected to server!')
+    
+    // Register map change handler to respawn NPCs with new seed
+    networkManager.onMapChange((worldSeed, requestedBy, npcSeed) => {
+      console.log(`[Main] Map changed! Respawning NPCs with new seed...`)
+      
+      // Clear existing NPCs
+      FishAdder.clear()
+      
+      // Determine was already reset by NetworkManager with new npcSeed
+      // Spawn new NPCs
+      FishAdder.spawnInitialFish()
+      
+      notifyEvent('Map changed! New world generated.')
+    })
+    
+    // Spawn NPCs now that we have the deterministic seed from server
+    // (Determine was initialized by NetworkManager when it received npcSeed)
+    console.log('[Main] Spawning NPCs with server seed...')
+    FishAdder.spawnInitialFish()
+    
   } catch (err) {
     console.warn('[Main] Multiplayer connection failed:', err.message)
     console.log('[Main] Playing in single-player mode')
+    
+    // Single-player: Initialize Determine with a local seed
+    const localNpcSeed = Math.floor(Math.random() * 0xFFFFFFFF)
+    Determine.init(localNpcSeed)
+    console.log(`[Main] Single-player NPC seed: 0x${(localNpcSeed >>> 0).toString(16).toUpperCase()}`)
+    
+    // Spawn NPCs with local seed
+    FishAdder.spawnInitialFish()
   }
 })
 
@@ -264,9 +293,9 @@ function animate() {
       PlayerRegistry.updatePosition(localPlayer.id, player.position, player.rotation)
     }
     
-    // ═══════════════════════════════════════════════════════════════════════
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     // MULTIPLAYER: Send position & update remote players
-    // ═══════════════════════════════════════════════════════════════════════
+    // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
     if (networkManager.isConnected() && player) {
       networkManager.sendPosition(
         { x: player.position.x, y: player.position.y, z: player.position.z },
@@ -295,7 +324,7 @@ window.PlayerRegistry = PlayerRegistry
 
 // Controls documentation
 console.log(`
-ðŸŸðŸ ðŸ¦ˆ OCEAN CREATURE SIMULATOR
+Ã°Å¸ÂÅ¸Ã°Å¸ÂÂ Ã°Å¸Â¦Ë† OCEAN CREATURE SIMULATOR
 
   MOVEMENT:
     WASD              - Swim

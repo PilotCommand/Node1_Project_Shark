@@ -16,13 +16,16 @@ export class Room {
     // World seed - all players share this for consistent map generation
     this.worldSeed = options.worldSeed || 12345  // Default matches map.js DEFAULT_SEED
     
+    // NPC seed - all players share this for deterministic NPC spawning
+    this.npcSeed = options.npcSeed || Math.floor(Math.random() * 0xFFFFFFFF)
+    
     this.tickCount = 0
     this.tickRate = NETWORK_CONFIG.tickRate
     this.tickInterval = null
     
     this.startGameLoop()
     
-    console.log(`[Room ${id}] Created (max ${this.maxPlayers} players, seed: ${this.worldSeed})`)
+    console.log(`[Room ${id}] Created (max ${this.maxPlayers} players, worldSeed: ${this.worldSeed}, npcSeed: 0x${(this.npcSeed >>> 0).toString(16).toUpperCase()})`)
   }
   
   addPlayer(ws, name = 'Player') {
@@ -47,6 +50,7 @@ export class Room {
       id: playerId,
       roomId: this.id,
       worldSeed: this.worldSeed,
+      npcSeed: this.npcSeed,
       players: existingPlayers,
     })
     
@@ -219,17 +223,21 @@ export class Room {
   }
   
   handleMapChangeRequest(ws) {
-    // Generate new random seed
-    const newSeed = Math.floor(Math.random() * 0xFFFFFFFF)
-    this.worldSeed = newSeed
+    // Generate new random seeds
+    const newWorldSeed = Math.floor(Math.random() * 0xFFFFFFFF)
+    const newNpcSeed = Math.floor(Math.random() * 0xFFFFFFFF)
+    
+    this.worldSeed = newWorldSeed
+    this.npcSeed = newNpcSeed
     
     // Broadcast to ALL players (including the requester)
     this.broadcast(MSG.MAP_CHANGE, {
-      seed: newSeed,
+      seed: newWorldSeed,
+      npcSeed: newNpcSeed,
       requestedBy: ws.id,
     })
     
-    console.log(`[Room ${this.id}] Map changed to seed ${newSeed.toString(16).toUpperCase()} (requested by player ${ws.id})`)
+    console.log(`[Room ${this.id}] Map changed - worldSeed: 0x${newWorldSeed.toString(16).toUpperCase()}, npcSeed: 0x${newNpcSeed.toString(16).toUpperCase()} (requested by player ${ws.id})`)
   }
   
   startGameLoop() {
@@ -331,6 +339,8 @@ export class Room {
       players: this.getPlayerCount(),
       inGame: this.getInGameCount(),
       maxPlayers: this.maxPlayers,
+      worldSeed: this.worldSeed,
+      npcSeed: this.npcSeed,
     }
   }
   
