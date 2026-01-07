@@ -1,0 +1,14 @@
+{
+  "name": "ocean-server",
+  "version": "1.0.0",
+  "description": "Ocean Creature Simulator - Multiplayer Server",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "uWebSockets.js": "github:uNetworking/uWebSockets.js#v20.44.0"
+  }
+}

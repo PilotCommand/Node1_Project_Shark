@@ -1,0 +1,2214 @@
+# Ocean Creature Simulator - Final Multiplayer Plan
+
+---
+
+## Executive Summary
+
+```
+GAME TYPE:        Agar.io-style browser game
+TARGET SCALE:     100+ players per server
+ARCHITECTURE:     Client-authoritative (server as smart relay)
+TECH STACK:       Node.js + uWebSockets.js + Binary Protocol
+PRIORITY:         Low cost, low latency, maximum flexibility
+TIMELINE:         8-12 weeks to monetization-ready
+```
+
+---
+
+## Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              ARCHITECTURE                                    │
+│                                                                              │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │                         CLIENT (Browser)                             │   │
+│   │                                                                      │   │
+│   │   ┌──────────────┐   ┌──────────────┐   ┌──────────────────────┐   │   │
+│   │   │   Three.js   │   │   Rapier3D   │   │   Network Manager    │   │   │
+│   │   │  (Rendering) │   │  (Physics)   │   │  (WebSocket Client)  │   │   │
+│   │   └──────────────┘   └──────────────┘   └──────────────────────┘   │   │
+│   │                                                                      │   │
+│   │   CLIENT OWNS:                                                       │   │
+│   │   • Local player physics & movement                                  │   │
+│   │   • Local player feeding detection                                   │   │
+│   │   • NPC AI simulation (deterministic)                                │   │
+│   │   • All rendering & interpolation                                    │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                      │                                       │
+│                              WebSocket (Binary)                              │
+│                                      │                                       │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │                         SERVER (Node.js)                             │   │
+│   │                                                                      │   │
+│   │   ┌──────────────┐   ┌──────────────┐   ┌──────────────────────┐   │   │
+│   │   │ uWebSockets  │   │    Rooms     │   │    Game State        │   │   │
+│   │   │   (Fast!)    │   │  (Isolated)  │   │  (Players, NPCs)     │   │   │
+│   │   └──────────────┘   └──────────────┘   └──────────────────────┘   │   │
+│   │                                                                      │   │
+│   │   SERVER OWNS:                                                       │   │
+│   │   • Player connections & identity                                    │   │
+│   │   • Broadcasting positions to others                                 │   │
+│   │   • NPC spawn decisions (what/where)                                 │   │
+│   │   • Leaderboard & scoring                                            │   │
+│   │   • Room management                                                  │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Project Structure
+
+```
+ocean-game/
+├── client/                     # Your existing game (enhanced)
+│   ├── src/
+│   │   ├── main.js            # Entry point (modified)
+│   │   ├── player.js          # Local player (mostly unchanged)
+│   │   ├── Encyclopedia.js    # Creature generation (unchanged)
+│   │   ├── Feeding.js         # Eating logic (modified for multiplayer)
+│   │   ├── FishAdder.js       # NPC spawning (modified - uses server seeds)
+│   │   ├── Physics.js         # Rapier physics (unchanged)
+│   │   ├── hud.js             # HUD (add leaderboard)
+│   │   ├── menu.js            # Menu (add server browser)
+│   │   │
+│   │   ├── network/           # NEW: All networking code
+│   │   │   ├── NetworkManager.js    # WebSocket connection
+│   │   │   ├── Protocol.js          # Binary encode/decode
+│   │   │   ├── RemotePlayer.js      # Other players' creatures
+│   │   │   ├── Interpolation.js     # Smooth remote movement
+│   │   │   └── Clock.js             # Enhanced game clock
+│   │   │
+│   │   └── multiplayer/       # NEW: Multiplayer game logic
+│   │       ├── RemotePlayerManager.js   # Manage all remote players
+│   │       ├── NPCSync.js               # Deterministic NPC sync
+│   │       └── FeedingSync.js           # Multiplayer eating
+│   │
+│   ├── index.html
+│   └── package.json
+│
+├── server/                     # NEW: Game server
+│   ├── src/
+│   │   ├── index.js           # Entry point
+│   │   ├── GameServer.js      # uWebSockets setup
+│   │   ├── Room.js            # Game room logic
+│   │   ├── Player.js          # Player state
+│   │   ├── NPCManager.js      # NPC spawn authority
+│   │   ├── Leaderboard.js     # Score tracking
+│   │   ├── Protocol.js        # Binary protocol (shared)
+│   │   └── SpatialGrid.js     # Interest management
+│   │
+│   └── package.json
+│
+├── shared/                     # NEW: Shared between client/server
+│   ├── Protocol.js            # Message types & encoding
+│   ├── Constants.js           # Game constants
+│   └── NPCBehavior.js         # Deterministic NPC logic
+│
+└── package.json               # Monorepo root
+```
+
+---
+
+## Phase 1: Foundation
+
+### Duration: 4-5 days
+
+### Goal
+> Establish WebSocket connection. See other players as placeholder cubes moving around.
+
+### Server Implementation
+
+```javascript
+// server/src/index.js
+
+import uWS from 'uWebSockets.js'
+import { Room } from './Room.js'
+
+const PORT = 9001
+const rooms = new Map()
+
+// Create default room
+rooms.set('main', new Room('main'))
+
+const app = uWS.App()
+
+app.ws('/*', {
+  // Connection config
+  compression: uWS.SHARED_COMPRESSOR,
+  maxPayloadLength: 16 * 1024,
+  idleTimeout: 120,
+  
+  // New connection
+  open: (ws) => {
+    const room = rooms.get('main')
+    room.addPlayer(ws)
+  },
+  
+  // Received message
+  message: (ws, message, isBinary) => {
+    ws.room.handleMessage(ws, message, isBinary)
+  },
+  
+  // Connection closed
+  close: (ws, code, reason) => {
+    if (ws.room) {
+      ws.room.removePlayer(ws)
+    }
+  }
+})
+
+app.listen(PORT, (token) => {
+  if (token) {
+    console.log(`🌊 Ocean Server running on port ${PORT}`)
+  }
+})
+```
+
+```javascript
+// server/src/Room.js
+
+import { encodeMessage, decodeMessage, MSG } from '../../shared/Protocol.js'
+
+export class Room {
+  constructor(id) {
+    this.id = id
+    this.players = new Map()
+    this.playerIdCounter = 0
+    this.tickRate = 20  // Server broadcasts at 20 Hz
+    
+    this.startGameLoop()
+  }
+  
+  addPlayer(ws) {
+    const playerId = ++this.playerIdCounter
+    
+    ws.id = playerId
+    ws.room = this
+    ws.position = { x: 0, y: 10, z: 0 }
+    ws.rotation = { x: 0, y: 0, z: 0 }
+    ws.scale = 1
+    ws.creature = null
+    
+    // Send welcome with player ID and existing players
+    const existingPlayers = []
+    this.players.forEach((other, id) => {
+      existingPlayers.push({
+        id,
+        position: other.position,
+        rotation: other.rotation,
+        scale: other.scale,
+        creature: other.creature,
+      })
+    })
+    
+    ws.send(encodeMessage(MSG.WELCOME, {
+      id: playerId,
+      players: existingPlayers,
+    }), true)
+    
+    // Add to room
+    this.players.set(playerId, ws)
+    
+    console.log(`Player ${playerId} joined room ${this.id}`)
+  }
+  
+  removePlayer(ws) {
+    this.players.delete(ws.id)
+    
+    // Broadcast leave to others
+    this.broadcast(encodeMessage(MSG.PLAYER_LEAVE, { id: ws.id }), ws.id)
+    
+    console.log(`Player ${ws.id} left room ${this.id}`)
+  }
+  
+  handleMessage(ws, message, isBinary) {
+    const data = decodeMessage(message)
+    
+    switch (data.type) {
+      case MSG.POSITION:
+        ws.position = data.position
+        ws.rotation = data.rotation
+        ws.scale = data.scale
+        break
+        
+      case MSG.JOIN_GAME:
+        ws.creature = data.creature
+        // Broadcast new player to others
+        this.broadcast(encodeMessage(MSG.PLAYER_JOIN, {
+          id: ws.id,
+          position: ws.position,
+          creature: ws.creature,
+        }), ws.id)
+        break
+    }
+  }
+  
+  broadcast(message, excludeId = null) {
+    this.players.forEach((ws, id) => {
+      if (id !== excludeId) {
+        ws.send(message, true)
+      }
+    })
+  }
+  
+  startGameLoop() {
+    setInterval(() => {
+      this.tick()
+    }, 1000 / this.tickRate)
+  }
+  
+  tick() {
+    // Batch all player positions into single message
+    const positions = []
+    
+    this.players.forEach((ws, id) => {
+      positions.push({
+        id,
+        x: ws.position.x,
+        y: ws.position.y,
+        z: ws.position.z,
+        rx: ws.rotation.x,
+        ry: ws.rotation.y,
+        rz: ws.rotation.z,
+        scale: ws.scale,
+      })
+    })
+    
+    if (positions.length > 0) {
+      const message = encodeMessage(MSG.BATCH_POSITIONS, { positions })
+      this.broadcast(message)
+    }
+  }
+}
+```
+
+### Client Implementation
+
+```javascript
+// client/src/network/NetworkManager.js
+
+import { encodeMessage, decodeMessage, MSG } from '../../../shared/Protocol.js'
+import { RemotePlayerManager } from '../multiplayer/RemotePlayerManager.js'
+
+class NetworkManager {
+  constructor() {
+    this.socket = null
+    this.playerId = null
+    this.connected = false
+    this.remotePlayers = null
+    this.scene = null
+    
+    // Callbacks
+    this.onConnected = null
+    this.onDisconnected = null
+  }
+  
+  connect(serverUrl, scene) {
+    this.scene = scene
+    this.remotePlayers = new RemotePlayerManager(scene)
+    
+    return new Promise((resolve, reject) => {
+      this.socket = new WebSocket(serverUrl)
+      this.socket.binaryType = 'arraybuffer'
+      
+      this.socket.onopen = () => {
+        console.log('🌐 Connected to server')
+        this.connected = true
+      }
+      
+      this.socket.onmessage = (event) => {
+        this.handleMessage(event.data)
+        
+        // Resolve on welcome message
+        if (!this.playerId) return
+        resolve(this.playerId)
+      }
+      
+      this.socket.onclose = () => {
+        console.log('🔌 Disconnected from server')
+        this.connected = false
+        this.onDisconnected?.()
+      }
+      
+      this.socket.onerror = (err) => {
+        reject(err)
+      }
+      
+      // Timeout
+      setTimeout(() => reject(new Error('Connection timeout')), 5000)
+    })
+  }
+  
+  handleMessage(data) {
+    const message = decodeMessage(data)
+    
+    switch (message.type) {
+      case MSG.WELCOME:
+        this.playerId = message.id
+        console.log(`🎮 Assigned player ID: ${this.playerId}`)
+        
+        // Spawn existing players
+        message.players.forEach(player => {
+          this.remotePlayers.addPlayer(player.id, player)
+        })
+        
+        this.onConnected?.(this.playerId)
+        break
+        
+      case MSG.PLAYER_JOIN:
+        console.log(`👋 Player ${message.id} joined`)
+        this.remotePlayers.addPlayer(message.id, message)
+        break
+        
+      case MSG.PLAYER_LEAVE:
+        console.log(`👋 Player ${message.id} left`)
+        this.remotePlayers.removePlayer(message.id)
+        break
+        
+      case MSG.BATCH_POSITIONS:
+        message.positions.forEach(pos => {
+          if (pos.id !== this.playerId) {
+            this.remotePlayers.updatePosition(pos.id, pos)
+          }
+        })
+        break
+    }
+  }
+  
+  sendPosition(position, rotation, scale) {
+    if (!this.connected) return
+    
+    this.socket.send(encodeMessage(MSG.POSITION, {
+      position,
+      rotation,
+      scale,
+    }))
+  }
+  
+  sendJoinGame(creature) {
+    if (!this.connected) return
+    
+    this.socket.send(encodeMessage(MSG.JOIN_GAME, {
+      creature,
+    }))
+  }
+  
+  update(delta) {
+    this.remotePlayers?.update(delta)
+  }
+  
+  disconnect() {
+    this.socket?.close()
+  }
+}
+
+export const networkManager = new NetworkManager()
+```
+
+### Binary Protocol (Phase 1 - Simple)
+
+```javascript
+// shared/Protocol.js
+
+export const MSG = {
+  // Connection
+  WELCOME: 1,
+  PLAYER_JOIN: 2,
+  PLAYER_LEAVE: 3,
+  
+  // Movement
+  POSITION: 10,
+  BATCH_POSITIONS: 11,
+  
+  // Gameplay
+  JOIN_GAME: 20,
+}
+
+// Phase 1: JSON-based (switch to binary in Phase 5)
+export function encodeMessage(type, data) {
+  return JSON.stringify({ type, ...data })
+}
+
+export function decodeMessage(buffer) {
+  // Handle both string and ArrayBuffer
+  const str = typeof buffer === 'string' 
+    ? buffer 
+    : new TextDecoder().decode(buffer)
+  return JSON.parse(str)
+}
+```
+
+### Integration with Existing Game
+
+```javascript
+// client/src/main.js - Modified sections
+
+import { networkManager } from './network/NetworkManager.js'
+
+// In onSpawnRequested callback, after player spawns:
+onSpawnRequested(async () => {
+  // ... existing spawn code ...
+  
+  // Connect to server
+  try {
+    await networkManager.connect('ws://localhost:9001', scene)
+    
+    // Tell server about our creature
+    networkManager.sendJoinGame({
+      type: selection.creature.type,
+      class: selection.creature.class,
+      variantIndex: selection.creature.variantIndex,
+      seed: currentCreature.seed,
+    })
+    
+    console.log('[Main] Connected to multiplayer server')
+  } catch (err) {
+    console.warn('[Main] Could not connect to server:', err.message)
+    // Continue in single-player mode
+  }
+})
+
+// In animate() game loop:
+function animate() {
+  // ... existing code ...
+  
+  if (playerSpawned && !isMenuActive()) {
+    // ... existing updates ...
+    
+    // Send position to server (NetworkManager handles rate limiting)
+    const pos = player.position
+    const rot = player.rotation
+    networkManager.sendPosition(
+      { x: pos.x, y: pos.y, z: pos.z },
+      { x: rot.x, y: rot.y, z: rot.z },
+      getPlayerNormalizationInfo()?.gameplay?.volume || 1
+    )
+    
+    // Update remote players (interpolation)
+    networkManager.update(delta)
+  }
+  
+  // ... rest of loop ...
+}
+```
+
+### Deliverables
+- [ ] uWebSockets.js server running
+- [ ] Client connects via WebSocket
+- [ ] Player gets assigned ID
+- [ ] See other players as cubes
+- [ ] Positions update (jittery, no interpolation yet)
+
+---
+
+## Phase 2: Creature Sync
+
+### Duration: 3-4 days
+
+### Goal
+> Other players render as their actual creatures, not placeholders.
+
+### Remote Player Manager
+
+```javascript
+// client/src/multiplayer/RemotePlayerManager.js
+
+import * as THREE from 'three'
+import { generateCreature } from '../Encyclopedia.js'
+import { PositionBuffer } from '../network/Interpolation.js'
+
+class RemotePlayer {
+  constructor(id, scene, data) {
+    this.id = id
+    this.scene = scene
+    
+    // Generate creature mesh using Encyclopedia
+    if (data.creature) {
+      this.creature = generateCreature(
+        data.creature.seed,
+        data.creature.type,
+        data.creature.class,
+        data.creature.variantIndex
+      )
+      this.mesh = this.creature.mesh
+    } else {
+      // Fallback placeholder
+      const geo = new THREE.BoxGeometry(1, 1, 2)
+      const mat = new THREE.MeshStandardMaterial({ color: 0x888888 })
+      this.mesh = new THREE.Mesh(geo, mat)
+    }
+    
+    // Set initial position
+    if (data.position) {
+      this.mesh.position.set(data.position.x, data.position.y, data.position.z)
+    }
+    
+    // Scale based on volume
+    this.targetScale = data.scale || 1
+    this.mesh.scale.setScalar(this.targetScale)
+    
+    // Interpolation buffer
+    this.positionBuffer = new PositionBuffer(100)  // 100ms delay
+    
+    // Add to scene
+    this.scene.add(this.mesh)
+  }
+  
+  updateFromServer(data, serverTime) {
+    // Push new position to interpolation buffer
+    this.positionBuffer.push(
+      { x: data.x, y: data.y, z: data.z },
+      { x: data.rx, y: data.ry, z: data.rz },
+      data.scale,
+      serverTime
+    )
+  }
+  
+  update(delta, renderTime) {
+    // Sample interpolated position
+    const state = this.positionBuffer.sample(renderTime)
+    
+    if (state) {
+      // Smooth position
+      this.mesh.position.lerp(
+        new THREE.Vector3(state.pos.x, state.pos.y, state.pos.z),
+        0.3
+      )
+      
+      // Smooth rotation
+      this.mesh.rotation.x += (state.rot.x - this.mesh.rotation.x) * 0.3
+      this.mesh.rotation.y += (state.rot.y - this.mesh.rotation.y) * 0.3
+      this.mesh.rotation.z += (state.rot.z - this.mesh.rotation.z) * 0.3
+      
+      // Smooth scale
+      const currentScale = this.mesh.scale.x
+      const newScale = currentScale + (state.scale - currentScale) * 0.1
+      this.mesh.scale.setScalar(newScale)
+    }
+  }
+  
+  destroy() {
+    this.scene.remove(this.mesh)
+    
+    // Dispose geometry and materials
+    this.mesh.traverse(child => {
+      if (child.geometry) child.geometry.dispose()
+      if (child.material) {
+        if (Array.isArray(child.material)) {
+          child.material.forEach(m => m.dispose())
+        } else {
+          child.material.dispose()
+        }
+      }
+    })
+  }
+}
+
+export class RemotePlayerManager {
+  constructor(scene) {
+    this.scene = scene
+    this.players = new Map()
+  }
+  
+  addPlayer(id, data) {
+    if (this.players.has(id)) {
+      console.warn(`Player ${id} already exists`)
+      return
+    }
+    
+    const player = new RemotePlayer(id, this.scene, data)
+    this.players.set(id, player)
+    
+    console.log(`🐟 Spawned remote player ${id}`)
+  }
+  
+  removePlayer(id) {
+    const player = this.players.get(id)
+    if (player) {
+      player.destroy()
+      this.players.delete(id)
+      console.log(`🐟 Removed remote player ${id}`)
+    }
+  }
+  
+  updatePosition(id, data, serverTime) {
+    const player = this.players.get(id)
+    if (player) {
+      player.updateFromServer(data, serverTime)
+    }
+  }
+  
+  update(delta) {
+    const renderTime = performance.now() - 100  // 100ms interpolation delay
+    
+    this.players.forEach(player => {
+      player.update(delta, renderTime)
+    })
+  }
+  
+  getPlayer(id) {
+    return this.players.get(id)
+  }
+  
+  getPlayerCount() {
+    return this.players.size
+  }
+}
+```
+
+### Protocol Additions
+
+```javascript
+// Add to shared/Protocol.js
+
+export const MSG = {
+  // ... existing ...
+  
+  // Creature sync
+  CREATURE_UPDATE: 21,    // When player changes creature (R key, etc.)
+  SIZE_UPDATE: 22,        // When player size changes significantly
+}
+```
+
+### Deliverables
+- [ ] Other players render as correct creature type
+- [ ] Creature seed produces identical visuals
+- [ ] Size/scale synced correctly
+- [ ] Smooth rotation (fish points where swimming)
+
+---
+
+## Phase 3: Smooth Interpolation
+
+### Duration: 2-3 days
+
+### Goal
+> Other players move smoothly instead of teleporting between updates.
+
+### Enhanced Clock
+
+```javascript
+// client/src/network/Clock.js
+
+export class NetworkClock {
+  constructor() {
+    // Local timing
+    this.lastFrameTime = performance.now()
+    this.frameDelta = 0
+    
+    // Fixed timestep
+    this.fixedDelta = 1 / 60
+    this.accumulator = 0
+    
+    // Network send rate (independent of FPS)
+    this.sendRate = 20  // 20 updates per second
+    this.sendAccumulator = 0
+    
+    // Server time synchronization
+    this.serverTimeOffset = 0
+    this.rttEstimate = 50  // Initial RTT estimate (ms)
+    this.rttSamples = []
+    
+    // Interpolation settings
+    this.interpolationDelay = 100  // ms behind server time
+  }
+  
+  tick() {
+    const now = performance.now()
+    this.frameDelta = Math.min((now - this.lastFrameTime) / 1000, 0.1)
+    this.lastFrameTime = now
+    
+    // Fixed timestep accumulation
+    this.accumulator += this.frameDelta
+    
+    let physicsSteps = 0
+    while (this.accumulator >= this.fixedDelta) {
+      this.accumulator -= this.fixedDelta
+      physicsSteps++
+    }
+    
+    // Network send accumulation
+    this.sendAccumulator += this.frameDelta
+    
+    return physicsSteps
+  }
+  
+  shouldSendUpdate() {
+    if (this.sendAccumulator >= 1 / this.sendRate) {
+      this.sendAccumulator -= 1 / this.sendRate
+      return true
+    }
+    return false
+  }
+  
+  // Call when receiving server timestamp
+  syncWithServer(serverTime, localSendTime) {
+    const now = performance.now()
+    const rtt = now - localSendTime
+    
+    // Update RTT estimate
+    this.rttSamples.push(rtt)
+    if (this.rttSamples.length > 10) this.rttSamples.shift()
+    this.rttEstimate = this.rttSamples.reduce((a, b) => a + b) / this.rttSamples.length
+    
+    // Calculate server time offset
+    const oneWayLatency = rtt / 2
+    const estimatedServerNow = serverTime + oneWayLatency
+    const newOffset = estimatedServerNow - now
+    
+    // Smooth adjustment
+    this.serverTimeOffset = this.serverTimeOffset * 0.9 + newOffset * 0.1
+  }
+  
+  getServerTime() {
+    return performance.now() + this.serverTimeOffset
+  }
+  
+  getRenderTime() {
+    return this.getServerTime() - this.interpolationDelay
+  }
+  
+  getInterpolationAlpha() {
+    return this.accumulator / this.fixedDelta
+  }
+}
+
+export const networkClock = new NetworkClock()
+```
+
+### Position Buffer (Interpolation)
+
+```javascript
+// client/src/network/Interpolation.js
+
+export class PositionBuffer {
+  constructor(delayMs = 100) {
+    this.buffer = []
+    this.delay = delayMs
+    this.maxBufferSize = 60  // ~3 seconds at 20 Hz
+  }
+  
+  push(position, rotation, scale, serverTime) {
+    this.buffer.push({
+      time: serverTime,
+      pos: position,
+      rot: rotation,
+      scale: scale,
+    })
+    
+    // Trim old entries
+    if (this.buffer.length > this.maxBufferSize) {
+      this.buffer.shift()
+    }
+  }
+  
+  sample(renderTime) {
+    if (this.buffer.length === 0) return null
+    if (this.buffer.length === 1) return this.buffer[0]
+    
+    // Find surrounding states
+    let before = null
+    let after = null
+    
+    for (let i = 0; i < this.buffer.length; i++) {
+      const state = this.buffer[i]
+      
+      if (state.time <= renderTime) {
+        before = state
+      } else {
+        after = state
+        break
+      }
+    }
+    
+    // Edge cases
+    if (!before) return this.buffer[0]
+    if (!after) return before
+    
+    // Interpolate
+    const t = (renderTime - before.time) / (after.time - before.time)
+    const clampedT = Math.max(0, Math.min(1, t))
+    
+    return {
+      pos: {
+        x: before.pos.x + (after.pos.x - before.pos.x) * clampedT,
+        y: before.pos.y + (after.pos.y - before.pos.y) * clampedT,
+        z: before.pos.z + (after.pos.z - before.pos.z) * clampedT,
+      },
+      rot: {
+        x: this.lerpAngle(before.rot.x, after.rot.x, clampedT),
+        y: this.lerpAngle(before.rot.y, after.rot.y, clampedT),
+        z: this.lerpAngle(before.rot.z, after.rot.z, clampedT),
+      },
+      scale: before.scale + (after.scale - before.scale) * clampedT,
+    }
+  }
+  
+  lerpAngle(a, b, t) {
+    // Handle angle wraparound
+    let diff = b - a
+    while (diff > Math.PI) diff -= Math.PI * 2
+    while (diff < -Math.PI) diff += Math.PI * 2
+    return a + diff * t
+  }
+  
+  clear() {
+    this.buffer = []
+  }
+}
+```
+
+### Deliverables
+- [ ] Remote players move smoothly at 60fps
+- [ ] No teleporting during normal play
+- [ ] Rotation interpolates naturally
+- [ ] Handles brief network hiccups gracefully
+
+---
+
+## Phase 4: Core Gameplay Sync
+
+### Duration: 5-6 days
+
+### Goal
+> Eating NPCs and other players works in multiplayer.
+
+### NPC Synchronization Strategy
+
+```
+NPC SYNC MODEL:
+───────────────────────────────────────────────────────────
+
+SERVER:
+  • Decides WHEN and WHERE to spawn NPCs
+  • Assigns unique ID and seed to each NPC
+  • Broadcasts spawn commands to all clients
+  • Tracks which NPCs are alive
+  • Validates eat requests
+
+CLIENT:
+  • Receives NPC spawn commands
+  • Generates NPC using seed (identical on all clients)
+  • Runs NPC AI locally (deterministic with seed)
+  • Detects eating locally
+  • Sends "I ate NPC X" to server
+  • Server validates & broadcasts death
+
+RESULT:
+  • Low bandwidth (only spawn/death events)
+  • NPCs move identically on all clients
+  • Server has authority over NPC state
+```
+
+### Server NPC Manager
+
+```javascript
+// server/src/NPCManager.js
+
+export class NPCManager {
+  constructor(room) {
+    this.room = room
+    this.npcs = new Map()
+    this.npcIdCounter = 0
+    
+    // Spawn config
+    this.maxNPCs = 200
+    this.spawnInterval = 2000  // Check every 2 seconds
+    this.despawnDistance = 600  // Remove NPCs far from all players
+    
+    this.startSpawnLoop()
+  }
+  
+  startSpawnLoop() {
+    setInterval(() => {
+      this.spawnTick()
+    }, this.spawnInterval)
+  }
+  
+  spawnTick() {
+    // Calculate how many NPCs needed
+    const currentCount = this.npcs.size
+    const targetCount = Math.min(this.maxNPCs, this.room.players.size * 20 + 50)
+    
+    if (currentCount < targetCount) {
+      const toSpawn = Math.min(10, targetCount - currentCount)
+      
+      for (let i = 0; i < toSpawn; i++) {
+        this.spawnNPC()
+      }
+    }
+  }
+  
+  spawnNPC() {
+    const id = ++this.npcIdCounter
+    const seed = Math.floor(Math.random() * 0xFFFFFFFF)
+    
+    // Random position (within playable area)
+    const angle = Math.random() * Math.PI * 2
+    const radius = Math.random() * 400
+    const position = {
+      x: Math.cos(angle) * radius,
+      y: Math.random() * 20 + 5,
+      z: Math.sin(angle) * radius,
+    }
+    
+    // Random creature type (weighted toward small fish)
+    const creatureType = this.pickCreatureType()
+    
+    const npc = {
+      id,
+      seed,
+      position,
+      creatureType,
+      spawnTime: Date.now(),
+    }
+    
+    this.npcs.set(id, npc)
+    
+    // Broadcast spawn to all clients
+    this.room.broadcast(encodeMessage(MSG.NPC_SPAWN, npc))
+  }
+  
+  pickCreatureType() {
+    const roll = Math.random()
+    if (roll < 0.6) return { type: 'fish', class: 'small' }
+    if (roll < 0.85) return { type: 'fish', class: 'medium' }
+    if (roll < 0.95) return { type: 'jelly', class: 'moon' }
+    return { type: 'fish', class: 'large' }
+  }
+  
+  handleEatRequest(playerId, npcId) {
+    const npc = this.npcs.get(npcId)
+    
+    if (!npc) {
+      // NPC doesn't exist (already eaten or invalid)
+      return false
+    }
+    
+    // NPC exists, player gets the kill
+    this.npcs.delete(npcId)
+    
+    // Broadcast death to all clients
+    this.room.broadcast(encodeMessage(MSG.NPC_DEATH, {
+      npcId,
+      killerId: playerId,
+    }))
+    
+    return true
+  }
+}
+```
+
+### Client NPC Sync
+
+```javascript
+// client/src/multiplayer/NPCSync.js
+
+import { generateCreature } from '../Encyclopedia.js'
+import { seededRandom } from '../../../shared/Deterministic.js'
+
+export class SyncedNPC {
+  constructor(id, seed, position, creatureType, scene) {
+    this.id = id
+    this.seed = seed
+    this.scene = scene
+    this.alive = true
+    
+    // Generate creature deterministically
+    this.creature = generateCreature(
+      seed,
+      creatureType.type,
+      creatureType.class
+    )
+    this.mesh = this.creature.mesh
+    this.mesh.position.set(position.x, position.y, position.z)
+    
+    // Deterministic RNG for AI
+    this.rng = seededRandom(seed)
+    
+    // AI state
+    this.wanderTarget = this.pickWanderTarget()
+    this.speed = 2 + this.rng() * 3
+    
+    scene.add(this.mesh)
+  }
+  
+  update(delta) {
+    if (!this.alive) return
+    
+    // Move toward wander target
+    const dx = this.wanderTarget.x - this.mesh.position.x
+    const dy = this.wanderTarget.y - this.mesh.position.y
+    const dz = this.wanderTarget.z - this.mesh.position.z
+    const dist = Math.sqrt(dx*dx + dy*dy + dz*dz)
+    
+    if (dist < 2) {
+      this.wanderTarget = this.pickWanderTarget()
+    } else {
+      const move = this.speed * delta
+      this.mesh.position.x += (dx / dist) * move
+      this.mesh.position.y += (dy / dist) * move
+      this.mesh.position.z += (dz / dist) * move
+      
+      // Face movement direction
+      this.mesh.rotation.y = Math.atan2(dx, dz)
+    }
+  }
+  
+  pickWanderTarget() {
+    // Deterministic - same on all clients with same seed!
+    return {
+      x: this.mesh.position.x + (this.rng() - 0.5) * 50,
+      y: Math.max(2, Math.min(28, this.mesh.position.y + (this.rng() - 0.5) * 10)),
+      z: this.mesh.position.z + (this.rng() - 0.5) * 50,
+    }
+  }
+  
+  kill() {
+    this.alive = false
+    
+    // Death animation (quick shrink)
+    const shrink = () => {
+      this.mesh.scale.multiplyScalar(0.85)
+      if (this.mesh.scale.x > 0.01) {
+        requestAnimationFrame(shrink)
+      } else {
+        this.destroy()
+      }
+    }
+    shrink()
+  }
+  
+  destroy() {
+    this.scene.remove(this.mesh)
+    this.mesh.traverse(child => {
+      if (child.geometry) child.geometry.dispose()
+      if (child.material) {
+        if (Array.isArray(child.material)) {
+          child.material.forEach(m => m.dispose())
+        } else {
+          child.material.dispose()
+        }
+      }
+    })
+  }
+}
+
+export class NPCSyncManager {
+  constructor(scene, networkManager) {
+    this.scene = scene
+    this.network = networkManager
+    this.npcs = new Map()
+  }
+  
+  handleSpawn(data) {
+    if (this.npcs.has(data.id)) return
+    
+    const npc = new SyncedNPC(
+      data.id,
+      data.seed,
+      data.position,
+      data.creatureType,
+      this.scene
+    )
+    this.npcs.set(data.id, npc)
+  }
+  
+  handleDeath(data) {
+    const npc = this.npcs.get(data.npcId)
+    if (npc) {
+      npc.kill()
+      this.npcs.delete(data.npcId)
+    }
+  }
+  
+  // Called by local Feeding system when player eats NPC
+  requestEat(npcId) {
+    this.network.send(encodeMessage(MSG.EAT_NPC, { npcId }))
+  }
+  
+  update(delta) {
+    this.npcs.forEach(npc => npc.update(delta))
+  }
+}
+```
+
+### Player vs Player Eating
+
+```javascript
+// client/src/multiplayer/FeedingSync.js
+
+export class FeedingSync {
+  constructor(networkManager, remotePlayerManager, localPlayer) {
+    this.network = networkManager
+    this.remotePlayers = remotePlayerManager
+    this.localPlayer = localPlayer
+    
+    // Cooldown to prevent spam
+    this.lastEatAttempt = 0
+    this.eatCooldown = 500  // ms
+  }
+  
+  update(delta) {
+    if (!this.localPlayer) return
+    
+    const now = performance.now()
+    if (now - this.lastEatAttempt < this.eatCooldown) return
+    
+    const myPos = this.localPlayer.mesh.position
+    const myVolume = this.getVolume(this.localPlayer)
+    
+    // Check against all remote players
+    this.remotePlayers.players.forEach((remote, id) => {
+      const theirPos = remote.mesh.position
+      const theirVolume = this.getVolume(remote)
+      
+      const dist = myPos.distanceTo(theirPos)
+      const eatRange = 8  // Same as single-player
+      
+      // Can eat if larger and in range
+      if (dist < eatRange && myVolume > theirVolume * 1.2) {
+        this.lastEatAttempt = now
+        this.network.send(encodeMessage(MSG.EAT_PLAYER, { targetId: id }))
+      }
+    })
+  }
+  
+  getVolume(entity) {
+    // Calculate from scale or stored volume
+    const scale = entity.mesh.scale.x
+    return scale * scale * scale  // Approximate
+  }
+  
+  // Handle server confirmation of eat
+  handleEatConfirm(data) {
+    if (data.eaterId === this.network.playerId) {
+      // We ate someone!
+      console.log(`🍽️ Ate player ${data.preyId}!`)
+      // Grow local player
+      this.localPlayer.addFood(data.volumeGained)
+    }
+    
+    if (data.preyId === this.network.playerId) {
+      // We got eaten!
+      console.log(`💀 Eaten by player ${data.eaterId}!`)
+      this.handleDeath()
+    }
+    
+    // Remove prey from remote players
+    this.remotePlayers.removePlayer(data.preyId)
+  }
+  
+  handleDeath() {
+    // Show death screen, trigger respawn flow
+    // This integrates with your existing menu/HUD
+  }
+}
+```
+
+### Protocol Additions
+
+```javascript
+// Add to shared/Protocol.js
+
+export const MSG = {
+  // ... existing ...
+  
+  // NPCs
+  NPC_SPAWN: 30,
+  NPC_DEATH: 31,
+  EAT_NPC: 32,
+  
+  // PvP
+  EAT_PLAYER: 40,
+  PLAYER_EATEN: 41,
+  PLAYER_DEATH: 42,
+  PLAYER_RESPAWN: 43,
+  
+  // Leaderboard
+  LEADERBOARD: 50,
+}
+```
+
+### Deliverables
+- [ ] NPCs spawn from server commands
+- [ ] NPCs move identically on all clients
+- [ ] Eating NPCs syncs (disappears for everyone)
+- [ ] Player vs player eating works
+- [ ] Death and respawn flow
+- [ ] Basic leaderboard updates
+
+---
+
+## Phase 5: Binary Protocol
+
+### Duration: 2-3 days
+
+### Goal
+> Replace JSON with binary encoding. Reduce bandwidth by 70%.
+
+### Binary Protocol Implementation
+
+```javascript
+// shared/Protocol.js - Binary version
+
+export const MSG = {
+  WELCOME: 1,
+  PLAYER_JOIN: 2,
+  PLAYER_LEAVE: 3,
+  POSITION: 10,
+  BATCH_POSITIONS: 11,
+  JOIN_GAME: 20,
+  CREATURE_UPDATE: 21,
+  NPC_SPAWN: 30,
+  NPC_DEATH: 31,
+  EAT_NPC: 32,
+  EAT_PLAYER: 40,
+  PLAYER_EATEN: 41,
+  LEADERBOARD: 50,
+}
+
+// ============================================
+// ENCODERS
+// ============================================
+
+export function encodeMessage(type, data) {
+  switch (type) {
+    case MSG.POSITION:
+      return encodePosition(data)
+    case MSG.BATCH_POSITIONS:
+      return encodeBatchPositions(data)
+    default:
+      // Fallback to JSON for complex messages
+      return encodeJSON(type, data)
+  }
+}
+
+function encodePosition(data) {
+  // 1 + 12 + 6 + 2 = 21 bytes
+  const buffer = new ArrayBuffer(21)
+  const view = new DataView(buffer)
+  
+  view.setUint8(0, MSG.POSITION)
+  view.setFloat32(1, data.position.x, true)
+  view.setFloat32(5, data.position.y, true)
+  view.setFloat32(9, data.position.z, true)
+  view.setInt16(13, data.rotation.x * 10000, true)
+  view.setInt16(15, data.rotation.y * 10000, true)
+  view.setInt16(17, data.rotation.z * 10000, true)
+  view.setUint16(19, data.scale * 1000, true)
+  
+  return buffer
+}
+
+function encodeBatchPositions(data) {
+  // 1 + 1 + (N * 20) bytes
+  const count = data.positions.length
+  const buffer = new ArrayBuffer(2 + count * 20)
+  const view = new DataView(buffer)
+  
+  view.setUint8(0, MSG.BATCH_POSITIONS)
+  view.setUint8(1, count)
+  
+  let offset = 2
+  for (const pos of data.positions) {
+    view.setUint16(offset, pos.id, true)
+    view.setFloat32(offset + 2, pos.x, true)
+    view.setFloat32(offset + 6, pos.y, true)
+    view.setFloat32(offset + 10, pos.z, true)
+    view.setInt16(offset + 14, pos.rx * 10000, true)
+    view.setInt16(offset + 16, pos.ry * 10000, true)
+    view.setUint16(offset + 18, pos.scale * 1000, true)
+    offset += 20
+  }
+  
+  return buffer
+}
+
+function encodeJSON(type, data) {
+  const json = JSON.stringify({ type, ...data })
+  const encoder = new TextEncoder()
+  const jsonBytes = encoder.encode(json)
+  
+  const buffer = new ArrayBuffer(1 + jsonBytes.length)
+  const view = new Uint8Array(buffer)
+  view[0] = 0  // Type 0 = JSON fallback
+  view.set(jsonBytes, 1)
+  
+  return buffer
+}
+
+// ============================================
+// DECODERS
+// ============================================
+
+export function decodeMessage(buffer) {
+  const view = new DataView(buffer)
+  const type = view.getUint8(0)
+  
+  switch (type) {
+    case 0:  // JSON fallback
+      return decodeJSON(buffer)
+    case MSG.POSITION:
+      return decodePosition(view)
+    case MSG.BATCH_POSITIONS:
+      return decodeBatchPositions(view)
+    default:
+      return decodeJSON(buffer)
+  }
+}
+
+function decodePosition(view) {
+  return {
+    type: MSG.POSITION,
+    position: {
+      x: view.getFloat32(1, true),
+      y: view.getFloat32(5, true),
+      z: view.getFloat32(9, true),
+    },
+    rotation: {
+      x: view.getInt16(13, true) / 10000,
+      y: view.getInt16(15, true) / 10000,
+      z: view.getInt16(17, true) / 10000,
+    },
+    scale: view.getUint16(19, true) / 1000,
+  }
+}
+
+function decodeBatchPositions(view) {
+  const count = view.getUint8(1)
+  const positions = []
+  
+  let offset = 2
+  for (let i = 0; i < count; i++) {
+    positions.push({
+      id: view.getUint16(offset, true),
+      x: view.getFloat32(offset + 2, true),
+      y: view.getFloat32(offset + 6, true),
+      z: view.getFloat32(offset + 10, true),
+      rx: view.getInt16(offset + 14, true) / 10000,
+      ry: view.getInt16(offset + 16, true) / 10000,
+      scale: view.getUint16(offset + 18, true) / 1000,
+    })
+    offset += 20
+  }
+  
+  return { type: MSG.BATCH_POSITIONS, positions }
+}
+
+function decodeJSON(buffer) {
+  const bytes = new Uint8Array(buffer, 1)
+  const decoder = new TextDecoder()
+  return JSON.parse(decoder.decode(bytes))
+}
+```
+
+### Bandwidth Comparison
+
+```
+100 PLAYERS, 20 UPDATES/SEC:
+
+JSON Protocol:
+├── Position message: ~150 bytes
+├── Batch (100 players): ~15,000 bytes
+├── Per second: 300 KB
+└── 100 clients: 30 MB/sec server egress
+
+Binary Protocol:
+├── Position message: 21 bytes
+├── Batch (100 players): 2,002 bytes
+├── Per second: 40 KB
+└── 100 clients: 4 MB/sec server egress
+
+SAVINGS: 87% bandwidth reduction!
+```
+
+### Deliverables
+- [ ] Binary encoding for position updates
+- [ ] Binary encoding for batch positions
+- [ ] JSON fallback for complex messages
+- [ ] No functionality regression
+- [ ] Measurable bandwidth reduction
+
+---
+
+## Phase 6: Bandwidth Optimization
+
+### Duration: 3-4 days
+
+### Goal
+> Spatial filtering + delta compression. Support 100+ players on cheap server.
+
+### Spatial Grid (Server)
+
+```javascript
+// server/src/SpatialGrid.js
+
+export class SpatialGrid {
+  constructor(cellSize = 100) {
+    this.cellSize = cellSize
+    this.cells = new Map()  // "x,z" -> Set<playerId>
+    this.playerCells = new Map()  // playerId -> "x,z"
+  }
+  
+  getKey(x, z) {
+    const cx = Math.floor(x / this.cellSize)
+    const cz = Math.floor(z / this.cellSize)
+    return `${cx},${cz}`
+  }
+  
+  update(playerId, x, z) {
+    const newKey = this.getKey(x, z)
+    const oldKey = this.playerCells.get(playerId)
+    
+    if (newKey === oldKey) return
+    
+    // Remove from old cell
+    if (oldKey) {
+      this.cells.get(oldKey)?.delete(playerId)
+    }
+    
+    // Add to new cell
+    if (!this.cells.has(newKey)) {
+      this.cells.set(newKey, new Set())
+    }
+    this.cells.get(newKey).add(playerId)
+    this.playerCells.set(playerId, newKey)
+  }
+  
+  remove(playerId) {
+    const key = this.playerCells.get(playerId)
+    if (key) {
+      this.cells.get(key)?.delete(playerId)
+      this.playerCells.delete(playerId)
+    }
+  }
+  
+  getNearby(x, z, radius = 1) {
+    const nearby = new Set()
+    const cx = Math.floor(x / this.cellSize)
+    const cz = Math.floor(z / this.cellSize)
+    
+    for (let dx = -radius; dx <= radius; dx++) {
+      for (let dz = -radius; dz <= radius; dz++) {
+        const key = `${cx + dx},${cz + dz}`
+        const cell = this.cells.get(key)
+        if (cell) {
+          cell.forEach(id => nearby.add(id))
+        }
+      }
+    }
+    
+    return nearby
+  }
+}
+```
+
+### Tiered Updates (Server)
+
+```javascript
+// server/src/Room.js - Enhanced tick
+
+tick() {
+  this.tickCount++
+  
+  this.players.forEach((player, playerId) => {
+    // Build personalized update for this player
+    const updates = []
+    
+    this.players.forEach((other, otherId) => {
+      if (otherId === playerId) return
+      
+      const dist = this.getDistance(player, other)
+      const shouldUpdate = this.shouldSendUpdate(dist, this.tickCount)
+      
+      if (shouldUpdate) {
+        updates.push({
+          id: otherId,
+          x: other.position.x,
+          y: other.position.y,
+          z: other.position.z,
+          rx: other.rotation.x,
+          ry: other.rotation.y,
+          rz: other.rotation.z,
+          scale: other.scale,
+        })
+      }
+    })
+    
+    // Include nearby NPCs
+    const nearbyNPCs = this.npcManager.getNear(player.position.x, player.position.z)
+    // ... add NPC data if changed ...
+    
+    if (updates.length > 0) {
+      player.send(encodeBatchPositions({ positions: updates }), true)
+    }
+  })
+}
+
+shouldSendUpdate(distance, tick) {
+  if (distance < 100) return true                    // Every tick (20 Hz)
+  if (distance < 200) return tick % 2 === 0         // 10 Hz
+  if (distance < 400) return tick % 4 === 0         // 5 Hz
+  return tick % 10 === 0                             // 2 Hz (minimap only)
+}
+
+getDistance(a, b) {
+  const dx = a.position.x - b.position.x
+  const dz = a.position.z - b.position.z
+  return Math.sqrt(dx * dx + dz * dz)
+}
+```
+
+### Delta Compression (Server)
+
+```javascript
+// server/src/DeltaCompressor.js
+
+export class DeltaCompressor {
+  constructor() {
+    // Last sent state per player pair
+    // Map: "senderId:receiverId" -> { x, y, z, rx, ry, scale }
+    this.lastSent = new Map()
+    
+    // Thresholds for change detection
+    this.posThreshold = 0.1    // 10cm
+    this.rotThreshold = 0.01   // ~0.5 degrees
+    this.scaleThreshold = 0.01
+  }
+  
+  compress(senderId, receiverId, current) {
+    const key = `${senderId}:${receiverId}`
+    const last = this.lastSent.get(key)
+    
+    if (!last) {
+      // First update - send everything
+      this.lastSent.set(key, { ...current })
+      return { full: true, ...current }
+    }
+    
+    // Check what changed
+    const delta = { id: senderId }
+    let hasChanges = false
+    
+    if (Math.abs(current.x - last.x) > this.posThreshold) {
+      delta.x = current.x
+      last.x = current.x
+      hasChanges = true
+    }
+    if (Math.abs(current.y - last.y) > this.posThreshold) {
+      delta.y = current.y
+      last.y = current.y
+      hasChanges = true
+    }
+    if (Math.abs(current.z - last.z) > this.posThreshold) {
+      delta.z = current.z
+      last.z = current.z
+      hasChanges = true
+    }
+    if (Math.abs(current.ry - last.ry) > this.rotThreshold) {
+      delta.ry = current.ry
+      last.ry = current.ry
+      hasChanges = true
+    }
+    if (Math.abs(current.scale - last.scale) > this.scaleThreshold) {
+      delta.scale = current.scale
+      last.scale = current.scale
+      hasChanges = true
+    }
+    
+    return hasChanges ? delta : null
+  }
+  
+  clearPlayer(playerId) {
+    // Remove all entries involving this player
+    for (const key of this.lastSent.keys()) {
+      if (key.includes(playerId)) {
+        this.lastSent.delete(key)
+      }
+    }
+  }
+}
+```
+
+### Final Bandwidth Estimate
+
+```
+100 PLAYERS, AFTER ALL OPTIMIZATIONS:
+
+┌─────────────────────────────────────────────────────────┐
+│                  BANDWIDTH BREAKDOWN                     │
+├─────────────────────────────────────────────────────────┤
+│                                                          │
+│  Binary Protocol:               -87% (vs JSON)          │
+│  Spatial Filtering:             -70% (only nearby)      │
+│  Update Rate Tiers:             -50% (far = slower)     │
+│  Delta Compression:             -60% (skip unchanged)   │
+│                                                          │
+│  COMBINED:  ~97% reduction from naive approach          │
+│                                                          │
+│  Final: ~2-5 KB/sec per player                          │
+│  100 players: ~300-500 KB/sec server bandwidth          │
+│                                                          │
+│  Easily handled by $5-10/month VPS!                     │
+│                                                          │
+└─────────────────────────────────────────────────────────┘
+```
+
+### Deliverables
+- [ ] Spatial grid partitioning
+- [ ] Tiered update rates by distance
+- [ ] Delta compression working
+- [ ] Server bandwidth under 1 MB/sec for 100 players
+- [ ] No visible quality loss
+
+---
+
+## Phase 7: Rooms & Scaling
+
+### Duration: 3-4 days
+
+### Goal
+> Multiple rooms per server. Handle overflow. Shareable links.
+
+### Room Manager
+
+```javascript
+// server/src/RoomManager.js
+
+export class RoomManager {
+  constructor() {
+    this.rooms = new Map()
+    this.roomIdCounter = 0
+    this.maxPlayersPerRoom = 100
+    
+    // Create initial room
+    this.createRoom()
+  }
+  
+  createRoom() {
+    const id = `room_${++this.roomIdCounter}`
+    const room = new Room(id, {
+      maxPlayers: this.maxPlayersPerRoom,
+      onEmpty: () => this.handleEmptyRoom(id),
+    })
+    this.rooms.set(id, room)
+    console.log(`🏠 Created room: ${id}`)
+    return room
+  }
+  
+  findRoom(preferredId = null) {
+    // Try preferred room first
+    if (preferredId) {
+      const room = this.rooms.get(preferredId)
+      if (room && room.canJoin()) {
+        return room
+      }
+    }
+    
+    // Find room with space, preferring more populated ones
+    let best = null
+    let bestCount = -1
+    
+    for (const room of this.rooms.values()) {
+      if (room.canJoin() && room.playerCount > bestCount) {
+        best = room
+        bestCount = room.playerCount
+      }
+    }
+    
+    // Create new room if needed
+    if (!best) {
+      best = this.createRoom()
+    }
+    
+    return best
+  }
+  
+  handleEmptyRoom(roomId) {
+    // Keep at least one room alive
+    if (this.rooms.size <= 1) return
+    
+    const room = this.rooms.get(roomId)
+    if (room && room.isEmpty()) {
+      room.destroy()
+      this.rooms.delete(roomId)
+      console.log(`🏠 Destroyed empty room: ${roomId}`)
+    }
+  }
+  
+  getStats() {
+    const stats = {
+      totalRooms: this.rooms.size,
+      totalPlayers: 0,
+      rooms: [],
+    }
+    
+    this.rooms.forEach((room, id) => {
+      stats.totalPlayers += room.playerCount
+      stats.rooms.push({
+        id,
+        players: room.playerCount,
+        maxPlayers: room.maxPlayers,
+      })
+    })
+    
+    return stats
+  }
+}
+```
+
+### Connection with Room Selection
+
+```javascript
+// server/src/index.js - Enhanced
+
+import { RoomManager } from './RoomManager.js'
+
+const roomManager = new RoomManager()
+
+app.ws('/*', {
+  upgrade: (res, req, context) => {
+    // Parse URL for room preference
+    const url = req.getUrl()
+    const params = new URLSearchParams(url.split('?')[1] || '')
+    const preferredRoom = params.get('room')
+    
+    res.upgrade(
+      { preferredRoom },
+      req.getHeader('sec-websocket-key'),
+      req.getHeader('sec-websocket-protocol'),
+      req.getHeader('sec-websocket-extensions'),
+      context
+    )
+  },
+  
+  open: (ws) => {
+    const room = roomManager.findRoom(ws.preferredRoom)
+    room.addPlayer(ws)
+    
+    // Send room info for shareable link
+    ws.send(encodeMessage(MSG.ROOM_INFO, {
+      roomId: room.id,
+      shareLink: `https://yourgame.io/play?room=${room.id}`,
+    }), true)
+  },
+  
+  // ... rest unchanged ...
+})
+
+// Stats endpoint
+app.get('/stats', (res, req) => {
+  res.writeHeader('Content-Type', 'application/json')
+  res.end(JSON.stringify(roomManager.getStats()))
+})
+```
+
+### Deliverables
+- [ ] Multiple rooms on single server
+- [ ] Auto room assignment
+- [ ] Room links (`?room=xyz`) work
+- [ ] Empty rooms cleaned up
+- [ ] Stats endpoint for monitoring
+
+---
+
+## Phase 8: Regional Servers
+
+### Duration: 3-4 days
+
+### Goal
+> Players connect to nearest region. Low latency globally.
+
+### Matchmaker Service
+
+```javascript
+// matchmaker/src/index.js
+
+import uWS from 'uWebSockets.js'
+
+const servers = new Map()
+const REGIONS = ['us-east', 'eu-west', 'asia']
+
+const app = uWS.App()
+
+// Game servers register here
+app.post('/register', async (res, req) => {
+  let body = ''
+  res.onData((chunk, isLast) => {
+    body += Buffer.from(chunk).toString()
+    if (isLast) {
+      const data = JSON.parse(body)
+      servers.set(data.region, {
+        url: data.url,
+        players: data.players,
+        maxPlayers: data.maxPlayers,
+        lastSeen: Date.now(),
+      })
+      res.end('ok')
+    }
+  })
+})
+
+// Clients ask for best server
+app.get('/find', (res, req) => {
+  const query = new URLSearchParams(req.getQuery())
+  let region = query.get('region') || 'auto'
+  
+  // Auto-detect from IP
+  if (region === 'auto') {
+    const ip = res.getRemoteAddressAsText()
+    region = geolocateRegion(ip)
+  }
+  
+  const server = servers.get(region) || findClosest(region)
+  
+  res.writeHeader('Content-Type', 'application/json')
+  res.end(JSON.stringify({
+    region: server?.region || 'us-east',
+    url: server?.url || 'wss://us-east.yourgame.io',
+    players: server?.players || 0,
+  }))
+})
+
+app.listen(3000, () => console.log('Matchmaker on :3000'))
+
+// Cleanup stale servers
+setInterval(() => {
+  const now = Date.now()
+  servers.forEach((server, region) => {
+    if (now - server.lastSeen > 30000) {
+      servers.delete(region)
+    }
+  })
+}, 10000)
+
+function geolocateRegion(ip) {
+  // Simple IP-to-region (use MaxMind GeoIP in production)
+  // For now, default to us-east
+  return 'us-east'
+}
+
+function findClosest(preferred) {
+  // Fallback order
+  const fallbacks = {
+    'us-east': ['us-east', 'eu-west', 'asia'],
+    'eu-west': ['eu-west', 'us-east', 'asia'],
+    'asia': ['asia', 'us-east', 'eu-west'],
+  }
+  
+  for (const region of (fallbacks[preferred] || REGIONS)) {
+    if (servers.has(region)) {
+      return { region, ...servers.get(region) }
+    }
+  }
+  
+  return null
+}
+```
+
+### Client Region Selection
+
+```javascript
+// client/src/network/NetworkManager.js - Enhanced
+
+async connect(scene, preferredRegion = 'auto') {
+  this.scene = scene
+  this.remotePlayers = new RemotePlayerManager(scene)
+  
+  // Get best server from matchmaker
+  const matchResponse = await fetch(
+    `https://match.yourgame.io/find?region=${preferredRegion}`
+  )
+  const { url, region } = await matchResponse.json()
+  
+  console.log(`🌍 Connecting to ${region}: ${url}`)
+  
+  // Connect to game server
+  return new Promise((resolve, reject) => {
+    this.socket = new WebSocket(url)
+    this.socket.binaryType = 'arraybuffer'
+    
+    // ... rest of connection logic ...
+  })
+}
+```
+
+### Deployment
+
+```yaml
+# docker-compose.yml (per region)
+
+version: '3'
+services:
+  gameserver:
+    image: ocean-game/server:latest
+    environment:
+      - REGION=${REGION}
+      - MATCHMAKER_URL=https://match.yourgame.io
+      - PUBLIC_URL=wss://${REGION}.yourgame.io
+    ports:
+      - "9001:9001"
+    restart: unless-stopped
+```
+
+### Hosting Costs
+
+```
+REGIONAL SETUP:
+
+Matchmaker (single location):
+└── $5/month (small VPS anywhere)
+
+Game Servers:
+├── US-EAST:   $6/month  (Hetzner Ashburn)
+├── EU-WEST:   $4/month  (Hetzner Falkenstein)
+└── ASIA:      $6/month  (Vultr Tokyo)
+
+Total: ~$21/month for global coverage!
+
+Can handle:
+├── 300+ concurrent players
+├── ~50ms latency for most players
+└── Auto-failover if region dies
+```
+
+### Deliverables
+- [ ] Matchmaker service running
+- [ ] Game servers register with matchmaker
+- [ ] Auto region selection works
+- [ ] Manual region selection works
+- [ ] Latency improved for non-US players
+
+---
+
+## Phase 9: Accounts & Persistence
+
+### Duration: 4-5 days
+
+### Goal
+> Optional accounts. Stats persist. Leaderboards work.
+
+### Database Schema
+
+```sql
+-- PostgreSQL (or SQLite for simple start)
+
+CREATE TABLE users (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  provider VARCHAR(20) NOT NULL,          -- 'google', 'discord', 'guest'
+  provider_id VARCHAR(255),
+  display_name VARCHAR(50) NOT NULL,
+  created_at TIMESTAMP DEFAULT NOW(),
+  last_played TIMESTAMP,
+  
+  UNIQUE(provider, provider_id)
+);
+
+CREATE TABLE stats (
+  user_id UUID PRIMARY KEY REFERENCES users(id),
+  total_score BIGINT DEFAULT 0,
+  highest_score INT DEFAULT 0,
+  total_kills INT DEFAULT 0,
+  total_deaths INT DEFAULT 0,
+  npcs_eaten INT DEFAULT 0,
+  players_eaten INT DEFAULT 0,
+  time_played_seconds INT DEFAULT 0,
+  games_played INT DEFAULT 0,
+  biggest_size FLOAT DEFAULT 0
+);
+
+CREATE TABLE leaderboard_daily (
+  user_id UUID REFERENCES users(id),
+  score INT NOT NULL,
+  date DATE NOT NULL,
+  PRIMARY KEY (user_id, date)
+);
+
+CREATE INDEX idx_leaderboard_daily_score ON leaderboard_daily(date, score DESC);
+```
+
+### Account Flow
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      ACCOUNT FLOW                            │
+│                                                              │
+│   ┌─────────────────┐                                       │
+│   │   MAIN MENU     │                                       │
+│   │                 │                                       │
+│   │  [Play as Guest]│────► Create temp UUID                 │
+│   │                 │       No persistence                   │
+│   │  ─────────────  │                                       │
+│   │                 │                                       │
+│   │  [Sign in with] │                                       │
+│   │  🔵 Google      │────► OAuth flow                       │
+│   │  🟣 Discord     │       Create/load account             │
+│   │                 │       Stats persist                   │
+│   └─────────────────┘                                       │
+│                                                              │
+│   Guest can upgrade anytime (stats transfer)                │
+│                                                              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Deliverables
+- [ ] Guest play (no signup required)
+- [ ] Google OAuth login
+- [ ] Stats persist across sessions
+- [ ] Leaderboards (daily, weekly, all-time)
+- [ ] Profile page with stats
+
+---
+
+## Phase 10: Monetization
+
+### Duration: 4-5 days
+
+### Goal
+> Ads + cosmetic shop. Make money.
+
+### Revenue Streams
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    MONETIZATION                              │
+│                                                              │
+│  ADS (All players):                                         │
+│  ├── Death screen interstitial (every 3rd death)           │
+│  ├── Rewarded video (2x starting size)                      │
+│  └── Menu banner                                            │
+│                                                              │
+│  COSMETICS (Optional purchase):                             │
+│  ├── Creature skins (different colors/patterns)             │
+│  ├── Trails (particles when swimming)                       │
+│  ├── Name effects (colors, icons)                           │
+│  └── Emotes                                                 │
+│                                                              │
+│  PREMIUM (Subscription):                                    │
+│  ├── Ad-free                                                │
+│  ├── Exclusive cosmetics                                    │
+│  └── Early access to new creatures                          │
+│                                                              │
+│  NO PAY-TO-WIN (cosmetic only!)                             │
+│                                                              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Deliverables
+- [ ] Ad integration (Google AdSense or similar)
+- [ ] Death screen with ad
+- [ ] Rewarded video for bonus
+- [ ] Cosmetic shop UI
+- [ ] Stripe payment integration
+- [ ] Coins system
+
+---
+
+## Timeline Summary
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      TIMELINE                                │
+├─────────────────────────────────────────────────────────────┤
+│                                                              │
+│  Week 1-2:   Phases 1-2  │  Basic multiplayer + creatures   │
+│  Week 3:     Phase 3     │  Smooth interpolation            │
+│  Week 4-5:   Phase 4     │  Gameplay sync (eating!)         │
+│                                                              │
+│  ════════════════════════════════════════════════════════   │
+│  MILESTONE: PLAYABLE ALPHA (Week 5)                         │
+│  ════════════════════════════════════════════════════════   │
+│                                                              │
+│  Week 6:     Phase 5     │  Binary protocol                 │
+│  Week 7:     Phase 6     │  Bandwidth optimization          │
+│                                                              │
+│  ════════════════════════════════════════════════════════   │
+│  MILESTONE: EFFICIENT BETA (Week 7)                         │
+│  ════════════════════════════════════════════════════════   │
+│                                                              │
+│  Week 8:     Phase 7     │  Rooms & scaling                 │
+│  Week 9:     Phase 8     │  Regional servers                │
+│                                                              │
+│  ════════════════════════════════════════════════════════   │
+│  MILESTONE: GLOBAL LAUNCH (Week 9)                          │
+│  ════════════════════════════════════════════════════════   │
+│                                                              │
+│  Week 10:    Phase 9     │  Accounts                        │
+│  Week 11-12: Phase 10    │  Monetization                    │
+│                                                              │
+│  ════════════════════════════════════════════════════════   │
+│  MILESTONE: REVENUE-READY (Week 12)                         │
+│  ════════════════════════════════════════════════════════   │
+│                                                              │
+│  TOTAL: 10-12 weeks                                         │
+│                                                              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Cost Projection
+
+```
+HOSTING COSTS BY PHASE:
+
+Phase 1-6 (Development):
+└── $0-5/month (local dev, maybe 1 test server)
+
+Phase 7-8 (Beta Launch):
+└── $20-30/month (matchmaker + 2-3 regional servers)
+
+Phase 9-10 (Production):
+└── $30-50/month (+ database for accounts)
+
+At Scale (1000+ DAU):
+└── $100-200/month (auto-scaling, CDN, monitoring)
+
+BREAK-EVEN:
+├── Ads: ~$2-3 CPM × 5000 impressions/day = ~$10-15/day
+├── Need ~500-1000 DAU to cover costs
+└── Very achievable for a fun .io game!
+```
+
+---
+
+## Quick Reference Card
+
+```
+TECH STACK:
+───────────
+Client:  Three.js + Rapier3D + Native WebSocket
+Server:  Node.js + uWebSockets.js
+DB:      PostgreSQL (or SQLite to start)
+Hosting: Hetzner/DigitalOcean VPS
+
+ARCHITECTURE:
+─────────────
+Client-authoritative (trust clients, server relays)
+20 Hz network tick rate
+100ms interpolation delay
+Binary protocol for positions
+
+KEY FILES:
+──────────
+client/src/network/NetworkManager.js   - WebSocket connection
+client/src/network/Interpolation.js    - Smooth remote movement  
+client/src/multiplayer/NPCSync.js      - Deterministic NPCs
+server/src/Room.js                     - Game room logic
+server/src/SpatialGrid.js              - Interest management
+shared/Protocol.js                     - Binary encoding
+
+COMMANDS:
+─────────
+cd server && npm run dev    - Start dev server
+cd client && npm run dev    - Start client (Vite)
+npm run build               - Production build
+```
+
+---
+
+Ready to start Phase 1? I can write the complete server and client networking code for you to integrate with your existing Ocean game.
