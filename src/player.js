@@ -57,14 +57,48 @@ const CREATURE_CATALOG = getAllCreatureClasses()
 
 let sceneRef = null
 
-export function initPlayer(scene, spawnPosition = null) {
+export function initPlayer(scene, spawnPosition = null, options = {}) {
   sceneRef = scene
   
-  // Start with the fish starter
-  currentCreature = generateStarter(CreatureType.FISH)
-  currentType = CreatureType.FISH
-  currentClass = FishClass.STARTER
-  currentIndex = 0
+  // Get creature selection from options, with defaults
+  const {
+    creatureType = CreatureType.FISH,
+    creatureClass = FishClass.STARTER,
+    variantIndex = 0,
+  } = options
+  
+  // Generate creature based on selection
+  if (creatureClass === FishClass.STARTER || !creatureClass) {
+    // Use starter for default/starter selection
+    currentCreature = generateStarter(CreatureType.FISH)
+    currentType = CreatureType.FISH
+    currentClass = FishClass.STARTER
+    currentIndex = 0
+    currentVariantIndex = 0
+  } else {
+    // Generate the selected creature
+    const seed = randomSeed()
+    currentCreature = generateCreature(seed, creatureType, creatureClass, variantIndex)
+    currentType = creatureType
+    currentClass = creatureClass
+    currentVariantIndex = variantIndex
+    
+    // Find the index in the catalog for cycling purposes
+    currentIndex = CREATURE_CATALOG.findIndex(c => c.type === creatureType && c.class === creatureClass)
+    if (currentIndex < 0) currentIndex = 0
+    
+    console.log(`[Player] Spawning as ${creatureClass} (type: ${creatureType}, variant: ${variantIndex})`)
+  }
+  
+  if (!currentCreature) {
+    console.error('[Player] Failed to generate creature, falling back to starter')
+    currentCreature = generateStarter(CreatureType.FISH)
+    currentType = CreatureType.FISH
+    currentClass = FishClass.STARTER
+    currentIndex = 0
+    currentVariantIndex = 0
+  }
+  
   creatureParts = currentCreature.parts
   
   // Use provided spawn position or default to origin

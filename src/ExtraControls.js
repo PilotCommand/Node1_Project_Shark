@@ -32,7 +32,7 @@ import Attacker, { init as initAttacker, debugAttacker } from './attacker.js'
  * 
  * Options: 'sprinter', 'stacker', 'camper', 'attacker', 'none'
  */
-const ACTIVE_ABILITY = 'sprinter'
+let ACTIVE_ABILITY = 'sprinter'
 
 // ============================================================================
 // ABILITIES REGISTRY
@@ -99,6 +99,21 @@ export function getActiveAbility() {
  */
 export function getActiveAbilityName() {
   return ACTIVE_ABILITY
+}
+
+/**
+ * Set the active ability by key
+ * @param {string} abilityKey - 'sprinter', 'stacker', 'camper', 'attacker', or 'none'
+ * @returns {boolean} - true if ability was set, false if invalid key
+ */
+export function setActiveAbility(abilityKey) {
+  if (ABILITIES[abilityKey]) {
+    ACTIVE_ABILITY = abilityKey
+    console.log(`[Ability] Active ability set to: ${abilityKey}`)
+    return true
+  }
+  console.warn(`[Ability] Unknown ability key: ${abilityKey}`)
+  return false
 }
 
 /**

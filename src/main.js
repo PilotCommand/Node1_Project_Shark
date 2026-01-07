@@ -24,10 +24,10 @@ import {
 import { SpawnFactory } from './SpawnFactory.js'
 import { FishAdder } from './FishAdder.js'
 import { Feeding } from './Feeding.js'
-import { initTrail } from './ExtraControls.js'
+import { initTrail, setActiveAbility } from './ExtraControls.js'
 
 // Import menu
-import { initMenu, showMenu, onSpawnRequested, isMenuActive } from './menu.js'
+import { initMenu, showMenu, onSpawnRequested, isMenuActive, getPlayerSelection } from './menu.js'
 
 // Scene setup
 const scene = new THREE.Scene()
@@ -129,14 +129,28 @@ onSpawnRequested(() => {
     return
   }
   
+  // Get player's creature and ability selection from menu
+  const selection = getPlayerSelection()
+  console.log('[Main] Player selection:', selection)
+  
+  // Set the active ability based on selection
+  if (selection.ability && selection.ability.key) {
+    setActiveAbility(selection.ability.key)
+  }
+  
   // Get a valid spawn point for player
   const spawnPoint = SpawnFactory.getRandomPlayablePoint()
   if (spawnPoint) {
     console.log(`[Main] Player spawn point: (${spawnPoint.x.toFixed(1)}, ${spawnPoint.y.toFixed(1)}, ${spawnPoint.z.toFixed(1)})`)
   }
   
-  // Initialize player
-  initPlayer(scene, spawnPoint)
+  // Initialize player with creature selection
+  // Pass creature type, class, and variant from menu selection
+  initPlayer(scene, spawnPoint, {
+    creatureType: selection.creature.type,
+    creatureClass: selection.creature.class,
+    variantIndex: selection.creature.variantIndex,
+  })
   initControls()
   initTrail(scene)
   initHUD()
@@ -153,12 +167,12 @@ onSpawnRequested(() => {
   // Notify HUD when player eats something
   Feeding.onEat((meal) => {
     if (meal.type === 'npc') {
-      notifyEvent(`Ate a ${meal.preyDisplayName}! +${meal.volumeGained.toFixed(2)} m³`)
+      notifyEvent(`Ate a ${meal.preyDisplayName}! +${meal.volumeGained.toFixed(2)} mÂ³`)
     }
   })
   
   playerSpawned = true
-  console.log('[Main] Player spawned!')
+  console.log('[Main] Player spawned as:', selection.creature.displayName, 'with ability:', selection.ability.name)
 })
 
 // Resize handler
@@ -206,7 +220,7 @@ window.Feeding = Feeding
 
 // Controls documentation
 console.log(`
-🌊🐠🦈 OCEAN CREATURE SIMULATOR
+ðŸŒŠðŸ ðŸ¦ˆ OCEAN CREATURE SIMULATOR
 
   MOVEMENT:
     WASD              - Swim
