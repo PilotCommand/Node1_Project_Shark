@@ -411,7 +411,7 @@ export class Room {
   /**
    * Handle chat message - relay to all other players
    * @param {WebSocket} ws - The sending player
-   * @param {Object} data - { text: string, isEmoji: boolean }
+   * @param {Object} data - { text: string, isEmoji: boolean, showProximity: boolean }
    */
   handleChat(ws, data) {
     // Validate message
@@ -429,6 +429,7 @@ export class Room {
       sender: ws.name,
       text: text,
       isEmoji: data.isEmoji || false,
+      showProximity: data.showProximity !== false,  // Default to true if not specified
     }, ws.id)
   }
   

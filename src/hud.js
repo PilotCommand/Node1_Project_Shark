@@ -933,14 +933,18 @@ function createChatPanel() {
   // Subscribe to remote chat messages from network
   if (networkManager) {
     networkManager.onChatMessage((data) => {
-      // data contains: senderId, sender (name), text, isEmoji
+      // data contains: senderId, sender (name), text, isEmoji, showProximity
       if (data.isEmoji) {
         Chat.emojiMessage(data.text, data.sender, data.senderId)
       } else {
         Chat.remoteMessage(data.text, data.sender, data.senderId)
       }
-      // Show proximity bubble above the remote player's fish
-      showRemotePlayerBubble(data.senderId, data.text)
+      // Show proximity bubble above remote player's fish only if:
+      // 1. Local player has proximity enabled (wants to see bubbles)
+      // 2. Sender had proximity enabled (wants their message shown as bubble)
+      if (proximityCheckbox && proximityCheckbox.checked && data.showProximity) {
+        showRemotePlayerBubble(data.senderId, data.text)
+      }
     })
   }
   
@@ -950,9 +954,9 @@ function createChatPanel() {
       const message = chatInput.value.trim()
       addChatMessage(message, 'player')
       
-      // Send over network if connected
+      // Send over network if connected (include proximity setting)
       if (networkManager && networkManager.isConnected()) {
-        networkManager.sendChatMessage(message, false)
+        networkManager.sendChatMessage(message, false, proximityCheckbox.checked)
       }
       
       // Show proximity bubble if checkbox is checked
@@ -1203,9 +1207,9 @@ function createEmojiWheel() {
     if (proximityCheckbox && proximityCheckbox.checked) {
       showProximityBubble(data.emoji)
     }
-    // Send emoji over network if connected
+    // Send emoji over network if connected (include proximity setting)
     if (networkManager && networkManager.isConnected()) {
-      networkManager.sendChatMessage(data.emoji, true)
+      networkManager.sendChatMessage(data.emoji, true, proximityCheckbox.checked)
     }
   })
   

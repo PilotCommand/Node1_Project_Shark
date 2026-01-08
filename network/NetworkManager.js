@@ -594,9 +594,9 @@ class NetworkManager {
    * @param {boolean} isEmoji - Whether this is an emoji-only message
    * @returns {boolean} Whether send was successful
    */
-  sendChatMessage(text, isEmoji = false) {
+  sendChatMessage(text, isEmoji = false, showProximity = true) {
     if (!this.connected || !text) return false
-    return this.send(MSG.CHAT, { text, isEmoji })
+    return this.send(MSG.CHAT, { text, isEmoji, showProximity })
   }
   
   joinGame(creature, displayName = 'Player') {
