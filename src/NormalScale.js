@@ -7,19 +7,24 @@
  *   while PRESERVING the original data.
  * 
  * CONCEPT:
- *   - All creatures start at STARTER_VOLUME (1 mÃ‚Â³)
- *   - Capsule volume determines "size" for gameplay
- *   - Growth multiplier increases volume logarithmically
- *   - Scale factor = Ã¢Ë†â€º(targetVolume / naturalVolume)
+ *   - All players start at STARTER_VOLUME (1 m³)
+ *   - Growth is LINEAR ADDITIVE: eating adds prey's volume to your volume
+ *   - Volume is capped at MAX_VOLUME (1000 m³)
+ *   - Scale factor = ∛(targetVolume / naturalVolume)
+ * 
+ * VOLUME SYSTEM:
+ *   - TotalWorldVolume: Your current gameplay volume [1, 1000] m³
+ *   - When you eat prey, your volume = your volume + prey's volume (capped at 1000)
+ *   - 5% rule: You can eat fish that are <= 95% of your volume
  * 
  * USAGE:
- *   import { normalizeCreature, addFood, decreaseScale } from './NormalScale.js'
+ *   import { normalizeCreature, addVolume, decreaseScale } from './NormalScale.js'
  *   
  *   // Normalize a creature to gameplay scale
  *   const result = normalizeCreature(mesh, naturalCapsuleParams)
  *   
- *   // When eating food
- *   addFood(0.1)
+ *   // When eating prey (linear additive growth)
+ *   const result = addVolume(preyVolume)  // Returns new total volume
  *   
  *   // R/T keys for manual testing
  *   decreaseScale()  // R
@@ -34,28 +39,34 @@ import { Determine } from './determine.js'
 // ============================================================================
 
 const CONFIG = {
-  // Starting volume for all creatures (cubic meters)
+  // Starting volume for all player creatures (cubic meters)
   STARTER_VOLUME: 1.0,
   
-  // Logarithmic growth: volume = STARTER * (1 + k * ln(1 + food))
-  // Higher = faster initial growth, slower later
-  GROWTH_RATE: 0.5,
+  // Maximum volume cap (cubic meters)
+  MAX_VOLUME: 1000.0,
   
-  // Manual scale adjustment (R/T keys)
+  // Minimum volume (cubic meters)
+  MIN_VOLUME: 1.0,
+  
+  // Manual scale adjustment (R/T keys) - for DEBUG/TESTING
   MANUAL_SCALE_STEP: 0.1,     // 10% per keypress
   MANUAL_SCALE_MIN: 0.1,      // Can't go below 10% of normalized
-  MANUAL_SCALE_MAX: 10.0,     // Can't exceed 10Ãƒâ€” normalized
+  MANUAL_SCALE_MAX: 10.0,     // Can't exceed 10× normalized
 }
 
 // ============================================================================
 // STATE
 // ============================================================================
 
-let currentFoodEaten = 0             // Tracks food for growth calculation
-let manualScaleMultiplier = 1.0      // R/T key adjustment (multiplier on top)
+// Current world volume (starts at STARTER_VOLUME, grows by eating)
+let currentWorldVolume = CONFIG.STARTER_VOLUME
+
+// Manual scale multiplier (R/T keys) - applied ON TOP of world volume
+let manualScaleMultiplier = 1.0
 
 // Cache for creature's natural volume (before normalization)
 let cachedNaturalVolume = null
+let cachedEncyclopediaVisualVolume = null
 
 // ============================================================================
 // CORE MATH FUNCTIONS
@@ -65,8 +76,8 @@ let cachedNaturalVolume = null
  * Compute capsule volume
  * 
  * Capsule = Cylinder + 2 Hemispheres (= 1 Sphere)
- * V = Ãâ‚¬rÃ‚Â²h + (4/3)Ãâ‚¬rÃ‚Â³
- *   = Ãâ‚¬rÃ‚Â²(h + 4r/3)
+ * V = πr²h + (4/3)πr³
+ *   = πr²(h + 4r/3)
  * 
  * Where:
  *   r = capsule radius
@@ -80,7 +91,7 @@ export function computeCapsuleVolume(radius, halfHeight) {
   const r = radius
   const h = halfHeight * 2  // Full cylinder height
   
-  // V = Ãâ‚¬rÃ‚Â²(h + 4r/3)
+  // V = πr²(h + 4r/3)
   const volume = Math.PI * r * r * (h + (4 * r / 3))
   
   return volume
@@ -90,8 +101,8 @@ export function computeCapsuleVolume(radius, halfHeight) {
  * Compute the scale factor needed to achieve target volume
  * 
  * Since volume scales with cube of linear dimension:
- *   targetVolume = currentVolume Ãƒâ€” scaleÃ‚Â³
- *   scale = Ã¢Ë†â€º(targetVolume / currentVolume)
+ *   targetVolume = currentVolume × scale³
+ *   scale = ∛(targetVolume / currentVolume)
  * 
  * @param {number} currentVolume - Current/natural capsule volume
  * @param {number} targetVolume - Desired gameplay volume
@@ -107,34 +118,25 @@ export function computeScaleFactor(currentVolume, targetVolume) {
 }
 
 /**
- * Compute growth multiplier from food eaten (logarithmic curve)
- * 
- * Formula: multiplier = 1 + GROWTH_RATE Ãƒâ€” ln(1 + foodEaten)
- * 
- * Properties:
- *   - At 0 food: multiplier = 1.0 (starter size)
- *   - Fast early growth, slows as you get bigger
- *   - Never fully plateaus (always some reward)
- * 
- * Example values (with GROWTH_RATE = 0.5):
- *   Food:     0     10     50    100    500   1000
- *   Mult:    1.0   1.20   1.96   2.31   3.11   3.45
- * 
- * @param {number} foodEaten - Total food consumed
- * @returns {number} Volume multiplier (1.0 = starter size)
- */
-export function computeGrowthMultiplier(foodEaten) {
-  return 1 + CONFIG.GROWTH_RATE * Math.log(1 + foodEaten)
-}
-
-/**
- * Compute total target volume considering all factors
+ * Compute total target volume considering world volume and manual scale
  * 
  * @returns {number} Target volume in cubic meters
  */
 export function computeTargetVolume() {
-  const growthMultiplier = computeGrowthMultiplier(currentFoodEaten)
-  return CONFIG.STARTER_VOLUME * growthMultiplier * manualScaleMultiplier
+  // World volume × manual scale (for debug)
+  const targetVolume = currentWorldVolume * manualScaleMultiplier
+  // Clamp to bounds
+  return Math.max(CONFIG.MIN_VOLUME, Math.min(CONFIG.MAX_VOLUME, targetVolume))
+}
+
+/**
+ * Clamp a volume to valid bounds
+ * 
+ * @param {number} volume - Volume to clamp
+ * @returns {number} Clamped volume
+ */
+export function clampVolume(volume) {
+  return Math.max(CONFIG.MIN_VOLUME, Math.min(CONFIG.MAX_VOLUME, volume))
 }
 
 // ============================================================================
@@ -146,7 +148,7 @@ export function computeTargetVolume() {
  * 
  * This is the main entry point. It:
  *   1. Computes the natural volume from capsule params
- *   2. Calculates target volume (starter Ãƒâ€” growth Ãƒâ€” manual)
+ *   2. Uses current world volume (+ manual scale for debug)
  *   3. Determines scale factor to apply
  *   4. Applies scale to mesh
  *   5. Returns normalized capsule params for physics
@@ -199,10 +201,9 @@ export function normalizeCreature(mesh, naturalCapsuleParams, applyToMesh = true
     naturalVolume,                  // META FACT (preserved)
     targetVolume,                   // Current gameplay volume
     
-    // Growth state
-    growthMultiplier: computeGrowthMultiplier(currentFoodEaten),
+    // State
+    worldVolume: currentWorldVolume,
     manualScaleMultiplier,
-    foodEaten: currentFoodEaten,
   }
 }
 
@@ -238,56 +239,63 @@ export function scaleCapsuleParams(capsuleParams, scaleFactor) {
 }
 
 // ============================================================================
-// GROWTH SYSTEM
+// LINEAR ADDITIVE GROWTH SYSTEM
 // ============================================================================
 
 /**
- * Add food and update growth
+ * Add volume from eating prey (LINEAR ADDITIVE GROWTH)
  * 
- * @param {number} foodValue - Amount of food eaten (arbitrary units)
- * @returns {object} { newMultiplier, volumeGained, totalVolume }
+ * New volume = current volume + prey volume (capped at MAX_VOLUME)
+ * 
+ * @param {number} preyVolume - Volume of prey that was eaten
+ * @returns {object} { volumeGained, totalVolume, wasCapped }
  */
-export function addFood(foodValue) {
-  const oldMultiplier = computeGrowthMultiplier(currentFoodEaten)
-  const oldVolume = CONFIG.STARTER_VOLUME * oldMultiplier * manualScaleMultiplier
+export function addVolume(preyVolume) {
+  const oldVolume = currentWorldVolume
+  const uncappedNewVolume = currentWorldVolume + preyVolume
+  const newVolume = clampVolume(uncappedNewVolume)
+  const wasCapped = uncappedNewVolume > CONFIG.MAX_VOLUME
   
-  currentFoodEaten += foodValue
+  currentWorldVolume = newVolume
   
-  const newMultiplier = computeGrowthMultiplier(currentFoodEaten)
-  const newVolume = CONFIG.STARTER_VOLUME * newMultiplier * manualScaleMultiplier
+  const volumeGained = newVolume - oldVolume
+  
+  console.log(`[NormalScale] Volume: ${oldVolume.toFixed(2)} + ${preyVolume.toFixed(2)} = ${newVolume.toFixed(2)} m³${wasCapped ? ' (CAPPED)' : ''}`)
   
   return {
-    newMultiplier,
-    volumeGained: newVolume - oldVolume,
+    volumeGained,
     totalVolume: newVolume,
-    totalFood: currentFoodEaten,
+    wasCapped,
+    oldVolume,
+    preyVolume,
   }
 }
 
 /**
- * Set food eaten directly (for loading saved state)
+ * Set world volume directly (for loading saved state or syncing)
  * 
- * @param {number} food - Food value to set
+ * @param {number} volume - Volume to set
  */
-export function setFoodEaten(food) {
-  currentFoodEaten = Math.max(0, food)
+export function setWorldVolume(volume) {
+  currentWorldVolume = clampVolume(volume)
+  console.log(`[NormalScale] World volume set to ${currentWorldVolume.toFixed(2)} m³`)
 }
 
 /**
- * Get current food eaten
+ * Get current world volume
  * 
  * @returns {number}
  */
-export function getFoodEaten() {
-  return currentFoodEaten
+export function getWorldVolume() {
+  return currentWorldVolume
 }
 
 /**
- * Reset growth to starter (no food eaten)
+ * Reset to starter volume
  */
 export function resetGrowth() {
-  currentFoodEaten = 0
-  console.log('[NormalScale] Growth reset to starter')
+  currentWorldVolume = CONFIG.STARTER_VOLUME
+  console.log('[NormalScale] Growth reset to starter volume')
 }
 
 /**
@@ -296,20 +304,65 @@ export function resetGrowth() {
  * @returns {object} Growth statistics
  */
 export function getGrowthStats() {
-  const growthMultiplier = computeGrowthMultiplier(currentFoodEaten)
   const targetVolume = computeTargetVolume()
   
   return {
-    foodEaten: currentFoodEaten,
-    growthMultiplier,
+    worldVolume: currentWorldVolume,
     manualScaleMultiplier,
     targetVolume,
     starterVolume: CONFIG.STARTER_VOLUME,
+    maxVolume: CONFIG.MAX_VOLUME,
+    percentOfMax: (currentWorldVolume / CONFIG.MAX_VOLUME) * 100,
   }
 }
 
 // ============================================================================
-// MANUAL SCALE (R/T Keys)
+// LEGACY COMPATIBILITY - addFood (now wraps addVolume)
+// ============================================================================
+
+/**
+ * Add food and update growth (LEGACY - redirects to addVolume)
+ * 
+ * @deprecated Use addVolume() instead
+ * @param {number} foodValue - Amount of food eaten (treated as volume)
+ * @returns {object} { volumeGained, totalVolume }
+ */
+export function addFood(foodValue) {
+  const result = addVolume(foodValue)
+  
+  // Return in legacy format for compatibility
+  return {
+    newMultiplier: 1.0,  // No longer used
+    volumeGained: result.volumeGained,
+    totalVolume: result.totalVolume,
+    totalFood: result.totalVolume,  // Legacy field
+  }
+}
+
+/**
+ * @deprecated Use getWorldVolume() instead
+ */
+export function getFoodEaten() {
+  return currentWorldVolume
+}
+
+/**
+ * @deprecated Use setWorldVolume() instead
+ */
+export function setFoodEaten(food) {
+  setWorldVolume(food)
+}
+
+/**
+ * @deprecated No longer used - growth is not logarithmic
+ */
+export function computeGrowthMultiplier(foodEaten) {
+  // Return 1.0 for compatibility - growth is now linear
+  return 1.0
+}
+
+// ============================================================================
+// MANUAL SCALE (R/T Keys) - DEBUG/TESTING
 // ============================================================================
 
 /**
@@ -326,7 +379,7 @@ export function decreaseScale() {
   
   const newVolume = computeTargetVolume()
   
-  console.log(`[NormalScale] Scale decreased: ${(oldMultiplier * 100).toFixed(0)}% Ã¢â€ â€™ ${(manualScaleMultiplier * 100).toFixed(0)}%`)
+  console.log(`[NormalScale] Manual scale: ${(oldMultiplier * 100).toFixed(0)}% → ${(manualScaleMultiplier * 100).toFixed(0)}%`)
   
   return {
     newMultiplier: manualScaleMultiplier,
@@ -348,7 +401,7 @@ export function increaseScale() {
   
   const newVolume = computeTargetVolume()
   
-  console.log(`[NormalScale] Scale increased: ${(oldMultiplier * 100).toFixed(0)}% Ã¢â€ â€™ ${(manualScaleMultiplier * 100).toFixed(0)}%`)
+  console.log(`[NormalScale] Manual scale: ${(oldMultiplier * 100).toFixed(0)}% → ${(manualScaleMultiplier * 100).toFixed(0)}%`)
   
   return {
     newMultiplier: manualScaleMultiplier,
@@ -397,14 +450,14 @@ export function setManualScaleMultiplier(multiplier) {
  * 
  * @param {object} oldNaturalCapsuleParams - Old creature's natural capsule
  * @param {object} newNaturalCapsuleParams - New creature's natural capsule
- * @returns {object} No state change needed - growth/manual scale carry over
+ * @returns {object} No state change needed - world volume carries over
  */
 export function transferToNewCreature(oldNaturalCapsuleParams, newNaturalCapsuleParams) {
   // The beauty of volume-based normalization:
   // We don't need to change anything!
   // 
-  // The growth multiplier and manual scale are INDEPENDENT of creature type.
-  // A player at 2.0Ãƒâ€” growth will have 2 mÃ‚Â³ volume regardless of creature.
+  // The world volume is INDEPENDENT of creature type.
+  // A player at 50 m³ volume will have 50 m³ volume regardless of creature.
   // 
   // The scale FACTOR will be different (to achieve same volume from different natural size)
   // but the gameplay VOLUME remains the same.
@@ -423,8 +476,7 @@ export function transferToNewCreature(oldNaturalCapsuleParams, newNaturalCapsule
   
   return {
     // These stay the same (progression preserved)
-    foodEaten: currentFoodEaten,
-    growthMultiplier: computeGrowthMultiplier(currentFoodEaten),
+    worldVolume: currentWorldVolume,
     manualScaleMultiplier,
     targetVolume,
     
@@ -451,7 +503,6 @@ export function getNormalizationInfo(naturalCapsuleParams) {
   const naturalVolume = computeCapsuleVolume(radius, halfHeight)
   const targetVolume = computeTargetVolume()
   const scaleFactor = computeScaleFactor(naturalVolume, targetVolume)
-  const growthMultiplier = computeGrowthMultiplier(currentFoodEaten)
   
   return {
     // Natural (META FACTS - preserved from Encyclopedia)
@@ -472,17 +523,21 @@ export function getNormalizationInfo(naturalCapsuleParams) {
     
     // Multipliers
     scaleFactor,
-    growthMultiplier,
     manualScaleMultiplier,
     
-    // Progression
-    foodEaten: currentFoodEaten,
+    // Volume state
+    worldVolume: currentWorldVolume,
     starterVolume: CONFIG.STARTER_VOLUME,
+    maxVolume: CONFIG.MAX_VOLUME,
     
     // Percentages for display
     scalePercent: scaleFactor * 100,
-    growthPercent: growthMultiplier * 100,
-    volumePercent: (targetVolume / CONFIG.STARTER_VOLUME) * 100,
+    volumePercent: (currentWorldVolume / CONFIG.MAX_VOLUME) * 100,
+    
+    // Legacy compatibility
+    growthMultiplier: 1.0,
+    growthPercent: 100,
+    foodEaten: currentWorldVolume,
   }
 }
 
@@ -490,22 +545,21 @@ export function getNormalizationInfo(naturalCapsuleParams) {
  * Debug log current state
  */
 export function debug() {
-  const growthMultiplier = computeGrowthMultiplier(currentFoodEaten)
   const targetVolume = computeTargetVolume()
   
   console.group('[NormalScale] Debug')
-  console.log(`Starter volume:      ${CONFIG.STARTER_VOLUME.toFixed(2)} mÃ‚Â³`)
-  console.log(`Growth rate:         ${CONFIG.GROWTH_RATE}`)
-  console.log('Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬')
-  console.log(`Food eaten:          ${currentFoodEaten.toFixed(1)}`)
-  console.log(`Growth multiplier:   ${growthMultiplier.toFixed(2)}Ãƒâ€” (${(growthMultiplier * 100).toFixed(0)}%)`)
-  console.log(`Manual scale:        ${manualScaleMultiplier.toFixed(2)}Ãƒâ€” (${(manualScaleMultiplier * 100).toFixed(0)}%)`)
-  console.log('Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬')
-  console.log(`Target volume:       ${targetVolume.toFixed(2)} mÃ‚Â³`)
+  console.log(`Starter volume:      ${CONFIG.STARTER_VOLUME.toFixed(2)} m³`)
+  console.log(`Max volume:          ${CONFIG.MAX_VOLUME.toFixed(2)} m³`)
+  console.log('────────────────────────────')
+  console.log(`World volume:        ${currentWorldVolume.toFixed(2)} m³`)
+  console.log(`Manual scale:        ${manualScaleMultiplier.toFixed(2)}× (${(manualScaleMultiplier * 100).toFixed(0)}%)`)
+  console.log('────────────────────────────')
+  console.log(`Target volume:       ${targetVolume.toFixed(2)} m³`)
+  console.log(`Percent of max:      ${((currentWorldVolume / CONFIG.MAX_VOLUME) * 100).toFixed(1)}%`)
   if (cachedNaturalVolume) {
     const scaleFactor = computeScaleFactor(cachedNaturalVolume, targetVolume)
-    console.log(`Natural volume:      ${cachedNaturalVolume.toFixed(2)} mÃ‚Â³ (meta fact)`)
-    console.log(`Scale factor:        ${scaleFactor.toFixed(3)}Ãƒâ€”`)
+    console.log(`Natural volume:      ${cachedNaturalVolume.toFixed(4)} m³ (meta fact)`)
+    console.log(`Scale factor:        ${scaleFactor.toFixed(3)}×`)
   }
   console.groupEnd()
 }
@@ -534,11 +588,9 @@ const NPC_CONFIG = {
   MIN_VOLUME: 1.0,      // Smallest NPC visual volume
   MAX_VOLUME: 1000.0,   // Largest NPC visual volume
   
-  // Normal distribution parameters
-  // Mean at geometric center of log scale (sqrt(1 * 1000) â‰ˆ 31.6)
-  // This gives a nice spread across the range
-  VOLUME_MEAN: 50.0,    // Center of distribution
-  VOLUME_STD_DEV: 150.0, // Standard deviation (wide spread)
+  // Log-normal distribution parameters
+  LOG_MEAN: 3.5,        // ~33 m³ median
+  LOG_STD: 1.5,         // Spread
   
   // Default target for "medium" creatures
   DEFAULT_VOLUME: 5.0,
@@ -556,20 +608,6 @@ function randomNormal() {
 }
 
 /**
- * Generate a normally distributed target volume for an NPC
- * Clamped to [MIN_VOLUME, MAX_VOLUME]
- * 
- * @returns {number} Target volume in cubic meters
- */
-export function generateNPCTargetVolume() {
-  // Generate from normal distribution
-  const volume = NPC_CONFIG.VOLUME_MEAN + randomNormal() * NPC_CONFIG.VOLUME_STD_DEV
-  
-  // Clamp to bounds
-  return Math.max(NPC_CONFIG.MIN_VOLUME, Math.min(NPC_CONFIG.MAX_VOLUME, volume))
-}
-
-/**
  * Generate a log-normally distributed target volume for an NPC
  * This gives a more natural distribution where small fish are common
  * and large fish are rare, but still spans the full range.
@@ -579,17 +617,26 @@ export function generateNPCTargetVolume() {
 export function generateNPCTargetVolumeLogNormal() {
   // Log-normal parameters
   // We want the distribution to span 1 to 1000
-  // ln(1) = 0, ln(1000) â‰ˆ 6.9
-  // Mean in log space: ~3.5 (corresponds to ~33 mÂ³)
-  // Std in log space: ~1.5 (gives good spread)
-  const logMean = 3.5
-  const logStd = 1.5
+  // ln(1) = 0, ln(1000) ≈ 6.9
+  const logMean = NPC_CONFIG.LOG_MEAN
+  const logStd = NPC_CONFIG.LOG_STD
   
   const logVolume = logMean + randomNormal() * logStd
   const volume = Math.exp(logVolume)
   
   // Clamp to bounds
   return Math.max(NPC_CONFIG.MIN_VOLUME, Math.min(NPC_CONFIG.MAX_VOLUME, volume))
+}
+
+/**
+ * Generate a normally distributed target volume for an NPC
+ * Clamped to [MIN_VOLUME, MAX_VOLUME]
+ * 
+ * @deprecated Use generateNPCTargetVolumeLogNormal() for better distribution
+ * @returns {number} Target volume in cubic meters
+ */
+export function generateNPCTargetVolume() {
+  return generateNPCTargetVolumeLogNormal()
 }
 
 /**
@@ -606,14 +653,14 @@ export function computeNPCScaleFactor(currentVisualVolume, targetVolume) {
   }
   
   // Volume scales with cube of linear dimension
-  // targetVolume = currentVolume Ã— scaleÂ³
-  // scale = âˆ›(targetVolume / currentVolume)
+  // targetVolume = currentVolume × scale³
+  // scale = ∛(targetVolume / currentVolume)
   return Math.cbrt(targetVolume / currentVisualVolume)
 }
 
 /**
  * Get scale factor to achieve a normally distributed volume
- * Uses log-normal distribution for natural spread across 1-1000 mÂ³
+ * Uses log-normal distribution for natural spread across 1-1000 m³
  * 
  * @param {number} naturalVisualVolume - Visual volume at scale=1
  * @returns {{ scaleFactor: number, targetVolume: number }}
@@ -653,19 +700,13 @@ export function clampNPCVolume(volume) {
 /**
  * Normalize an NPC creature to fit within visual volume bounds
  * 
- * This is the main function for NPC normalization. It:
- *   1. Computes the creature's natural visual volume
- *   2. Applies the desired scale multiplier
- *   3. Clamps the result to [MIN_VOLUME, MAX_VOLUME]
- *   4. Returns the final scale factor to apply
- * 
  * @param {number} naturalVisualVolume - Visual volume at scale=1
  * @param {number} desiredScaleMultiplier - Spawn system's desired scale (e.g., 1-10)
  * @returns {{
- *   scaleFactor: number,        // Final scale to apply to mesh
- *   targetVolume: number,       // Target volume after clamping
- *   wasClamped: boolean,        // Whether clamping was applied
- *   clampReason: string|null    // 'min' or 'max' if clamped
+ *   scaleFactor: number,
+ *   targetVolume: number,
+ *   wasClamped: boolean,
+ *   clampReason: string|null
  * }}
  */
 export function normalizeNPCVisualVolume(naturalVisualVolume, desiredScaleMultiplier = 1.0) {
@@ -740,7 +781,7 @@ export function setNPCVolumeBounds(min, max) {
   if (min > 0 && max > min) {
     NPC_CONFIG.MIN_VOLUME = min
     NPC_CONFIG.MAX_VOLUME = max
-    console.log(`[NormalScale] NPC volume bounds set to [${min}, ${max}] mÂ³`)
+    console.log(`[NormalScale] NPC volume bounds set to [${min}, ${max}] m³`)
   } else {
     console.warn('[NormalScale] Invalid volume bounds:', min, max)
   }
@@ -756,15 +797,15 @@ export function debugNPCNormalization(naturalVisualVolume, desiredScaleMultiplie
   const result = normalizeNPCVisualVolume(naturalVisualVolume, desiredScaleMultiplier)
   
   console.group('[NormalScale] NPC Normalization Debug')
-  console.log(`Natural visual volume: ${naturalVisualVolume.toFixed(4)} mÂ³`)
-  console.log(`Desired scale multiplier: ${desiredScaleMultiplier.toFixed(2)}Ã—`)
-  console.log(`Desired volume: ${(naturalVisualVolume * Math.pow(desiredScaleMultiplier, 3)).toFixed(2)} mÂ³`)
-  console.log(`â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€`)
-  console.log(`Volume bounds: [${NPC_CONFIG.MIN_VOLUME}, ${NPC_CONFIG.MAX_VOLUME}] mÂ³`)
+  console.log(`Natural visual volume: ${naturalVisualVolume.toFixed(4)} m³`)
+  console.log(`Desired scale multiplier: ${desiredScaleMultiplier.toFixed(2)}×`)
+  console.log(`Desired volume: ${(naturalVisualVolume * Math.pow(desiredScaleMultiplier, 3)).toFixed(2)} m³`)
+  console.log('─────────────────────────')
+  console.log(`Volume bounds: [${NPC_CONFIG.MIN_VOLUME}, ${NPC_CONFIG.MAX_VOLUME}] m³`)
   console.log(`Was clamped: ${result.wasClamped}${result.clampReason ? ` (${result.clampReason})` : ''}`)
-  console.log(`â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€`)
-  console.log(`Final scale factor: ${result.scaleFactor.toFixed(3)}Ã—`)
-  console.log(`Final visual volume: ${result.targetVolume.toFixed(2)} mÂ³`)
+  console.log('─────────────────────────')
+  console.log(`Final scale factor: ${result.scaleFactor.toFixed(3)}×`)
+  console.log(`Final visual volume: ${result.targetVolume.toFixed(2)} m³`)
   console.groupEnd()
   
   return result
@@ -781,22 +822,28 @@ export default {
   // Core math
   computeCapsuleVolume,
   computeScaleFactor,
-  computeGrowthMultiplier,
   computeTargetVolume,
+  clampVolume,
   
   // Main functions (Player)
   normalizeCreature,
   getScaleFactor,
   scaleCapsuleParams,
   
-  // Growth
-  addFood,
-  setFoodEaten,
-  getFoodEaten,
+  // Linear additive growth
+  addVolume,
+  setWorldVolume,
+  getWorldVolume,
   resetGrowth,
   getGrowthStats,
   
-  // Manual scale
+  // Legacy compatibility
+  addFood,
+  setFoodEaten,
+  getFoodEaten,
+  computeGrowthMultiplier,
+  
+  // Manual scale (debug)
   decreaseScale,
   increaseScale,
   resetManualScale,

@@ -32,12 +32,15 @@ import {
   decreaseScale as normalDecreaseScale,
   increaseScale as normalIncreaseScale,
   getGrowthStats,
-  addFood as normalAddFood,
+  addVolume as normalAddVolume,
+  getWorldVolume,
+  setWorldVolume,
   resetGrowth,
   debug as debugNormalScale,
   computeCapsuleVolume,
   getManualScaleMultiplier,
 } from './NormalScale.js'
+import { showMenu } from './menu.js'
 
 // Capsule wireframe state
 let wireframeVisible = false
@@ -58,6 +61,9 @@ const CREATURE_CATALOG = getAllCreatureClasses()
 
 let sceneRef = null
 
+// Callbacks for when player is eaten
+const onEatenCallbacks = []
+
 export function initPlayer(scene, spawnPosition = null, options = {}) {
   sceneRef = scene
   
@@ -67,6 +73,9 @@ export function initPlayer(scene, spawnPosition = null, options = {}) {
     creatureClass = FishClass.STARTER,
     variantIndex = 0,
   } = options
+  
+  // Reset growth state for new player
+  resetGrowth()
   
   // Generate creature based on selection
   if (creatureClass === FishClass.STARTER || !creatureClass) {
@@ -113,7 +122,7 @@ export function initPlayer(scene, spawnPosition = null, options = {}) {
   // Compute NATURAL capsule params (META FACT - preserved from Encyclopedia)
   naturalCapsuleParams = computeCapsuleParams(currentCreature.mesh, currentCreature)
   
-  // Apply normalization - this scales the mesh to gameplay volume
+  // Apply normalization - this scales the mesh to gameplay volume (starts at 1 m³)
   const normalization = normalizeCreature(currentCreature.mesh, naturalCapsuleParams)
   normalizedCapsuleParams = normalization.normalizedCapsuleParams
   
@@ -127,12 +136,12 @@ export function initPlayer(scene, spawnPosition = null, options = {}) {
   console.log(`[Player] Natural capsule:`, {
     radius: naturalCapsuleParams.radius.toFixed(3),
     halfHeight: naturalCapsuleParams.halfHeight.toFixed(3),
-    volume: normalization.naturalVolume.toFixed(3) + ' mÂ³',
+    volume: normalization.naturalVolume.toFixed(3) + ' m³',
   })
   console.log(`[Player] Normalized capsule:`, {
     radius: normalizedCapsuleParams.radius.toFixed(3),
     halfHeight: normalizedCapsuleParams.halfHeight.toFixed(3),
-    volume: normalization.targetVolume.toFixed(3) + ' mÂ³',
+    volume: normalization.targetVolume.toFixed(3) + ' m³',
     scaleFactor: normalization.scaleFactor.toFixed(3),
   })
   
@@ -153,12 +162,13 @@ export function initPlayer(scene, spawnPosition = null, options = {}) {
       naturalCapsuleParams: naturalCapsuleParams,    // META FACT
       capsuleParams: normalizedCapsuleParams,        // For physics (gameplay scale)
       normalization: normalization,
+      worldVolume: getWorldVolume(),                 // Track world volume
     }
   }, true)
   
   const naturalSize = currentCreature.traits.length?.toFixed(1) || '1.5'
   const gameplayVolume = normalization.targetVolume.toFixed(2)
-  console.log(`Player: ${currentClass} | Natural: ${naturalSize}m | Vol: ${gameplayVolume}mÂ³ | Seed: ${seedToString(currentCreature.seed)}`)
+  console.log(`Player: ${currentClass} | Natural: ${naturalSize}m | Vol: ${gameplayVolume}m³ | Seed: ${seedToString(currentCreature.seed)}`)
   
   return currentCreature.mesh
 }
@@ -203,7 +213,7 @@ function swapCreature(newCreatureData, newType, newClass) {
   naturalCapsuleParams = computeCapsuleParams(currentCreature.mesh, currentCreature)
   
   // Apply normalization - this scales the mesh to gameplay volume
-  // Growth/manual scale are preserved, so player keeps their "size progression"
+  // World volume is preserved, so player keeps their "size progression"
   const normalization = normalizeCreature(currentCreature.mesh, naturalCapsuleParams)
   normalizedCapsuleParams = normalization.normalizedCapsuleParams
   
@@ -228,6 +238,7 @@ function swapCreature(newCreatureData, newType, newClass) {
       naturalCapsuleParams: naturalCapsuleParams,
       capsuleParams: normalizedCapsuleParams,
       normalization: normalization,
+      worldVolume: getWorldVolume(),
     }
   }, true)
   
@@ -586,7 +597,7 @@ function updateWireframeToNormalizedScale() {
 export function applyCurrentScale() {
   if (!currentCreature?.mesh || !naturalCapsuleParams) return null
   
-  // Get new scale factor based on current growth + manual scale
+  // Get new scale factor based on current world volume + manual scale
   const scaleFactor = getScaleFactor(naturalCapsuleParams)
   
   // Apply to mesh
@@ -600,6 +611,7 @@ export function applyCurrentScale() {
   if (entry) {
     entry.metadata.capsuleParams = normalizedCapsuleParams
     entry.metadata.normalization = getNormalizationInfo(naturalCapsuleParams)
+    entry.metadata.worldVolume = getWorldVolume()
   }
   
   // Sync to PlayerRegistry
@@ -610,19 +622,19 @@ export function applyCurrentScale() {
       physics: { scaleFactor },
     })
     PlayerRegistry.updateStats(localId, {
-      volume: getNormalizationInfo(naturalCapsuleParams).gameplay.volume,
+      volume: getWorldVolume(),
     })
   }
   
   return {
     scaleFactor,
     normalizedCapsuleParams,
-    volume: getNormalizationInfo(naturalCapsuleParams).gameplay.volume,
+    volume: getWorldVolume(),
   }
 }
 
 /**
- * Decrease player scale (R key)
+ * Decrease player scale (R key) - DEBUG
  * @returns {object} { scalePercent, volume }
  */
 export function decreasePlayerScale() {
@@ -639,7 +651,7 @@ export function decreasePlayerScale() {
 }
 
 /**
- * Increase player scale (T key)
+ * Increase player scale (T key) - DEBUG
  * @returns {object} { scalePercent, volume }
  */
 export function increasePlayerScale() {
@@ -656,17 +668,36 @@ export function increasePlayerScale() {
 }
 
 /**
- * Add food to player and grow
- * @param {number} foodValue - Amount of food eaten
- * @returns {object} { volumeGained, totalVolume, growthMultiplier }
+ * Add volume to player (LINEAR ADDITIVE GROWTH)
+ * Called when eating prey
+ * 
+ * @param {number} preyVolume - Volume of prey eaten (added directly)
+ * @returns {object} { volumeGained, totalVolume, wasCapped }
  */
-export function addFood(foodValue) {
-  const result = normalAddFood(foodValue)
+export function addFood(preyVolume) {
+  const result = normalAddVolume(preyVolume)
   applyCurrentScale()
   
-  console.log(`[Player] Ate food: +${result.volumeGained.toFixed(3)} mÂ³ | Total: ${result.totalVolume.toFixed(2)} mÂ³`)
+  console.log(`[Player] Ate: +${result.volumeGained.toFixed(2)} m³ | Total: ${result.totalVolume.toFixed(2)} m³${result.wasCapped ? ' (CAPPED)' : ''}`)
   
   return result
+}
+
+/**
+ * Get player's current world volume
+ * @returns {number} Volume in m³
+ */
+export function getPlayerWorldVolume() {
+  return getWorldVolume()
+}
+
+/**
+ * Set player's world volume directly (for syncing/loading)
+ * @param {number} volume - Volume to set
+ */
+export function setPlayerWorldVolume(volume) {
+  setWorldVolume(volume)
+  applyCurrentScale()
 }
 
 /**
@@ -689,14 +720,16 @@ export function debugPlayerScale() {
     console.log('Natural (META FACT):')
     console.log(`  Length: ${currentCreature?.traits?.length?.toFixed(2) || '?'}m`)
     console.log(`  Capsule: r=${info.natural.radius.toFixed(3)}, h=${info.natural.halfHeight.toFixed(3)}`)
-    console.log(`  Volume: ${info.natural.volume.toFixed(3)} mÂ³`)
+    console.log(`  Volume: ${info.natural.volume.toFixed(3)} m³`)
     console.log('Gameplay (Normalized):')
     console.log(`  Scale factor: ${info.scaleFactor.toFixed(3)}×`)
     console.log(`  Capsule: r=${info.gameplay.radius.toFixed(3)}, h=${info.gameplay.halfHeight.toFixed(3)}`)
-    console.log(`  Volume: ${info.gameplay.volume.toFixed(3)} mÂ³`)
-    console.log('Multipliers:')
-    console.log(`  Growth: ${info.growthMultiplier.toFixed(2)}× (${info.growthPercent.toFixed(0)}%)`)
-    console.log(`  Manual: ${info.manualScaleMultiplier.toFixed(2)}× (${(info.manualScaleMultiplier * 100).toFixed(0)}%)`)
+    console.log(`  Volume: ${info.gameplay.volume.toFixed(3)} m³`)
+    console.log('Volume State:')
+    console.log(`  World Volume: ${getWorldVolume().toFixed(2)} m³`)
+    console.log(`  Manual Scale: ${info.manualScaleMultiplier.toFixed(2)}× (${(info.manualScaleMultiplier * 100).toFixed(0)}%)`)
+    console.log(`  Max Volume: 1000 m³`)
+    console.log(`  Progress: ${((getWorldVolume() / 1000) * 100).toFixed(1)}%`)
   } else {
     console.log('No normalization data available')
   }
@@ -704,6 +737,92 @@ export function debugPlayerScale() {
   debugNormalScale()
   console.groupEnd()
 }
+
+// ============================================================================
+// DEATH / EATEN HANDLING
+// ============================================================================
+
+/**
+ * Called when the local player is eaten by another player
+ * Cleans up player state and returns to menu
+ * 
+ * @param {object} eaterData - Data about who ate us (optional)
+ */
+export function onEaten(eaterData = null) {
+  console.log('[Player] Was eaten!', eaterData ? `by ${eaterData.id}` : '')
+  
+  // Fire callbacks before cleanup
+  for (const callback of onEatenCallbacks) {
+    try {
+      callback(eaterData)
+    } catch (e) {
+      console.error('[Player] Error in onEaten callback:', e)
+    }
+  }
+  
+  // Clean up player from scene
+  if (sceneRef && currentCreature?.mesh) {
+    sceneRef.remove(currentCreature.mesh)
+    
+    // Dispose mesh resources
+    currentCreature.mesh.traverse(child => {
+      if (child.geometry) child.geometry.dispose()
+      if (child.material) {
+        if (Array.isArray(child.material)) {
+          child.material.forEach(m => m.dispose())
+        } else {
+          child.material.dispose()
+        }
+      }
+    })
+  }
+  
+  // Unregister from MeshRegistry
+  MeshRegistry.unregister('player')
+  
+  // Unregister from PlayerRegistry
+  const localId = PlayerRegistry.getLocalId()
+  if (localId) {
+    PlayerRegistry.unregister(localId)
+  }
+  
+  // Reset state
+  currentCreature = null
+  creatureParts = null
+  naturalCapsuleParams = null
+  normalizedCapsuleParams = null
+  
+  // Reset growth (will start at 1 m³ again)
+  resetGrowth()
+  
+  // Return to menu
+  showMenu()
+}
+
+/**
+ * Register callback for when player is eaten
+ * @param {function} callback - Called with eater data
+ */
+export function registerOnEaten(callback) {
+  if (typeof callback === 'function') {
+    onEatenCallbacks.push(callback)
+  }
+}
+
+/**
+ * Remove eaten callback
+ * @param {function} callback
+ */
+export function unregisterOnEaten(callback) {
+  const index = onEatenCallbacks.indexOf(callback)
+  if (index > -1) {
+    onEatenCallbacks.splice(index, 1)
+  }
+}
+
+// ============================================================================
+// EXPORTS
+// ============================================================================
 
 export let player = null
 export { creatureParts as fishParts }
