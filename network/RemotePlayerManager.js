@@ -195,7 +195,7 @@ class RemotePlayer {
    * 
    * scale = cbrt(worldVolume / encyclopediaCapsuleVolume)
    * 
-   * @param {number} worldVolume - Target world volume in m³
+   * @param {number} worldVolume - Target world volume in mÂ³
    * @returns {number} Scale factor to apply to mesh
    */
   computeScaleFromWorldVolume(worldVolume) {
@@ -226,7 +226,7 @@ class RemotePlayer {
       return
     }
     
-    // Use capsule volume formula: Ãâ‚¬ * rÃ‚Â² * (4/3 * r + 2 * h)
+    // Use capsule volume formula: ÃƒÂÃ¢â€šÂ¬ * rÃƒâ€šÃ‚Â² * (4/3 * r + 2 * h)
     // where r = radius and h = halfHeight
     const r = this.capsuleParams.radius
     const h = this.capsuleParams.halfHeight
@@ -474,7 +474,7 @@ class RemotePlayer {
     // Using capsule volume to match local player formula
     if (this.encyclopediaCapsuleVolume > 0.001) {
       // scale = cbrt(worldVolume / capsuleVolume)
-      // worldVolume = scale³ * capsuleVolume
+      // worldVolume = scaleÂ³ * capsuleVolume
       this.worldVolume = Math.pow(newScale, 3) * this.encyclopediaCapsuleVolume
     } else if (this.encyclopediaVisualVolume > 0.001) {
       // Fallback to visual volume
@@ -510,7 +510,7 @@ class RemotePlayer {
   /**
    * Update world volume (authoritative volume from network)
    * This also recomputes the display scale and triggers physics rebuild if needed
-   * @param {number} newVolume - World volume in m³ [1, 1000]
+   * @param {number} newVolume - World volume in mÂ³ [1, 1000]
    */
   updateVolume(newVolume) {
     if (Math.abs(newVolume - this.worldVolume) < 0.01) return
@@ -521,18 +521,27 @@ class RemotePlayer {
     // Recompute scale from new volume (uses capsule volume internally)
     if (this.encyclopediaCapsuleVolume > 0.001 || this.encyclopediaVisualVolume > 0.001) {
       this.targetScale = this.computeScaleFromWorldVolume(newVolume)
+      
+      // Also update visualVolume immediately based on targetScale
+      // This ensures radar threat detection stays in sync with feeding system
+      if (this.baseCapsuleParams) {
+        const newRadius = this.baseCapsuleParams.radius * this.targetScale
+        const newHalfHeight = this.baseCapsuleParams.halfHeight * this.targetScale
+        this.visualVolume = computeCapsuleVolume(newRadius, newHalfHeight)
+      }
     }
     
-    // Update the MeshRegistry metadata with authoritative volume
+    // Update the MeshRegistry metadata with both volumes
     if (this.registryId) {
       MeshRegistry.updateMetadata(this.registryId, {
         worldVolume: this.worldVolume,
+        visualVolume: this.visualVolume,
       })
     }
     
     // Only log significant changes
     if (Math.abs(newVolume - oldVolume) > 0.5) {
-      console.log(`[RemotePlayer] ${this.id} volume: ${oldVolume.toFixed(2)} → ${newVolume.toFixed(2)} m³, targetScale: ${this.targetScale.toFixed(4)}`)
+      console.log(`[RemotePlayer] ${this.id} volume: ${oldVolume.toFixed(2)} â†’ ${newVolume.toFixed(2)} mÂ³, targetScale: ${this.targetScale.toFixed(4)}`)
     }
   }
   
@@ -923,7 +932,7 @@ export class RemotePlayerManager {
   /**
    * Update world volume for a remote player
    * @param {number} id - Player ID
-   * @param {number} volume - World volume in mÂ³
+   * @param {number} volume - World volume in mÃ‚Â³
    */
   updateVolume(id, volume) {
     const player = this.players.get(id)

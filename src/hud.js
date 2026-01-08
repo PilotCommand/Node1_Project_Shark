@@ -1723,8 +1723,8 @@ function updateMinimap() {
   const fadeInTime = 150 // ms for dot to fade in after detection
   const pingWindow = 0.15 // Radians - how close sonar needs to be to "ping"
   
-  // Get player volume for color calculation
-  const playerVol = Feeding.getPlayerVisualVolume()
+  // Get player volume for color calculation (use worldVolume for consistency with feeding system)
+  const playerVol = Feeding.getPlayerWorldVolume()
   const playerVolLow = playerVol * 0.8
   const playerVolHigh = playerVol * 1.2
   
@@ -1749,7 +1749,7 @@ function updateMinimap() {
         if (currentTime - lastPing < PING_DEBOUNCE_MS) continue
         lastNpcPingTime.set(npcUuid, currentTime)
         
-        const npcVol = npc.visualVolume || 0
+        const npcVol = npc.totalWorldVolume || npc.visualVolume || 0
         let color
         if (npcVol < playerVolLow) {
           color = NPC_COLOR_EDIBLE
@@ -1803,7 +1803,7 @@ function updateMinimap() {
         if (currentTime - lastPing < PING_DEBOUNCE_MS) continue
         lastNpcPingTime.set(playerUuid, currentTime)
         
-        const remoteVol = remotePlayer.visualVolume || 1
+        const remoteVol = remotePlayer.worldVolume || remotePlayer.visualVolume || 1
         let color
         if (remoteVol < playerVolLow) {
           color = NPC_COLOR_EDIBLE

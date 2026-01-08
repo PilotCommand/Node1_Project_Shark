@@ -40,7 +40,7 @@ import {
   canEatByVolume,
   getFeedingRelationship as getVolumeRelationship,
 } from './MeshVolume.js'
-import { addVolume as addPlayerVolume, getWorldVolume } from './NormalScale.js'
+import { addVolume as addPlayerVolume, getWorldVolume, getEffectiveWorldVolume } from './NormalScale.js'
 import { networkManager } from '../network/NetworkManager.js'
 
 // ============================================================================
@@ -126,10 +126,11 @@ function init(fishAdder) {
 
 /**
  * Get player's current world volume from NormalScale
+ * Uses getEffectiveWorldVolume which includes manual scale (R/T keys)
  * @returns {number} Volume in cubic meters
  */
 function getPlayerWorldVolume() {
-  return getWorldVolume()
+  return getEffectiveWorldVolume()
 }
 
 /**
