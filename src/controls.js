@@ -12,7 +12,7 @@
  *   T           - Increase scale
  *   G           - Mutate creature (new random of same type)
  *   N / B       - Next / Previous species
- *   Z           - Cycle variant (e.g., Yellowfin â†’ Bluefin)
+ *   Z           - Cycle variant (e.g., Yellowfin Ã¢â€ â€™ Bluefin)
  *   M           - New map (synced in multiplayer)
  *   P           - Toggle debug overlays (wireframes + volume labels)
  *   V           - Toggle debug viz (spawn grid + fish paths)
@@ -53,6 +53,7 @@ import {
   removeTerrainCollider,
   buildTerrainCollider,
   toggleStaticColliderWireframe,
+  toggleRemotePlayerWireframe,
   createWorldBoundaryCollider,
   removeWorldBoundaryCollider,
   createWaterSurfaceSensor,
@@ -379,7 +380,7 @@ export function initControls() {
         if (scaleDownResult) {
           rebuildPlayerPhysics()
           showNotification(
-            `Scale: ${scaleDownResult.scalePercent.toFixed(0)}% | Vol: ${scaleDownResult.volume.toFixed(2)} mÂ³`,
+            `Scale: ${scaleDownResult.scalePercent.toFixed(0)}% | Vol: ${scaleDownResult.volume.toFixed(2)} mÃ‚Â³`,
             '#ff8888'
           )
         }
@@ -391,7 +392,7 @@ export function initControls() {
         if (scaleUpResult) {
           rebuildPlayerPhysics()
           showNotification(
-            `Scale: ${scaleUpResult.scalePercent.toFixed(0)}% | Vol: ${scaleUpResult.volume.toFixed(2)} mÂ³`,
+            `Scale: ${scaleUpResult.scalePercent.toFixed(0)}% | Vol: ${scaleUpResult.volume.toFixed(2)} mÃ‚Â³`,
             '#88ff88'
           )
         }
@@ -435,7 +436,7 @@ export function initControls() {
         }
         break
       
-      // Z = Cycle variant (e.g., Yellowfin Tuna â†’ Bluefin Tuna)
+      // Z = Cycle variant (e.g., Yellowfin Tuna Ã¢â€ â€™ Bluefin Tuna)
       case 'KeyZ':
         const variantResult = cycleVariant()
         if (variantResult.hasVariants) {
@@ -460,6 +461,7 @@ export function initControls() {
         const wireframeOn = toggleWireframe()
         toggleTerrainWireframe()
         toggleStaticColliderWireframe()
+        toggleRemotePlayerWireframe()
         FishAdder.toggleLabels()
         showNotification(
           `Debug overlays: ${wireframeOn ? 'ON' : 'OFF'}`,

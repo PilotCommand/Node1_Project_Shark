@@ -967,7 +967,7 @@ export function createPlayerBody(overrideCapsuleParams = null) {
       .setMass(CONFIG.player.mass)
       .setCollisionGroups(createCollisionGroups(CONFIG.groups.PLAYER, CONFIG.groups.TERRAIN | CONFIG.groups.NPC))
       // Rotate capsule to align with Z axis (fish forward direction)
-      .setRotation({ x: 0.7071068, y: 0, z: 0, w: 0.7071068 })  // 90° around X
+      .setRotation({ x: 0.7071068, y: 0, z: 0, w: 0.7071068 })  // 90Â° around X
       // Enable collision events for debugging
       .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS)
     
@@ -1103,6 +1103,311 @@ export function removeCreatureBody(id) {
 }
 
 // ============================================================================
+// REMOTE PLAYER PHYSICS (with debug wireframes)
+// ============================================================================
+
+// Storage for remote player physics bodies and debug wireframes
+const remotePlayerBodies = new Map()  // id -> { rigidBody, collider, mesh, debugMesh }
+let remotePlayerWireframeVisible = false
+
+/**
+ * Create physics body for a remote player with debug wireframe
+ * @param {string} id - Remote player ID
+ * @param {THREE.Object3D} mesh - Remote player mesh
+ * @param {{ radius: number, halfHeight: number }} capsuleParams - Capsule dimensions
+ * @returns {boolean} Success
+ */
+export function createRemotePlayerBody(id, mesh, capsuleParams) {
+  if (!physicsReady) {
+    console.warn('[Physics] Not initialized - cannot create remote player body')
+    return false
+  }
+  
+  if (remotePlayerBodies.has(id)) {
+    console.warn(`[Physics] Remote player body '${id}' already exists, removing old one`)
+    removeRemotePlayerBody(id)
+  }
+  
+  const { radius, halfHeight } = capsuleParams
+  const position = mesh.position
+  
+  try {
+    // Create kinematic rigid body (position controlled by network updates, not physics)
+    const bodyDesc = RAPIER.RigidBodyDesc.kinematicPositionBased()
+      .setTranslation(position.x, position.y, position.z)
+    
+    const rigidBody = world.createRigidBody(bodyDesc)
+    
+    // Create capsule collider (rotated to Z axis like local player)
+    const colliderDesc = RAPIER.ColliderDesc.capsule(halfHeight, radius)
+      .setFriction(CONFIG.npc.friction)
+      .setRestitution(CONFIG.npc.restitution)
+      .setCollisionGroups(createCollisionGroups(CONFIG.groups.NPC, CONFIG.groups.TERRAIN | CONFIG.groups.PLAYER | CONFIG.groups.NPC))
+      .setRotation({ x: 0.7071068, y: 0, z: 0, w: 0.7071068 })  // 90° around X
+    
+    const collider = world.createCollider(colliderDesc, rigidBody)
+    
+    // Create debug wireframe for the capsule
+    let debugMesh = null
+    if (sceneRef) {
+      debugMesh = createRemotePlayerDebugWireframe(capsuleParams)
+      if (debugMesh) {
+        debugMesh.visible = remotePlayerWireframeVisible
+        debugMesh.name = `physics-debug-remote-${id}`
+        // Attach to mesh so it follows the player
+        mesh.add(debugMesh)
+      }
+    }
+    
+    // Store reference
+    remotePlayerBodies.set(id, {
+      rigidBody,
+      collider,
+      mesh,
+      debugMesh,
+      capsuleParams,
+    })
+    
+    if (CONFIG.debug) {
+      console.log(`[Physics] Created remote player body: ${id} (r=${radius.toFixed(2)}, h=${halfHeight.toFixed(2)})`)
+    }
+    
+    return true
+  } catch (error) {
+    console.error(`[Physics] Failed to create remote player body '${id}':`, error)
+    return false
+  }
+}
+
+/**
+ * Create debug wireframe for remote player capsule
+ * @param {{ radius: number, halfHeight: number }} capsuleParams
+ * @returns {THREE.Object3D|null}
+ */
+function createRemotePlayerDebugWireframe(capsuleParams) {
+  try {
+    const { radius, halfHeight } = capsuleParams
+    const group = new THREE.Group()
+    group.name = 'remote-player-wireframe'
+    
+    const material = new THREE.LineBasicMaterial({
+      color: DEBUG_WIREFRAME.color,
+      transparent: true,
+      opacity: DEBUG_WIREFRAME.opacity,
+      depthTest: DEBUG_WIREFRAME.depthTest,
+      depthWrite: DEBUG_WIREFRAME.depthWrite,
+    })
+    
+    const segments = 16
+    const rings = 8
+    
+    // === CYLINDER BODY ===
+    // Vertical lines
+    for (let i = 0; i < segments; i++) {
+      const angle = (i / segments) * Math.PI * 2
+      const x = Math.cos(angle) * radius
+      const y = Math.sin(angle) * radius
+      
+      const points = [
+        new THREE.Vector3(x, y, -halfHeight),
+        new THREE.Vector3(x, y, halfHeight),
+      ]
+      const geometry = new THREE.BufferGeometry().setFromPoints(points)
+      group.add(new THREE.Line(geometry, material))
+    }
+    
+    // Horizontal rings on cylinder
+    const cylinderRings = 3
+    for (let r = 0; r <= cylinderRings; r++) {
+      const z = -halfHeight + (r / cylinderRings) * (halfHeight * 2)
+      const ringPoints = []
+      
+      for (let i = 0; i <= segments; i++) {
+        const angle = (i / segments) * Math.PI * 2
+        ringPoints.push(new THREE.Vector3(
+          Math.cos(angle) * radius,
+          Math.sin(angle) * radius,
+          z
+        ))
+      }
+      
+      const geometry = new THREE.BufferGeometry().setFromPoints(ringPoints)
+      group.add(new THREE.Line(geometry, material))
+    }
+    
+    // === HEMISPHERES ===
+    // Top hemisphere (positive Z)
+    createRemoteHemisphereWireframe(group, material, radius, halfHeight, 1, segments, rings)
+    
+    // Bottom hemisphere (negative Z)
+    createRemoteHemisphereWireframe(group, material, radius, -halfHeight, -1, segments, rings)
+    
+    group.renderOrder = 999  // Render on top
+    
+    return group
+  } catch (error) {
+    console.warn('[Physics] Failed to create remote player debug wireframe:', error)
+    return null
+  }
+}
+
+/**
+ * Create hemisphere wireframe lines for remote player
+ */
+function createRemoteHemisphereWireframe(group, material, radius, zOffset, direction, segments, rings) {
+  // Latitude rings
+  for (let r = 1; r <= rings; r++) {
+    const phi = (r / rings) * (Math.PI / 2)
+    const ringRadius = Math.cos(phi) * radius
+    const z = zOffset + direction * Math.sin(phi) * radius
+    
+    const points = []
+    for (let i = 0; i <= segments; i++) {
+      const theta = (i / segments) * Math.PI * 2
+      points.push(new THREE.Vector3(
+        Math.cos(theta) * ringRadius,
+        Math.sin(theta) * ringRadius,
+        z
+      ))
+    }
+    
+    const geometry = new THREE.BufferGeometry().setFromPoints(points)
+    group.add(new THREE.Line(geometry, material))
+  }
+  
+  // Longitude lines (meridians)
+  const meridians = 4
+  for (let i = 0; i < meridians; i++) {
+    const theta = (i / meridians) * Math.PI * 2
+    const points = []
+    
+    for (let r = 0; r <= rings; r++) {
+      const phi = (r / rings) * (Math.PI / 2)
+      const x = Math.cos(theta) * Math.cos(phi) * radius
+      const y = Math.sin(theta) * Math.cos(phi) * radius
+      const z = zOffset + direction * Math.sin(phi) * radius
+      points.push(new THREE.Vector3(x, y, z))
+    }
+    
+    const geometry = new THREE.BufferGeometry().setFromPoints(points)
+    group.add(new THREE.Line(geometry, material))
+  }
+}
+
+/**
+ * Remove remote player physics body
+ * @param {string} id
+ */
+export function removeRemotePlayerBody(id) {
+  const entry = remotePlayerBodies.get(id)
+  if (!entry) return
+  
+  // Remove rigid body from physics world
+  if (entry.rigidBody && world) {
+    world.removeRigidBody(entry.rigidBody)
+  }
+  
+  // Remove debug wireframe from mesh
+  if (entry.debugMesh && entry.debugMesh.parent) {
+    entry.debugMesh.parent.remove(entry.debugMesh)
+    entry.debugMesh.traverse(child => {
+      if (child.geometry) child.geometry.dispose()
+      if (child.material) child.material.dispose()
+    })
+  }
+  
+  remotePlayerBodies.delete(id)
+  
+  if (CONFIG.debug) {
+    console.log(`[Physics] Removed remote player body: ${id}`)
+  }
+}
+
+/**
+ * Update remote player physics body position (called each frame from RemotePlayerManager)
+ * @param {string} id
+ * @param {THREE.Vector3} position
+ * @param {THREE.Quaternion} rotation
+ */
+export function updateRemotePlayerBody(id, position, rotation) {
+  const entry = remotePlayerBodies.get(id)
+  if (!entry || !entry.rigidBody) return
+  
+  // Update kinematic body position
+  entry.rigidBody.setNextKinematicTranslation({
+    x: position.x,
+    y: position.y,
+    z: position.z,
+  })
+  
+  // Update rotation if provided
+  if (rotation) {
+    entry.rigidBody.setNextKinematicRotation({
+      x: rotation.x,
+      y: rotation.y,
+      z: rotation.z,
+      w: rotation.w,
+    })
+  }
+}
+
+/**
+ * Toggle remote player debug wireframe visibility
+ * @returns {boolean} New visibility state
+ */
+export function toggleRemotePlayerWireframe() {
+  remotePlayerWireframeVisible = !remotePlayerWireframeVisible
+  
+  for (const [id, entry] of remotePlayerBodies) {
+    if (entry.debugMesh) {
+      entry.debugMesh.visible = remotePlayerWireframeVisible
+    }
+  }
+  
+  console.log(`[Physics] Remote player wireframes: ${remotePlayerWireframeVisible ? 'ON' : 'OFF'} (${remotePlayerBodies.size} players)`)
+  return remotePlayerWireframeVisible
+}
+
+/**
+ * Set remote player debug wireframe visibility explicitly
+ * @param {boolean} visible
+ */
+export function setRemotePlayerWireframeVisible(visible) {
+  remotePlayerWireframeVisible = visible
+  
+  for (const [id, entry] of remotePlayerBodies) {
+    if (entry.debugMesh) {
+      entry.debugMesh.visible = remotePlayerWireframeVisible
+    }
+  }
+}
+
+/**
+ * Check if remote player wireframes are visible
+ * @returns {boolean}
+ */
+export function isRemotePlayerWireframeVisible() {
+  return remotePlayerWireframeVisible
+}
+
+/**
+ * Get remote player physics body
+ * @param {string} id
+ * @returns {object|null}
+ */
+export function getRemotePlayerBody(id) {
+  return remotePlayerBodies.get(id) || null
+}
+
+/**
+ * Get count of remote player physics bodies
+ * @returns {number}
+ */
+export function getRemotePlayerBodyCount() {
+  return remotePlayerBodies.size
+}
+
+// ============================================================================
 // PHYSICS UPDATE LOOP
 // ============================================================================
 
@@ -1141,7 +1446,7 @@ export function updatePhysics(delta) {
 
 /**
  * Sync rigid body rotation to match mesh rotation
- * For player: combines mesh rotation with capsule's initial 90° X offset
+ * For player: combines mesh rotation with capsule's initial 90Â° X offset
  */
 function syncBodyRotation(body, mesh, isPlayer) {
   // Get mesh rotation as quaternion
@@ -1149,7 +1454,7 @@ function syncBodyRotation(body, mesh, isPlayer) {
   meshQuat.setFromEuler(mesh.rotation)
   
   if (isPlayer) {
-    // Player capsule has a 90° X rotation offset (capsule aligned to Z axis)
+    // Player capsule has a 90Â° X rotation offset (capsule aligned to Z axis)
     // We need to combine: meshRotation * capsuleOffset
     const capsuleOffset = new THREE.Quaternion()
     capsuleOffset.setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2)
@@ -1486,11 +1791,26 @@ export function debugPhysics() {
   console.log(`Player in water: ${playerInWater ? 'YES' : 'NO'}`)
   console.log(`Static colliders: ${staticColliders.size}`)
   console.log(`Creature bodies: ${creatureBodies.size}`)
+  console.log(`Remote player bodies: ${remotePlayerBodies.size}`)
+  console.log(`Remote player wireframes: ${remotePlayerWireframeVisible ? 'ON' : 'OFF'}`)
   
   if (staticColliders.size > 0) {
     console.group('Static Colliders')
     for (const [id, entry] of staticColliders) {
       console.log(`  - ${id}`)
+    }
+    console.groupEnd()
+  }
+  
+  if (remotePlayerBodies.size > 0) {
+    console.group('Remote Players')
+    for (const [id, entry] of remotePlayerBodies) {
+      const pos = entry.rigidBody?.translation()
+      if (pos) {
+        console.log(`  - ${id}: (${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)})`)
+      } else {
+        console.log(`  - ${id}: (no position)`)
+      }
     }
     console.groupEnd()
   }
@@ -1545,6 +1865,11 @@ export function disposePhysics() {
   // Remove all creature bodies
   for (const [id] of creatureBodies) {
     removeCreatureBody(id)
+  }
+  
+  // Remove all remote player bodies
+  for (const [id] of remotePlayerBodies) {
+    removeRemotePlayerBody(id)
   }
   
   // Remove all static colliders
@@ -1618,6 +1943,16 @@ export default {
   removePlayerBody,
   createCreatureBody,
   removeCreatureBody,
+  
+  // Remote Players
+  createRemotePlayerBody,
+  removeRemotePlayerBody,
+  updateRemotePlayerBody,
+  toggleRemotePlayerWireframe,
+  setRemotePlayerWireframeVisible,
+  isRemotePlayerWireframeVisible,
+  getRemotePlayerBody,
+  getRemotePlayerBodyCount,
   
   // Update
   updatePhysics,

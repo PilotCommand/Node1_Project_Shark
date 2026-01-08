@@ -21,6 +21,7 @@
 
 import * as THREE from 'three'
 import { MeshRegistry, Category, Tag } from './MeshRegistry.js'
+import { Determine } from './determine.js'
 
 // ============================================================================
 // CONFIGURATION
@@ -534,7 +535,7 @@ function getRandomPlayablePoint() {
     return null
   }
   
-  const index = Math.floor(Math.random() * playablePoints.length)
+  const index = Determine.index(playablePoints.length)
   return playablePoints[index].clone()
 }
 
@@ -603,7 +604,7 @@ function getRandomPlayablePointConstrained(constraints = {}) {
     return null
   }
   
-  const index = Math.floor(Math.random() * candidates.length)
+  const index = Determine.index(candidates.length)
   return candidates[index].clone()
 }
 

@@ -7,6 +7,14 @@
 import * as THREE from 'three'
 import { PositionBuffer } from './Interpolation.js'
 import { generateCreature } from '../src/Encyclopedia.js'
+import { computeCapsuleParams } from '../src/ScaleMesh.js'
+import {
+  isPhysicsReady,
+  createRemotePlayerBody,
+  removeRemotePlayerBody,
+  updateRemotePlayerBody,
+  toggleRemotePlayerWireframe as physicsToggleRemotePlayerWireframe,
+} from '../src/Physics.js'
 
 // ============================================================================
 // CONFIGURATION
@@ -84,7 +92,34 @@ class RemotePlayer {
       // Apply the actual scale from the player
       this.mesh.scale.setScalar(this.scale || 1)
       this.scene.add(this.mesh)
+      
+      // Create physics body for this remote player
+      this.createPhysicsBody()
     }
+  }
+  
+  /**
+   * Create physics body and debug wireframe for this remote player
+   */
+  createPhysicsBody() {
+    if (!isPhysicsReady() || !this.mesh) return
+    
+    // Compute capsule params from the mesh
+    const capsuleParams = computeCapsuleParams(this.mesh, this.creature)
+    
+    // Scale the capsule params by the player's scale
+    const scaledCapsuleParams = {
+      radius: capsuleParams.radius * (this.scale || 1),
+      halfHeight: capsuleParams.halfHeight * (this.scale || 1),
+    }
+    
+    // Store for later updates
+    this.capsuleParams = scaledCapsuleParams
+    
+    // Create the physics body with debug wireframe
+    createRemotePlayerBody(this.id, this.mesh, scaledCapsuleParams)
+    
+    console.log(`[RemotePlayer] Created physics body for ${this.id}`)
   }
   
   /**
@@ -209,6 +244,9 @@ class RemotePlayer {
   }
   
   updateCreature(creature) {
+    // Remove old physics body
+    removeRemotePlayerBody(this.id)
+    
     if (this.mesh) {
       this.scene.remove(this.mesh)
       this.disposeMesh()
@@ -259,6 +297,13 @@ class RemotePlayer {
     this.mesh.position.copy(this.position)
     this.mesh.rotation.copy(this.rotation)
     this.mesh.scale.setScalar(this.scale)
+    
+    // Sync physics body position
+    if (isPhysicsReady()) {
+      // Convert Euler to Quaternion for physics
+      const quat = new THREE.Quaternion().setFromEuler(this.rotation)
+      updateRemotePlayerBody(this.id, this.position, quat)
+    }
   }
   
   /**
@@ -272,6 +317,9 @@ class RemotePlayer {
   }
   
   destroy() {
+    // Remove physics body first
+    removeRemotePlayerBody(this.id)
+    
     if (this.mesh) {
       this.scene.remove(this.mesh)
       this.disposeMesh()
@@ -371,6 +419,14 @@ export class RemotePlayerManager {
     this.players.forEach(player => {
       player.update(delta, renderTime)
     })
+  }
+  
+  /**
+   * Toggle debug wireframes for all remote players
+   * @returns {boolean} New visibility state
+   */
+  toggleWireframes() {
+    return physicsToggleRemotePlayerWireframe()
   }
   
   destroy() {
