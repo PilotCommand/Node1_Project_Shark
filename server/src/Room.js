@@ -174,6 +174,11 @@ export class Room {
         this.handleNPCSnapshot(ws, data)
         break
         
+      case MSG.ABILITY_START:
+      case MSG.ABILITY_STOP:
+        this.handleAbilityChange(ws, data)
+        break
+        
       default:
         console.warn(`[Room ${this.id}] Unknown message type: ${data.type}`)
     }
@@ -315,6 +320,27 @@ export class Room {
     this.broadcast(MSG.NPC_SNAPSHOT, {
       tick: data.tick,
       fish: data.fish,
+    }, ws.id)
+  }
+  
+  /**
+   * Handle ability state change - relay to all other players
+   * @param {WebSocket} ws - The sending player
+   * @param {Object} data - { type: ABILITY_START|ABILITY_STOP, ability: string }
+   */
+  handleAbilityChange(ws, data) {
+    // Validate ability key
+    const validAbilities = ['sprinter', 'stacker', 'camper', 'attacker']
+    if (!data.ability || !validAbilities.includes(data.ability)) {
+      console.warn(`[Room ${this.id}] Invalid ability key from player ${ws.id}: ${data.ability}`)
+      return
+    }
+    
+    // Relay to all OTHER players (not back to sender)
+    // Include the sender's player ID so others know who activated/deactivated
+    this.broadcast(data.type, {
+      id: ws.id,
+      ability: data.ability,
     }, ws.id)
   }
   

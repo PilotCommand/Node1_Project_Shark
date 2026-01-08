@@ -50,7 +50,11 @@ export const MSG = {
   
   // World sync (70-79)
   REQUEST_MAP_CHANGE: 70,  // Client â†’ Server: Request new map
-  MAP_CHANGE: 71,          // Server â†’ All Clients: New map seed
+  MAP_CHANGE: 71,          // Server -> All Clients: New map seed
+
+  // Abilities (80-89)
+  ABILITY_START: 80,       // Client -> Server -> Others: Player activated ability
+  ABILITY_STOP: 81,        // Client -> Server -> Others: Player deactivated ability
 }
 
 // ============================================================================

@@ -15,6 +15,7 @@ import Sprinter, { init as initSprinter, clear as clearSprinter } from './sprint
 import Stacker, { init as initStacker, debugStacker } from './stacker.js'
 import Camper, { init as initCamper, debugCamper } from './camper.js'
 import Attacker, { init as initAttacker, debugAttacker } from './attacker.js'
+import { networkManager } from '../network/NetworkManager.js'
 
 // ============================================================================
 // 
@@ -166,6 +167,9 @@ export function activateExtra() {
   if (ability.onActivate) {
     ability.onActivate()
   }
+  
+  // Broadcast ability activation to network
+  networkManager.sendAbilityStart(ACTIVE_ABILITY)
 }
 
 /**
@@ -179,6 +183,9 @@ export function deactivateExtra() {
   if (ability.onDeactivate) {
     ability.onDeactivate()
   }
+  
+  // Broadcast ability deactivation to network
+  networkManager.sendAbilityStop(ACTIVE_ABILITY)
 }
 
 /**

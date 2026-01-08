@@ -15,6 +15,13 @@ import {
   updateRemotePlayerBody,
   toggleRemotePlayerWireframe as physicsToggleRemotePlayerWireframe,
 } from '../src/Physics.js'
+import { 
+  createRemoteTrail, 
+  updateRemoteTrail, 
+  stopRemoteTrail, 
+  destroyRemoteTrail,
+  updateAllRemoteTrails,
+} from '../src/sprinter.js'
 
 // ============================================================================
 // CONFIGURATION
@@ -50,6 +57,10 @@ class RemotePlayer {
     this.creatureData = data.creature || null
     this.mesh = null
     this.creature = null
+    
+    // Ability state tracking
+    this.activeAbility = null  // Currently active ability key
+    this.isSprinting = false   // Is the sprinter ability active?
     
     this.positionBuffer = new PositionBuffer(CONFIG.interpolationDelay)
     
@@ -260,6 +271,33 @@ class RemotePlayer {
     this.targetScale = newScale
   }
   
+  /**
+   * Set the ability state for this remote player
+   * @param {string} abilityKey - 'sprinter', 'stacker', 'camper', 'attacker'
+   * @param {boolean} isActive - Whether the ability is active
+   */
+  setAbilityState(abilityKey, isActive) {
+    // Handle sprinter ability specially
+    if (abilityKey === 'sprinter') {
+      if (isActive && !this.isSprinting) {
+        // Start sprinting - create trail
+        this.isSprinting = true
+        this.activeAbility = 'sprinter'
+        createRemoteTrail(this.id, this.scene)
+        console.log(`[RemotePlayer] ${this.id} started sprinting`)
+      } else if (!isActive && this.isSprinting) {
+        // Stop sprinting - stop trail (will fade out)
+        this.isSprinting = false
+        this.activeAbility = null
+        stopRemoteTrail(this.id)
+        console.log(`[RemotePlayer] ${this.id} stopped sprinting`)
+      }
+    } else {
+      // Other abilities - just track state for now
+      this.activeAbility = isActive ? abilityKey : null
+    }
+  }
+  
   update(delta, renderTime) {
     if (!this.mesh) return
     
@@ -304,6 +342,20 @@ class RemotePlayer {
       const quat = new THREE.Quaternion().setFromEuler(this.rotation)
       updateRemotePlayerBody(this.id, this.position, quat)
     }
+    
+    // Update sprinter trail if active
+    if (this.isSprinting) {
+      // Calculate direction from rotation
+      const yaw = this.rotation.y
+      const pitch = this.rotation.x
+      const direction = new THREE.Vector3(
+        -Math.sin(yaw) * Math.cos(pitch),
+        Math.sin(pitch),
+        -Math.cos(yaw) * Math.cos(pitch)
+      ).normalize()
+      
+      updateRemoteTrail(this.id, delta, this.position, direction)
+    }
   }
   
   /**
@@ -317,6 +369,12 @@ class RemotePlayer {
   }
   
   destroy() {
+    // Clean up sprinter trail if active
+    if (this.isSprinting) {
+      destroyRemoteTrail(this.id)
+      this.isSprinting = false
+    }
+    
     // Remove physics body first
     removeRemotePlayerBody(this.id)
     
@@ -419,6 +477,22 @@ export class RemotePlayerManager {
     this.players.forEach(player => {
       player.update(delta, renderTime)
     })
+    
+    // Update all remote player trails (handles fading for stopped trails)
+    updateAllRemoteTrails(delta)
+  }
+  
+  /**
+   * Set the ability state for a remote player
+   * @param {number} playerId - The player ID
+   * @param {string} abilityKey - 'sprinter', 'stacker', 'camper', 'attacker'
+   * @param {boolean} isActive - Whether the ability is active
+   */
+  setAbilityState(playerId, abilityKey, isActive) {
+    const player = this.players.get(playerId)
+    if (player) {
+      player.setAbilityState(abilityKey, isActive)
+    }
   }
   
   /**

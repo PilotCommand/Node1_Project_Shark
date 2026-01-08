@@ -182,7 +182,7 @@ C:.
 ├───shared
 └───src
 
-C:\Users\melas\OneDrive\Documents\Node1_Projects\shark>cd C:\Users\melas\OneDrive\Documents\Node1_Projects\shark\src
+C:\Users\melas\OneDrive\Documents\Node1_Projects\shark>cd src
 
 C:\Users\melas\OneDrive\Documents\Node1_Projects\shark\src>tree /f
 Folder PATH listing for volume OS
