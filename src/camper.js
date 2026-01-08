@@ -1424,7 +1424,7 @@ export function applyRemoteCamouflage(mesh, colorHex, terrainType, mimicSeed) {
   const processedMaterials = new Set()
   let materialCount = 0
   
-  // Store original colors directly on materials and apply camouflage
+  // Store original colors directly on materials (but don't apply camo yet - will fade in)
   mesh.traverse((child) => {
     // Skip any existing mimic parts
     if (child.userData.isDisguiseMimic || child.userData.isRemoteCamouflaged) {
@@ -1451,13 +1451,7 @@ export function applyRemoteCamouflage(mesh, colorHex, terrainType, mimicSeed) {
           }
         }
         
-        // Apply camouflage color
-        if (mat.color) {
-          mat.color.copy(color)
-        }
-        
-        // Apply camouflage opacity
-        mat.opacity = CAMPER_CONFIG.fishCamoOpacity
+        // Set up for transparency (needed for fade)
         mat.transparent = true
         mat.depthWrite = false
         mat.needsUpdate = true
@@ -1471,16 +1465,33 @@ export function applyRemoteCamouflage(mesh, colorHex, terrainType, mimicSeed) {
     }
   })
   
-  console.log(`[Camper Remote] Applied camo to ${materialCount} unique materials`)
+  console.log(`[Camper Remote] Stored ${materialCount} unique materials for fade-in`)
   
   // Create disguise mimic for remote player using deterministic seed
+  // Start mimic transparent for fade-in
   const mimicGroup = createRemoteDisguiseMimic(mesh, color, terrainType || 'boulder', mimicSeed)
+  
+  // Make mimic start transparent
+  if (mimicGroup) {
+    mimicGroup.traverse((child) => {
+      if (child.material && child.userData.isDisguiseMimic) {
+        child.material.transparent = true
+        child.material.opacity = 0
+        child.material.depthWrite = false
+        child.material.needsUpdate = true
+      }
+    })
+  }
   
   console.log(`[Camper Remote] Mimic created: ${mimicGroup ? mimicGroup.children.length + ' pieces' : 'none'}`)
   
   return {
     mimicGroup,
     mesh,
+    camoColor: color.clone(),  // Store for fade lerping
+    isFadingIn: true,          // Start fading in
+    isFadingOut: false,
+    fadeBlend: 0,              // Start at 0 for fade-in
   }
 }
 
@@ -1563,6 +1574,94 @@ export function removeRemoteCamouflage(cleanupData) {
   }
   
   console.log('[Camper Remote] Camouflage removed')
+}
+
+/**
+ * Start fading out camouflage for a remote player (instead of instant removal)
+ * @param {Object} cleanupData - Data returned from applyRemoteCamouflage
+ */
+export function startRemoteCamouflageFadeOut(cleanupData) {
+  if (!cleanupData) return
+  
+  cleanupData.isFadingIn = false
+  cleanupData.isFadingOut = true
+  // fadeBlend should already be at 1.0 if fully faded in, or wherever it was
+  
+  console.log('[Camper Remote] Starting camouflage fade out')
+}
+
+/**
+ * Update remote camouflage fade animation (handles both fade-in and fade-out)
+ * @param {Object} cleanupData - Data returned from applyRemoteCamouflage
+ * @param {number} delta - Time since last frame in seconds
+ * @returns {boolean} True if fade-out is complete and cleanup should happen
+ */
+export function updateRemoteCamouflageFade(cleanupData, delta) {
+  if (!cleanupData) return false
+  if (!cleanupData.isFadingIn && !cleanupData.isFadingOut) return false
+  
+  const { mesh, mimicGroup, camoColor } = cleanupData
+  
+  // Update blend based on fade direction
+  if (cleanupData.isFadingIn) {
+    cleanupData.fadeBlend = Math.min(1, cleanupData.fadeBlend + delta * CAMPER_CONFIG.transitionSpeed)
+    
+    // Check if fade-in complete
+    if (cleanupData.fadeBlend >= 1) {
+      cleanupData.isFadingIn = false
+      console.log('[Camper Remote] Fade-in complete')
+    }
+  } else if (cleanupData.isFadingOut) {
+    cleanupData.fadeBlend = Math.max(0, cleanupData.fadeBlend - delta * CAMPER_CONFIG.transitionSpeed)
+  }
+  
+  const blend = cleanupData.fadeBlend
+  
+  // Track processed materials to handle shared materials
+  const processedMaterials = new Set()
+  
+  // Apply blend to materials
+  if (mesh) {
+    mesh.traverse((child) => {
+      if (child.userData.isDisguiseMimic) return
+      
+      if (child.material) {
+        const materials = Array.isArray(child.material) ? child.material : [child.material]
+        
+        for (const mat of materials) {
+          if (processedMaterials.has(mat)) continue
+          processedMaterials.add(mat)
+          
+          const original = mat.userData._remoteCamoOriginal
+          if (!original) continue
+          
+          // Lerp color between original and camo color
+          if (mat.color && original.color && camoColor) {
+            mat.color.copy(original.color).lerp(camoColor, blend)
+          }
+          
+          // Lerp opacity between original and camo opacity
+          const camoOpacity = CAMPER_CONFIG.fishCamoOpacity
+          mat.opacity = original.opacity + (camoOpacity - original.opacity) * blend
+          mat.needsUpdate = true
+        }
+      }
+    })
+  }
+  
+  // Apply blend to mimic opacity
+  if (mimicGroup) {
+    const mimicMaxOpacity = CAMPER_CONFIG.disguiseMimic.useOpacity ? CAMPER_CONFIG.disguiseMimic.opacity : 1.0
+    mimicGroup.traverse((child) => {
+      if (child.material && child.userData.isDisguiseMimic) {
+        child.material.opacity = blend * mimicMaxOpacity
+        child.material.needsUpdate = true
+      }
+    })
+  }
+  
+  // Return true only if fade-OUT is complete (fade-in complete returns false)
+  return cleanupData.isFadingOut && blend <= 0
 }
 
 /**

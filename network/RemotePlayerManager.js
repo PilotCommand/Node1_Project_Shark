@@ -74,6 +74,7 @@ class RemotePlayer {
     this.camouflageCleanup = null  // Cleanup data for camper ability
     this._pendingCamperState = null  // Queued camper state change
     this._processingCamper = false   // Is camper state change being processed?
+    this._camouflageFading = false   // Is camouflage currently fading (in or out)?
     
     this.positionBuffer = new PositionBuffer(CONFIG.interpolationDelay)
     
@@ -357,29 +358,60 @@ class RemotePlayer {
     const camper = await getCamperModule()
     
     if (isActive) {
-      // If already camouflaged, remove old first
+      // If already camouflaged (or fading), remove old first
       if (this.camouflageCleanup) {
         console.log(`[RemotePlayer] ${this.id} - removing old camouflage before applying new`)
         camper.removeRemoteCamouflage(this.camouflageCleanup)
         this.camouflageCleanup = null
+        this._camouflageFading = false
       }
       
-      // Start camouflage - apply color and create mimic
+      // Start camouflage - apply color and create mimic (starts fade-in)
       const colorHex = data.color || '808080'  // Default gray if no color
       const terrainType = data.terrain || 'boulder'  // Default to boulder
       const mimicSeed = data.mimicSeed !== undefined ? data.mimicSeed : Math.floor(Math.random() * 0xFFFFFFFF)
       
       this.camouflageCleanup = camper.applyRemoteCamouflage(this.mesh, colorHex, terrainType, mimicSeed)
       this.activeAbility = 'camper'
-      console.log(`[RemotePlayer] ${this.id} started camouflage (color: #${colorHex}, terrain: ${terrainType}, seed: ${mimicSeed})`)
+      this._camouflageFading = true  // Start fading in
+      console.log(`[RemotePlayer] ${this.id} started camouflage fade-in (color: #${colorHex}, terrain: ${terrainType}, seed: ${mimicSeed})`)
     } else {
-      // Stop camouflage - restore original appearance
+      // Stop camouflage - start fade out instead of immediate removal
       if (this.camouflageCleanup) {
-        camper.removeRemoteCamouflage(this.camouflageCleanup)
-        this.camouflageCleanup = null
+        camper.startRemoteCamouflageFadeOut(this.camouflageCleanup)
+        this._camouflageFading = true
         this.activeAbility = null
-        console.log(`[RemotePlayer] ${this.id} stopped camouflage`)
+        console.log(`[RemotePlayer] ${this.id} starting camouflage fade out`)
       }
+    }
+  }
+  
+  /**
+   * Update camouflage fade animation (called each frame)
+   * Handles both fade-in and fade-out
+   * @param {number} delta - Time since last frame
+   */
+  updateCamouflageFade(delta) {
+    if (!this._camouflageFading || !this.camouflageCleanup) return
+    
+    // Module should already be loaded since we needed it to start the fade
+    // Use cached module synchronously
+    if (!camperModule) return
+    
+    const fadeOutComplete = camperModule.updateRemoteCamouflageFade(this.camouflageCleanup, delta)
+    
+    // Check if fade-in completed (no longer fading in but not fading out either)
+    if (!this.camouflageCleanup.isFadingIn && !this.camouflageCleanup.isFadingOut) {
+      this._camouflageFading = false
+      // Camouflage is now fully active, keep cleanup data for later fade-out
+    }
+    
+    if (fadeOutComplete) {
+      // Fade-out finished, do final cleanup
+      camperModule.removeRemoteCamouflage(this.camouflageCleanup)
+      this.camouflageCleanup = null
+      this._camouflageFading = false
+      console.log(`[RemotePlayer] ${this.id} camouflage fade complete`)
     }
   }
   
@@ -440,6 +472,11 @@ class RemotePlayer {
       ).normalize()
       
       updateRemoteTrail(this.id, delta, this.position, direction)
+    }
+    
+    // Update camouflage fade if active
+    if (this._camouflageFading) {
+      this.updateCamouflageFade(delta)
     }
   }
   
