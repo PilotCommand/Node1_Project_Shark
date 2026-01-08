@@ -13,10 +13,10 @@ import { generateCreature } from '../src/Encyclopedia.js'
 // ============================================================================
 
 const CONFIG = {
-  interpolationDelay: 100,
-  positionLerpFactor: 0.2,
-  rotationLerpFactor: 0.15,
-  scaleLerpFactor: 0.1,
+  interpolationDelay: 150,        // ms - buffer delay for smooth interpolation
+  positionSmoothTime: 0.1,        // seconds - time to smooth position (lower = snappier)
+  rotationSmoothTime: 0.08,       // seconds - time to smooth rotation
+  scaleSmoothTime: 0.2,           // seconds - time to smooth scale
   showNameTags: true,
   nameTagHeight: 2.5,
 }
@@ -81,9 +81,8 @@ class RemotePlayer {
       this.mesh.position.copy(this.position)
       this.mesh.rotation.order = 'YXZ'  // Match local player rotation order
       this.mesh.rotation.copy(this.rotation)
-      // Use a minimum scale of 3 so players are visible
-      const displayScale = Math.max(this.scale, 3)
-      this.mesh.scale.setScalar(displayScale)
+      // Apply the actual scale from the player
+      this.mesh.scale.setScalar(this.scale || 1)
       this.scene.add(this.mesh)
     }
   }
@@ -229,26 +228,47 @@ class RemotePlayer {
     const interpolated = this.positionBuffer.sample(renderTime)
     
     if (interpolated) {
-      this.position.set(interpolated.pos.x, interpolated.pos.y, interpolated.pos.z)
-      // Only use X (pitch) and Y (yaw), ignore Z (roll)
-      this.rotation.x = interpolated.rot.x
-      this.rotation.y = interpolated.rot.y
-      this.rotation.z = 0  // Local player never uses Z rotation
-      this.scale = interpolated.scale
-    } else {
-      this.position.lerp(this.targetPosition, CONFIG.positionLerpFactor)
-      
-      // Only interpolate X and Y rotation
-      this.rotation.x += (this.targetRotation.x - this.rotation.x) * CONFIG.rotationLerpFactor
-      this.rotation.y += (this.targetRotation.y - this.rotation.y) * CONFIG.rotationLerpFactor
-      // Z stays at 0
-      
-      this.scale += (this.targetScale - this.scale) * CONFIG.scaleLerpFactor
+      // We have interpolated data from the buffer - use it as target
+      this.targetPosition.set(interpolated.pos.x, interpolated.pos.y, interpolated.pos.z)
+      this.targetRotation.x = interpolated.rot.x
+      this.targetRotation.y = interpolated.rot.y
+      this.targetRotation.z = 0
+      this.targetScale = interpolated.scale
     }
     
+    // Frame-rate independent smoothing using exponential decay
+    // lerpFactor = 1 - e^(-delta / smoothTime)
+    const posFactor = 1 - Math.exp(-delta / CONFIG.positionSmoothTime)
+    const rotFactor = 1 - Math.exp(-delta / CONFIG.rotationSmoothTime)
+    const scaleFactor = 1 - Math.exp(-delta / CONFIG.scaleSmoothTime)
+    
+    // Smooth position
+    this.position.x += (this.targetPosition.x - this.position.x) * posFactor
+    this.position.y += (this.targetPosition.y - this.position.y) * posFactor
+    this.position.z += (this.targetPosition.z - this.position.z) * posFactor
+    
+    // Smooth rotation with angle wrapping
+    this.rotation.x += this.angleDiff(this.rotation.x, this.targetRotation.x) * rotFactor
+    this.rotation.y += this.angleDiff(this.rotation.y, this.targetRotation.y) * rotFactor
+    // Z stays at 0
+    
+    // Smooth scale
+    this.scale += (this.targetScale - this.scale) * scaleFactor
+    
+    // Apply to mesh
     this.mesh.position.copy(this.position)
     this.mesh.rotation.copy(this.rotation)
     this.mesh.scale.setScalar(this.scale)
+  }
+  
+  /**
+   * Calculate shortest angle difference (handles wraparound)
+   */
+  angleDiff(from, to) {
+    let diff = to - from
+    while (diff > Math.PI) diff -= Math.PI * 2
+    while (diff < -Math.PI) diff += Math.PI * 2
+    return diff
   }
   
   destroy() {
