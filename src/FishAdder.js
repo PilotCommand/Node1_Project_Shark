@@ -786,6 +786,14 @@ function spawnOneCreature(options = {}) {
     // Targets (set during planning)
     threatId: null,
     preyId: null,
+    
+    // VISUAL INTERPOLATION
+    // Simulation state (authoritative, updated at fixed timestep)
+    simPosition: spawnPosition.clone(),
+    simRotationY: creatureData.mesh.rotation.y,
+    // Previous simulation state (for interpolation)
+    prevSimPosition: spawnPosition.clone(),
+    prevSimRotationY: creatureData.mesh.rotation.y,
   }
   
   // Generate initial path
@@ -1346,18 +1354,56 @@ function update(deltaTime) {
     simulationTime = simulationTick * tickDuration + ticksToRun * tickDuration
   }
   
+  // INTERPOLATION STEP 1: Before simulation, restore authoritative positions
+  // and snapshot them as "previous" state for interpolation
+  if (ticksToRun > 0) {
+    for (const npc of npcs.values()) {
+      // Copy current sim state to previous (for interpolation)
+      npc.prevSimPosition.copy(npc.simPosition)
+      npc.prevSimRotationY = npc.simRotationY
+      
+      // Restore mesh to authoritative sim position before running new ticks
+      npc.mesh.position.copy(npc.simPosition)
+      npc.mesh.rotation.y = npc.simRotationY
+    }
+  }
+  
   // Run fixed simulation ticks
   for (let i = 0; i < ticksToRun; i++) {
     simulateTick(tickDuration)
     simulationTick++
   }
   
+  // INTERPOLATION STEP 2: After simulation, save new authoritative state
+  if (ticksToRun > 0) {
+    for (const npc of npcs.values()) {
+      npc.simPosition.copy(npc.mesh.position)
+      npc.simRotationY = npc.mesh.rotation.y
+    }
+  }
+  
   // Apply host corrections AFTER simulation (for follower clients)
-  // This smoothly lerps NPCs toward the host's authoritative positions
+  // Corrections update simPosition directly, then visual interpolation handles the rest
   for (const npc of npcs.values()) {
     if (npc.correctionTarget) {
       applyCorrection(npc)
     }
+  }
+  
+  // INTERPOLATION STEP 3: Calculate alpha and interpolate visual positions
+  // Alpha = how far we are between the last tick and the next tick
+  const timeSinceLastTick = simulationTime - (simulationTick * tickDuration)
+  const alpha = Math.min(1.0, timeSinceLastTick / tickDuration)
+  
+  for (const npc of npcs.values()) {
+    // Lerp position
+    npc.mesh.position.lerpVectors(npc.prevSimPosition, npc.simPosition, alpha)
+    
+    // Lerp rotation (handle angle wrapping)
+    let angleDiff = npc.simRotationY - npc.prevSimRotationY
+    while (angleDiff > Math.PI) angleDiff -= Math.PI * 2
+    while (angleDiff < -Math.PI) angleDiff += Math.PI * 2
+    npc.mesh.rotation.y = npc.prevSimRotationY + angleDiff * alpha
   }
 }
 
@@ -2347,12 +2393,13 @@ function getSnapshot() {
   const fishArray = []
   
   for (const [id, npc] of npcs) {
+    // Use authoritative simulation position, not interpolated visual position
     fishArray.push({
       id: id,
-      x: npc.mesh.position.x,
-      y: npc.mesh.position.y,
-      z: npc.mesh.position.z,
-      ry: npc.mesh.rotation.y,
+      x: npc.simPosition.x,
+      y: npc.simPosition.y,
+      z: npc.simPosition.z,
+      ry: npc.simRotationY,
       gi: npc.currentGridIdx,
       pi: npc.pathIndex,
       st: StateToNumber[npc.state] || 0,
@@ -2422,6 +2469,7 @@ function applySnapshot(snapshot) {
 /**
  * Apply correction lerping in update loop
  * Called internally by update() for all NPCs with correction targets
+ * Updates the authoritative simPosition, NOT the visual mesh.position
  * 
  * @param {object} npc - NPC data object
  */
@@ -2429,26 +2477,24 @@ function applyCorrection(npc) {
   const target = npc.correctionTarget
   if (!target) return
   
-  const pos = npc.mesh.position
-  
-  // Lerp position toward correction target
-  pos.x += (target.x - pos.x) * correctionSpeed
-  pos.y += (target.y - pos.y) * correctionSpeed
-  pos.z += (target.z - pos.z) * correctionSpeed
+  // Lerp simulation position toward correction target
+  npc.simPosition.x += (target.x - npc.simPosition.x) * correctionSpeed
+  npc.simPosition.y += (target.y - npc.simPosition.y) * correctionSpeed
+  npc.simPosition.z += (target.z - npc.simPosition.z) * correctionSpeed
   
   // Lerp rotation (handle angle wrapping)
-  let angleDiff = target.ry - npc.mesh.rotation.y
+  let angleDiff = target.ry - npc.simRotationY
   
   // Wrap to [-PI, PI]
   while (angleDiff > Math.PI) angleDiff -= Math.PI * 2
   while (angleDiff < -Math.PI) angleDiff += Math.PI * 2
   
-  npc.mesh.rotation.y += angleDiff * correctionSpeed
+  npc.simRotationY += angleDiff * correctionSpeed
   
   // Clear correction target if close enough
-  const dx = target.x - pos.x
-  const dy = target.y - pos.y
-  const dz = target.z - pos.z
+  const dx = target.x - npc.simPosition.x
+  const dy = target.y - npc.simPosition.y
+  const dz = target.z - npc.simPosition.z
   const distSq = dx * dx + dy * dy + dz * dz
   
   if (distSq < 0.01 && Math.abs(angleDiff) < 0.01) {
