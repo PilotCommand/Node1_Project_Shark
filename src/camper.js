@@ -9,9 +9,10 @@
 import * as THREE from 'three'
 import { getPlayer } from './player.js'
 import { setCapacityDepleting, hasCapacity } from './hud.js'
+import { networkManager } from '../network/NetworkManager.js'
 
 // ============================================================================
-// ⭐ CAPACITY CONFIG - EASY TO EDIT! ⭐
+// â­ CAPACITY CONFIG - EASY TO EDIT! â­
 // ============================================================================
 
 const CAPACITY_CONFIG = {
@@ -1122,6 +1123,10 @@ function breakCamouflage() {
   makeDisguiseMimicTransparent()  // Switch to transparent for fade out
   camoState = 'idle'
   isCamouflaged = false
+  
+  // Notify network that camouflage has ended
+  networkManager.sendAbilityStop('camper')
+  
   // Color will fade out in onPassiveUpdate
 }
 
@@ -1375,4 +1380,283 @@ export function manualBreakCamo() {
   if (isCamouflaged) {
     breakCamouflage()
   }
+}
+
+/**
+ * Get the current target color hex string for network sync
+ * @returns {string|null} Hex color string like "ff8844" or null if not camouflaged
+ */
+export function getTargetColorHex() {
+  return targetColor ? targetColor.getHexString() : null
+}
+
+/**
+ * Get the detected terrain type for network sync
+ * @returns {string|null} 'coral', 'boulder', or null
+ */
+export function getDetectedTerrainType() {
+  return detectedTerrainType
+}
+
+// ============================================================================
+// REMOTE PLAYER CAMOUFLAGE SUPPORT
+// ============================================================================
+
+/**
+ * Apply camouflage effect to a remote player mesh
+ * @param {THREE.Object3D} mesh - The remote player's mesh
+ * @param {string} colorHex - Hex color string (without #)
+ * @param {string} terrainType - 'coral' or 'boulder'
+ * @param {number} mimicSeed - Seed for deterministic mimic generation
+ * @returns {Object} Cleanup data for later removal
+ */
+export function applyRemoteCamouflage(mesh, colorHex, terrainType, mimicSeed) {
+  if (!mesh) {
+    console.warn('[Camper Remote] No mesh provided')
+    return null
+  }
+  
+  console.log(`[Camper Remote] Applying camouflage: color=#${colorHex}, terrain=${terrainType}, seed=${mimicSeed}`)
+  
+  const color = new THREE.Color(`#${colorHex}`)
+  
+  // Track unique materials (materials can be shared between meshes)
+  const processedMaterials = new Set()
+  let materialCount = 0
+  
+  // Store original colors directly on materials and apply camouflage
+  mesh.traverse((child) => {
+    // Skip any existing mimic parts
+    if (child.userData.isDisguiseMimic || child.userData.isRemoteCamouflaged) {
+      return
+    }
+    
+    if (child.material) {
+      const materials = Array.isArray(child.material) ? child.material : [child.material]
+      
+      for (const mat of materials) {
+        // Skip if we've already processed this material (shared materials)
+        if (processedMaterials.has(mat)) {
+          continue
+        }
+        processedMaterials.add(mat)
+        
+        // Store original state directly on the material if not already stored
+        if (!mat.userData._remoteCamoOriginal) {
+          mat.userData._remoteCamoOriginal = {
+            color: mat.color ? mat.color.clone() : null,
+            opacity: mat.opacity !== undefined ? mat.opacity : 1,
+            transparent: mat.transparent || false,
+            depthWrite: mat.depthWrite !== undefined ? mat.depthWrite : true,
+          }
+        }
+        
+        // Apply camouflage color
+        if (mat.color) {
+          mat.color.copy(color)
+        }
+        
+        // Apply camouflage opacity
+        mat.opacity = CAMPER_CONFIG.fishCamoOpacity
+        mat.transparent = true
+        mat.depthWrite = false
+        mat.needsUpdate = true
+        materialCount++
+      }
+    }
+    
+    if (child.isMesh) {
+      child.renderOrder = 1
+      child.userData.isRemoteCamouflaged = true
+    }
+  })
+  
+  console.log(`[Camper Remote] Applied camo to ${materialCount} unique materials`)
+  
+  // Create disguise mimic for remote player using deterministic seed
+  const mimicGroup = createRemoteDisguiseMimic(mesh, color, terrainType || 'boulder', mimicSeed)
+  
+  console.log(`[Camper Remote] Mimic created: ${mimicGroup ? mimicGroup.children.length + ' pieces' : 'none'}`)
+  
+  return {
+    mimicGroup,
+    mesh,
+  }
+}
+
+/**
+ * Remove camouflage effect from a remote player
+ * @param {Object} cleanupData - Data returned from applyRemoteCamouflage
+ */
+export function removeRemoteCamouflage(cleanupData) {
+  if (!cleanupData) {
+    console.warn('[Camper Remote] No cleanup data provided')
+    return
+  }
+  
+  const { mimicGroup, mesh } = cleanupData
+  
+  console.log('[Camper Remote] Removing camouflage')
+  
+  // Track which materials we've already restored (materials can be shared between meshes)
+  const restoredMaterials = new Set()
+  
+  // Restore original material properties
+  if (mesh) {
+    let restoredCount = 0
+    
+    mesh.traverse((child) => {
+      // Skip mimic parts
+      if (child.userData.isDisguiseMimic) {
+        return
+      }
+      
+      if (child.material) {
+        const materials = Array.isArray(child.material) ? child.material : [child.material]
+        
+        for (const mat of materials) {
+          // Skip if we've already restored this material (shared materials)
+          if (restoredMaterials.has(mat)) {
+            continue
+          }
+          
+          const original = mat.userData._remoteCamoOriginal
+          
+          if (original) {
+            if (mat.color && original.color) {
+              mat.color.copy(original.color)
+            }
+            mat.opacity = original.opacity
+            mat.transparent = original.transparent
+            mat.depthWrite = original.depthWrite
+            mat.needsUpdate = true
+            
+            // Clean up the stored data
+            delete mat.userData._remoteCamoOriginal
+            restoredMaterials.add(mat)
+            restoredCount++
+          }
+        }
+      }
+      
+      if (child.isMesh && child.userData.isRemoteCamouflaged) {
+        child.renderOrder = 0
+        delete child.userData.isRemoteCamouflaged
+      }
+    })
+    
+    console.log(`[Camper Remote] Restored ${restoredCount} unique materials`)
+  }
+  
+  // Remove mimic group
+  if (mimicGroup) {
+    console.log(`[Camper Remote] Removing mimic with ${mimicGroup.children.length} pieces`)
+    
+    mimicGroup.traverse((child) => {
+      if (child.geometry) child.geometry.dispose()
+      if (child.material) child.material.dispose()
+    })
+    
+    if (mimicGroup.parent) {
+      mimicGroup.parent.remove(mimicGroup)
+    }
+  }
+  
+  console.log('[Camper Remote] Camouflage removed')
+}
+
+/**
+ * Create disguise mimic for a remote player
+ * @param {THREE.Object3D} playerMesh - Remote player's mesh
+ * @param {THREE.Color} color - Camouflage color
+ * @param {string} terrainType - 'coral' or 'boulder'
+ * @param {number} seed - Deterministic seed for consistent mimic across all clients
+ * @returns {THREE.Group} Mimic group attached to player
+ */
+function createRemoteDisguiseMimic(playerMesh, color, terrainType, seed) {
+  if (!CAMPER_CONFIG.disguiseMimic.enabled) return null
+  
+  const config = CAMPER_CONFIG.disguiseMimic
+  
+  // Get player bounding box for sizing
+  const bbox = new THREE.Box3().setFromObject(playerMesh)
+  const size = new THREE.Vector3()
+  bbox.getSize(size)
+  const baseSize = Math.max(size.x, size.y, size.z) * 0.5 * config.sizeMultiplier
+  
+  // Create mimic group
+  const mimicGroup = new THREE.Group()
+  mimicGroup.name = 'remote-disguise-mimic'
+  
+  // Get positions for mimic pieces
+  const positions = getMimicPositions(config.pieceCount)
+  
+  // Create RNG with deterministic seed for consistent mimic across all clients
+  const rng = createMimicRNG(seed)
+  
+  // Vary color slightly for each piece
+  const hsl = { h: 0, s: 0, l: 0 }
+  color.getHSL(hsl)
+  
+  for (let i = 0; i < positions.length; i++) {
+    const pos = positions[i]
+    
+    // Piece size with variation
+    const pieceSize = baseSize * (0.4 + rng() * 0.4)
+    
+    // Shape parameters based on terrain type
+    let flatness, irregularity
+    if (terrainType === 'coral') {
+      flatness = 0.6 + rng() * 0.8
+      irregularity = 0.25 + rng() * 0.3
+    } else {
+      flatness = 0.7 + rng() * 0.6
+      irregularity = 0.35 + rng() * 0.25
+    }
+    
+    // Create geometry
+    const geometry = createMimicPieceGeometry(
+      pieceSize,
+      config.pointsPerPiece + Math.floor(rng() * 4),
+      rng,
+      { flatness, irregularity }
+    )
+    
+    // Color variation
+    const pieceColor = new THREE.Color().setHSL(
+      hsl.h + (rng() - 0.5) * 0.08,
+      Math.min(1, hsl.s * (0.85 + rng() * 0.3)),
+      Math.min(1, hsl.l * (0.85 + rng() * 0.3))
+    )
+    
+    // Create material
+    const material = new THREE.MeshStandardMaterial({
+      color: pieceColor,
+      roughness: config.roughness,
+      metalness: config.metalness,
+      flatShading: true,
+      transparent: false,
+      opacity: config.useOpacity ? config.opacity : 1.0,
+    })
+    
+    const mesh = new THREE.Mesh(geometry, material)
+    
+    // Position around player
+    mesh.position.copy(pos).multiplyScalar(baseSize * 0.7)
+    
+    // Random rotation
+    mesh.rotation.set(
+      rng() * Math.PI * 2,
+      rng() * Math.PI * 2,
+      rng() * Math.PI * 2
+    )
+    
+    mesh.userData.isDisguiseMimic = true
+    mimicGroup.add(mesh)
+  }
+  
+  // Attach to player so it moves with them
+  playerMesh.add(mimicGroup)
+  
+  return mimicGroup
 }

@@ -24,6 +24,15 @@ import {
 } from '../src/sprinter.js'
 import { removeAllRemotePrismsForPlayer } from '../src/stacker.js'
 
+// Lazy-loaded camper module to avoid circular dependency
+let camperModule = null
+async function getCamperModule() {
+  if (!camperModule) {
+    camperModule = await import('../src/camper.js')
+  }
+  return camperModule
+}
+
 // ============================================================================
 // CONFIGURATION
 // ============================================================================
@@ -62,6 +71,9 @@ class RemotePlayer {
     // Ability state tracking
     this.activeAbility = null  // Currently active ability key
     this.isSprinting = false   // Is the sprinter ability active?
+    this.camouflageCleanup = null  // Cleanup data for camper ability
+    this._pendingCamperState = null  // Queued camper state change
+    this._processingCamper = false   // Is camper state change being processed?
     
     this.positionBuffer = new PositionBuffer(CONFIG.interpolationDelay)
     
@@ -276,9 +288,10 @@ class RemotePlayer {
    * Set the ability state for this remote player
    * @param {string} abilityKey - 'sprinter', 'stacker', 'camper', 'attacker'
    * @param {boolean} isActive - Whether the ability is active
+   * @param {Object} data - Extra data (e.g., { color, terrain } for camper)
    */
-  setAbilityState(abilityKey, isActive) {
-    // Handle sprinter ability specially
+  setAbilityState(abilityKey, isActive, data = {}) {
+    // Handle sprinter ability
     if (abilityKey === 'sprinter') {
       if (isActive && !this.isSprinting) {
         // Start sprinting - create trail
@@ -293,9 +306,80 @@ class RemotePlayer {
         stopRemoteTrail(this.id)
         console.log(`[RemotePlayer] ${this.id} stopped sprinting`)
       }
-    } else {
-      // Other abilities - just track state for now
+    }
+    // Handle camper ability (async due to dynamic import)
+    else if (abilityKey === 'camper') {
+      // Queue the camper state change to prevent race conditions
+      this._queueCamperStateChange(isActive, data)
+    }
+    // Other abilities - just track state for now
+    else {
       this.activeAbility = isActive ? abilityKey : null
+    }
+  }
+  
+  /**
+   * Queue camper state changes to prevent async race conditions
+   * @private
+   */
+  _queueCamperStateChange(isActive, data) {
+    // Store the desired state
+    this._pendingCamperState = { isActive, data }
+    
+    // If not already processing, start processing
+    if (!this._processingCamper) {
+      this._processCamperQueue()
+    }
+  }
+  
+  /**
+   * Process queued camper state changes
+   * @private
+   */
+  async _processCamperQueue() {
+    this._processingCamper = true
+    
+    while (this._pendingCamperState) {
+      const { isActive, data } = this._pendingCamperState
+      this._pendingCamperState = null
+      
+      await this._handleCamperAbility(isActive, data)
+    }
+    
+    this._processingCamper = false
+  }
+  
+  /**
+   * Handle camper ability state change (async helper)
+   * @private
+   */
+  async _handleCamperAbility(isActive, data) {
+    const camper = await getCamperModule()
+    
+    if (isActive) {
+      // If already camouflaged, remove old first
+      if (this.camouflageCleanup) {
+        console.log(`[RemotePlayer] ${this.id} - removing old camouflage before applying new`)
+        camper.removeRemoteCamouflage(this.camouflageCleanup)
+        this.camouflageCleanup = null
+      }
+      
+      // Start camouflage - apply color and create mimic
+      const colorHex = data.color || '808080'  // Default gray if no color
+      const terrainType = data.terrain || 'boulder'  // Default to boulder
+      const mimicSeed = data.mimicSeed !== undefined ? data.mimicSeed : Math.floor(Math.random() * 0xFFFFFFFF)
+      
+      this.camouflageCleanup = camper.applyRemoteCamouflage(this.mesh, colorHex, terrainType, mimicSeed)
+      this.activeAbility = 'camper'
+      console.log(`[RemotePlayer] ${this.id} started camouflage (color: #${colorHex}, terrain: ${terrainType}, seed: ${mimicSeed})`)
+    } else {
+      // Stop camouflage - restore original appearance
+      if (this.camouflageCleanup) {
+        camper.removeRemoteCamouflage(this.camouflageCleanup)
+        this.camouflageCleanup = null
+        this.activeAbility = null
+        console.log(`[RemotePlayer] ${this.id} stopped camouflage`)
+      }
     }
   }
   
@@ -374,6 +458,15 @@ class RemotePlayer {
     if (this.isSprinting) {
       destroyRemoteTrail(this.id)
       this.isSprinting = false
+    }
+    
+    // Clean up camouflage if active (async)
+    if (this.camouflageCleanup) {
+      const cleanupData = this.camouflageCleanup
+      this.camouflageCleanup = null
+      getCamperModule().then(camper => {
+        camper.removeRemoteCamouflage(cleanupData)
+      })
     }
     
     // Remove physics body first
@@ -492,11 +585,12 @@ export class RemotePlayerManager {
    * @param {number} playerId - The player ID
    * @param {string} abilityKey - 'sprinter', 'stacker', 'camper', 'attacker'
    * @param {boolean} isActive - Whether the ability is active
+   * @param {Object} data - Extra data (e.g., { color, terrain } for camper)
    */
-  setAbilityState(playerId, abilityKey, isActive) {
+  setAbilityState(playerId, abilityKey, isActive, data = {}) {
     const player = this.players.get(playerId)
     if (player) {
-      player.setAbilityState(abilityKey, isActive)
+      player.setAbilityState(abilityKey, isActive, data)
     }
   }
   

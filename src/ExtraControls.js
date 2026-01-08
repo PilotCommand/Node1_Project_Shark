@@ -13,7 +13,7 @@
 
 import Sprinter, { init as initSprinter, clear as clearSprinter } from './sprinter.js'
 import Stacker, { init as initStacker, debugStacker } from './stacker.js'
-import Camper, { init as initCamper, debugCamper } from './camper.js'
+import Camper, { init as initCamper, debugCamper, getTargetColorHex, getDetectedTerrainType } from './camper.js'
 import Attacker, { init as initAttacker, debugAttacker } from './attacker.js'
 import { networkManager } from '../network/NetworkManager.js'
 
@@ -169,7 +169,20 @@ export function activateExtra() {
   }
   
   // Broadcast ability activation to network
-  networkManager.sendAbilityStart(ACTIVE_ABILITY)
+  // For camper, include color, terrain type, and mimic seed data
+  if (ACTIVE_ABILITY === 'camper') {
+    // Wait for the camper to sample colors (needs time for scanEnvironment)
+    setTimeout(() => {
+      const colorHex = getTargetColorHex()
+      const terrainType = getDetectedTerrainType()
+      // Generate a seed for deterministic mimic generation across all clients
+      const mimicSeed = Math.floor(Math.random() * 0xFFFFFFFF)
+      console.log(`[ExtraControls] Sending camper data: color=${colorHex}, terrain=${terrainType}, seed=${mimicSeed}`)
+      networkManager.sendAbilityStart(ACTIVE_ABILITY, { color: colorHex, terrain: terrainType, mimicSeed })
+    }, 100)
+  } else {
+    networkManager.sendAbilityStart(ACTIVE_ABILITY)
+  }
 }
 
 /**
@@ -185,7 +198,11 @@ export function deactivateExtra() {
   }
   
   // Broadcast ability deactivation to network
-  networkManager.sendAbilityStop(ACTIVE_ABILITY)
+  // NOTE: Camper handles its own ABILITY_STOP when camouflage breaks (movement/capacity)
+  // Don't send ABILITY_STOP here for camper - it's a "one-tap" ability that stays active
+  if (ACTIVE_ABILITY !== 'camper') {
+    networkManager.sendAbilityStop(ACTIVE_ABILITY)
+  }
 }
 
 /**

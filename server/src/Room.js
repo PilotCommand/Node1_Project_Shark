@@ -334,7 +334,7 @@ export class Room {
   /**
    * Handle ability state change - relay to all other players
    * @param {WebSocket} ws - The sending player
-   * @param {Object} data - { type: ABILITY_START|ABILITY_STOP, ability: string }
+   * @param {Object} data - { type: ABILITY_START|ABILITY_STOP, ability: string, ...extraData }
    */
   handleAbilityChange(ws, data) {
     // Validate ability key
@@ -344,12 +344,19 @@ export class Room {
       return
     }
     
-    // Relay to all OTHER players (not back to sender)
-    // Include the sender's player ID so others know who activated/deactivated
-    this.broadcast(data.type, {
+    // Build relay data - include all fields except 'type' (which is added by broadcast)
+    const relayData = {
       id: ws.id,
       ability: data.ability,
-    }, ws.id)
+    }
+    
+    // Forward extra data for camper ability (color, terrain, mimicSeed)
+    if (data.color !== undefined) relayData.color = data.color
+    if (data.terrain !== undefined) relayData.terrain = data.terrain
+    if (data.mimicSeed !== undefined) relayData.mimicSeed = data.mimicSeed
+    
+    // Relay to all OTHER players (not back to sender)
+    this.broadcast(data.type, relayData, ws.id)
   }
   
   /**
