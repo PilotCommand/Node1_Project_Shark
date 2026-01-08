@@ -55,6 +55,8 @@ export const MSG = {
   // Abilities (80-89)
   ABILITY_START: 80,       // Client -> Server -> Others: Player activated ability
   ABILITY_STOP: 81,        // Client -> Server -> Others: Player deactivated ability
+  PRISM_PLACE: 82,         // Client -> Server -> Others: Player placed a stacker prism
+  PRISM_REMOVE: 83,        // Client -> Server -> Others: Player's prism was removed
 }
 
 // ============================================================================

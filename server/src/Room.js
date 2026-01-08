@@ -179,6 +179,14 @@ export class Room {
         this.handleAbilityChange(ws, data)
         break
         
+      case MSG.PRISM_PLACE:
+        this.handlePrismPlace(ws, data)
+        break
+        
+      case MSG.PRISM_REMOVE:
+        this.handlePrismRemove(ws, data)
+        break
+        
       default:
         console.warn(`[Room ${this.id}] Unknown message type: ${data.type}`)
     }
@@ -341,6 +349,51 @@ export class Room {
     this.broadcast(data.type, {
       id: ws.id,
       ability: data.ability,
+    }, ws.id)
+  }
+  
+  /**
+   * Handle prism placement - relay to all other players
+   * @param {WebSocket} ws - The sending player
+   * @param {Object} data - Prism data (prismId, position, quaternion, length, radius, color, etc.)
+   */
+  handlePrismPlace(ws, data) {
+    // Validate required fields
+    if (!data.prismId || !data.position || !data.quaternion) {
+      console.warn(`[Room ${this.id}] Invalid prism data from player ${ws.id}`)
+      return
+    }
+    
+    // Relay to all OTHER players with player ID
+    this.broadcast(MSG.PRISM_PLACE, {
+      id: ws.id,
+      prismId: data.prismId,
+      position: data.position,
+      quaternion: data.quaternion,
+      length: data.length,
+      radius: data.radius,
+      color: data.color,
+      roughness: data.roughness,
+      metalness: data.metalness,
+      emissive: data.emissive,
+    }, ws.id)
+  }
+  
+  /**
+   * Handle prism removal - relay to all other players
+   * @param {WebSocket} ws - The sending player
+   * @param {Object} data - { prismId: string }
+   */
+  handlePrismRemove(ws, data) {
+    if (!data.prismId) {
+      console.warn(`[Room ${this.id}] Invalid prism removal from player ${ws.id}`)
+      return
+    }
+    
+    // Relay to all OTHER players
+    this.broadcast(MSG.PRISM_REMOVE, {
+      id: ws.id,
+      prismId: data.prismId,
     }, ws.id)
   }
   

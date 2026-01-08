@@ -2,9 +2,9 @@
  * stacker.js - Stacker Ability
  * 
  * Build pentagonal prisms by:
- * 1. Press Q ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ Activate aiming mode (shows ray pointer with pentagon)
- * 2. Press Q ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ Select start point on a surface
- * 3. Press Q ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ Finalize and place the prism
+ * 1. Press Q ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ Activate aiming mode (shows ray pointer with pentagon)
+ * 2. Press Q ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ Select start point on a surface
+ * 3. Press Q ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ Finalize and place the prism
  */
 
 import * as THREE from 'three'
@@ -12,10 +12,11 @@ import { getPlayer } from './player.js'
 import { camera } from './camera.js'
 import { MeshRegistry, Category, Tag } from './MeshRegistry.js'
 import { createStaticCollider, removeStaticCollider, isPhysicsReady } from './Physics.js'
+import { networkManager } from '../network/NetworkManager.js'
 // NOTE: Stacker no longer uses hud.js capacity system - it has its own slot system
 
 // ============================================================================
-// ⭐ SLOT CAPACITY CONFIG - EASY TO EDIT! ⭐
+// â­ SLOT CAPACITY CONFIG - EASY TO EDIT! â­
 // ============================================================================
 // Stacker uses 5 INDEPENDENT slots instead of one shared capacity bar.
 // Each slot drains while its prism exists, then recharges when it despawns.
@@ -250,7 +251,7 @@ function updateSlots(delta) {
           despawnSlotPrism(i)
         }
         slot.state = 'recharging'
-        console.log(`[Stacker] Slot ${i + 1} drained → recharging`)
+        console.log(`[Stacker] Slot ${i + 1} drained â†’ recharging`)
       }
     } else if (slot.state === 'recharging') {
       // Recharge empty slot
@@ -259,7 +260,7 @@ function updateSlots(delta) {
       if (slot.capacity >= 100) {
         slot.capacity = 100
         slot.state = 'ready'
-        console.log(`[Stacker] Slot ${i + 1} recharged → ready`)
+        console.log(`[Stacker] Slot ${i + 1} recharged â†’ ready`)
       }
     }
   }
@@ -427,6 +428,7 @@ function extractBlendedColorFromMesh(mesh) {
 export function init(scene) {
   sceneRef = scene
   createRayVisuals()
+  initRemotePrismNetwork()
 }
 
 // ============================================================================
@@ -910,6 +912,19 @@ function finalizePrism() {
   
   console.log(`[Stacker] Placed prism: ${length.toFixed(2)} units, color #${finalColor.getHexString()} (${placedPrisms.length}/${CONFIG.maxPrisms})${physicsBody ? ' [SOLID]' : ' [NO PHYSICS]'}`)
   
+  // Broadcast to network
+  networkManager.sendPrismPlace({
+    prismId: prismId,
+    position: { x: startPoint.x, y: startPoint.y, z: startPoint.z },
+    quaternion: { x: quaternion.x, y: quaternion.y, z: quaternion.z, w: quaternion.w },
+    length: length,
+    radius: getPrismRadius(),
+    color: finalColor.getHex(),
+    roughness: finalRoughness,
+    metalness: finalMetalness,
+    emissive: finalEmissive ? finalEmissive.getHex() : null,
+  })
+  
   return finalPrism
 }
 
@@ -930,6 +945,7 @@ function removeOldestPrism() {
  */
 function removePrismMesh(prism, reason = 'unknown') {
   const prismId = prism.userData.prismId
+  const isRemote = prism.userData.isRemote
   
   // Remove physics collider first
   if (prismId) {
@@ -947,6 +963,11 @@ function removePrismMesh(prism, reason = 'unknown') {
   }
   prism.geometry.dispose()
   prism.material.dispose()
+  
+  // Broadcast removal to network (only for local prisms)
+  if (prismId && !isRemote) {
+    networkManager.sendPrismRemove(prismId)
+  }
   
   console.log(`[Stacker] Removed prism (${reason})`)
 }
@@ -983,6 +1004,239 @@ function getCapacityCostPerPrism() {
   return config.max / CONFIG.maxPrisms
 }
 */
+
+// ============================================================================
+// REMOTE PLAYER PRISM SYSTEM
+// ============================================================================
+
+/**
+ * Stores prisms placed by remote players
+ * Key: playerId, Value: Map<prismId, THREE.Mesh>
+ */
+const remotePrisms = new Map()
+
+/**
+ * Initialize remote prism network callbacks
+ * Call this after scene is ready
+ * 
+ * NOTE: For player disconnect cleanup, call removeAllRemotePrismsForPlayer(playerId)
+ * from your onPlayerLeave handler in the main game code.
+ */
+export function initRemotePrismNetwork() {
+  networkManager.onPrismPlace((playerId, data) => {
+    createRemotePrism(playerId, data)
+  })
+  
+  networkManager.onPrismRemove((playerId, prismId) => {
+    removeRemotePrism(playerId, prismId)
+  })
+  
+  console.log('[Stacker] Remote prism network callbacks initialized')
+}
+
+/**
+ * Create a prism placed by a remote player
+ */
+function createRemotePrism(playerId, data) {
+  if (!sceneRef) {
+    console.warn('[Stacker] Cannot create remote prism - no scene reference')
+    return
+  }
+  
+  // Get or create player's prism map
+  if (!remotePrisms.has(playerId)) {
+    remotePrisms.set(playerId, new Map())
+  }
+  const playerPrisms = remotePrisms.get(playerId)
+  
+  // Create unique ID for this remote prism (prefixed to avoid conflicts)
+  const remotePrismId = `remote-${playerId}-${data.prismId}`
+  
+  // Create the prism geometry
+  const geometry = createPentagonalPrismGeometry(data.radius || 0.5, data.length || 1)
+  
+  // Create material with synced properties
+  const materialProps = {
+    color: new THREE.Color(data.color || 0x44aaff),
+    transparent: false,
+    opacity: 1.0,
+    side: THREE.DoubleSide,
+    roughness: data.roughness !== undefined ? data.roughness : 0.5,
+    metalness: data.metalness !== undefined ? data.metalness : 0.0,
+    flatShading: CONFIG.flatShading,
+  }
+  
+  // Add emissive if present
+  if (data.emissive) {
+    materialProps.emissive = new THREE.Color(data.emissive)
+  }
+  
+  const material = new THREE.MeshStandardMaterial(materialProps)
+  const prism = new THREE.Mesh(geometry, material)
+  
+  // Set position
+  prism.position.set(data.position.x, data.position.y, data.position.z)
+  
+  // Set rotation from quaternion
+  prism.quaternion.set(data.quaternion.x, data.quaternion.y, data.quaternion.z, data.quaternion.w)
+  
+  // Store metadata
+  prism.userData.prismId = remotePrismId
+  prism.userData.originalPrismId = data.prismId
+  prism.userData.playerId = playerId
+  prism.userData.isRemote = true
+  
+  // Add to scene
+  sceneRef.add(prism)
+  
+  // Create physics collider for the remote prism (same as local prisms)
+  let physicsBody = null
+  if (isPhysicsReady()) {
+    const colliderResult = createStaticCollider(remotePrismId, prism, {
+      friction: 0.6,
+      restitution: 0.1,
+    })
+    if (colliderResult) {
+      physicsBody = colliderResult.collider
+      console.log(`[Stacker] Created physics collider for remote prism: ${remotePrismId}`)
+    } else {
+      console.warn(`[Stacker] Failed to create physics collider for remote prism: ${remotePrismId}`)
+    }
+  }
+  
+  // Register in MeshRegistry (for debug wireframes and collision detection)
+  MeshRegistry.register(remotePrismId, {
+    mesh: prism,
+    body: physicsBody,
+    category: Category.DECOR,
+    tags: [Tag.COLLIDABLE, Tag.STATIC],
+    metadata: {
+      type: 'pentagonal-prism',
+      isRemote: true,
+      playerId: playerId,
+      length: data.length,
+      color: data.color,
+      roughness: data.roughness,
+      metalness: data.metalness,
+      hasPhysics: !!physicsBody,
+    }
+  })
+  
+  // Track in remote prisms map
+  playerPrisms.set(data.prismId, prism)
+  
+  console.log(`[Stacker] Created remote prism from player ${playerId}: ${remotePrismId}${physicsBody ? ' [SOLID]' : ' [NO PHYSICS]'}`)
+}
+
+/**
+ * Remove a remote player's prism
+ */
+function removeRemotePrism(playerId, prismId) {
+  const playerPrisms = remotePrisms.get(playerId)
+  if (!playerPrisms) return
+  
+  const prism = playerPrisms.get(prismId)
+  if (!prism) return
+  
+  const remotePrismId = prism.userData.prismId
+  
+  // Remove physics collider first
+  if (remotePrismId) {
+    removeStaticCollider(remotePrismId)
+  }
+  
+  // Unregister from MeshRegistry
+  if (remotePrismId) {
+    MeshRegistry.unregister(remotePrismId)
+  }
+  
+  // Remove from scene
+  if (prism.parent) {
+    prism.parent.remove(prism)
+  }
+  
+  // Dispose geometry and material
+  prism.geometry.dispose()
+  prism.material.dispose()
+  
+  // Remove from tracking
+  playerPrisms.delete(prismId)
+  
+  console.log(`[Stacker] Removed remote prism from player ${playerId}: ${remotePrismId}`)
+}
+
+/**
+ * Remove all prisms for a specific remote player (when they disconnect)
+ */
+export function removeAllRemotePrismsForPlayer(playerId) {
+  const playerPrisms = remotePrisms.get(playerId)
+  if (!playerPrisms) return
+  
+  for (const [prismId, prism] of playerPrisms) {
+    const remotePrismId = prism.userData.prismId
+    
+    // Remove physics collider
+    if (remotePrismId) {
+      removeStaticCollider(remotePrismId)
+    }
+    
+    // Unregister from MeshRegistry
+    if (remotePrismId) {
+      MeshRegistry.unregister(remotePrismId)
+    }
+    
+    // Remove from scene and dispose
+    if (prism.parent) {
+      prism.parent.remove(prism)
+    }
+    prism.geometry.dispose()
+    prism.material.dispose()
+  }
+  
+  remotePrisms.delete(playerId)
+  console.log(`[Stacker] Removed all remote prisms for player ${playerId}`)
+}
+
+/**
+ * Clear all remote prisms (for map changes)
+ */
+export function clearAllRemotePrisms() {
+  for (const [playerId, playerPrisms] of remotePrisms) {
+    for (const [prismId, prism] of playerPrisms) {
+      const remotePrismId = prism.userData.prismId
+      
+      // Remove physics collider
+      if (remotePrismId) {
+        removeStaticCollider(remotePrismId)
+      }
+      
+      // Unregister from MeshRegistry
+      if (remotePrismId) {
+        MeshRegistry.unregister(remotePrismId)
+      }
+      
+      // Remove from scene and dispose
+      if (prism.parent) {
+        prism.parent.remove(prism)
+      }
+      prism.geometry.dispose()
+      prism.material.dispose()
+    }
+  }
+  remotePrisms.clear()
+  console.log('[Stacker] Cleared all remote prisms')
+}
+
+/**
+ * Get count of remote prisms (for debugging)
+ */
+export function getRemotePrismCount() {
+  let count = 0
+  for (const playerPrisms of remotePrisms.values()) {
+    count += playerPrisms.size
+  }
+  return count
+}
 
 // ============================================================================
 // RAYCASTING
@@ -1209,7 +1463,8 @@ export function debugStacker() {
   console.group('[Stacker] Debug')
   console.log('State:', state)
   console.log('Start Point:', startPoint)
-  console.log('Placed Prisms:', placedPrisms.length)
+  console.log('Placed Prisms (local):', placedPrisms.length)
+  console.log('Remote Prisms:', getRemotePrismCount())
   console.log('Physics Ready:', isPhysicsReady())
   console.log('Scene Ref:', !!sceneRef)
   console.log('Fish Scale:', fishScale.toFixed(2))

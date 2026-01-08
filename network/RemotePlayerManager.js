@@ -22,6 +22,7 @@ import {
   destroyRemoteTrail,
   updateAllRemoteTrails,
 } from '../src/sprinter.js'
+import { removeAllRemotePrismsForPlayer } from '../src/stacker.js'
 
 // ============================================================================
 // CONFIGURATION
@@ -435,6 +436,10 @@ export class RemotePlayerManager {
     if (player) {
       player.destroy()
       this.players.delete(id)
+      
+      // Clean up any stacker prisms this player placed
+      removeAllRemotePrismsForPlayer(id)
+      
       console.log(`[RemotePlayerManager] Removed player ${id}`)
     }
   }

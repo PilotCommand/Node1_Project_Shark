@@ -66,6 +66,8 @@ class NetworkManager {
     this.onNPCSnapshotCallback = null   // Called when NPC snapshot received (followers only)
     this.onBecameHostCallback = null    // Called when we become NPC host
     this.onAbilityChangeCallback = null // Called when a remote player changes ability state
+    this.onPrismPlaceCallback = null    // Called when a remote player places a prism
+    this.onPrismRemoveCallback = null   // Called when a remote player's prism is removed
     
     this.debug = false  // Set to true for verbose logging
   }
@@ -295,6 +297,14 @@ class NetworkManager {
         this.handleAbilityChange(data)
         break
         
+      case MSG.PRISM_PLACE:
+        this.handlePrismPlace(data)
+        break
+        
+      case MSG.PRISM_REMOVE:
+        this.handlePrismRemove(data)
+        break
+        
       default:
         if (this.debug) {
           console.log(`[Network] Unhandled message type: ${data.type}`)
@@ -403,6 +413,31 @@ class NetworkManager {
     
     // Call the callback if registered
     this.onAbilityChangeCallback?.(playerId, abilityKey, isActive)
+  }
+  
+  handlePrismPlace(data) {
+    // Another player placed a stacker prism
+    const playerId = data.id
+    
+    if (this.debug) {
+      console.log(`[Network] Player ${playerId} placed prism: ${data.prismId}`)
+    }
+    
+    // Notify the prism placement callback
+    this.onPrismPlaceCallback?.(playerId, data)
+  }
+  
+  handlePrismRemove(data) {
+    // Another player's prism was removed
+    const playerId = data.id
+    const prismId = data.prismId
+    
+    if (this.debug) {
+      console.log(`[Network] Player ${playerId} removed prism: ${prismId}`)
+    }
+    
+    // Notify the prism removal callback
+    this.onPrismRemoveCallback?.(playerId, prismId)
   }
   
   // ============================================================================
@@ -567,6 +602,24 @@ class NetworkManager {
   sendAbilityStop(abilityKey) {
     if (!this.connected) return false
     return this.send(MSG.ABILITY_STOP, { ability: abilityKey })
+  }
+  
+  /**
+   * Send prism placement to server
+   * @param {Object} prismData - { prismId, position, quaternion, length, radius, color, roughness, metalness, emissive }
+   */
+  sendPrismPlace(prismData) {
+    if (!this.connected) return false
+    return this.send(MSG.PRISM_PLACE, prismData)
+  }
+  
+  /**
+   * Send prism removal to server
+   * @param {string} prismId - The prism's unique ID
+   */
+  sendPrismRemove(prismId) {
+    if (!this.connected) return false
+    return this.send(MSG.PRISM_REMOVE, { prismId })
   }
   
   sendPosition(position, rotation, scale) {
@@ -742,6 +795,14 @@ class NetworkManager {
   
   onAbilityChange(callback) {
     this.onAbilityChangeCallback = callback
+  }
+  
+  onPrismPlace(callback) {
+    this.onPrismPlaceCallback = callback
+  }
+  
+  onPrismRemove(callback) {
+    this.onPrismRemoveCallback = callback
   }
   
   setDebug(enabled) {
