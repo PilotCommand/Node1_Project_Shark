@@ -112,8 +112,8 @@ export function getMessageName(type) {
   return `UNKNOWN(${type})`
 }
 
-export function createPositionMessage(position, rotation, scale) {
-  return encodeMessage(MSG.POSITION, {
+export function createPositionMessage(position, rotation, scale, volume = null) {
+  const msg = {
     p: {
       x: round(position.x, 2),
       y: round(position.y, 2),
@@ -125,7 +125,14 @@ export function createPositionMessage(position, rotation, scale) {
       z: round(rotation.z, 3),
     },
     s: round(scale, 3),
-  })
+  }
+  
+  // Include volume if provided (for new volume system)
+  if (volume !== null && volume !== undefined) {
+    msg.v = round(volume, 2)
+  }
+  
+  return encodeMessage(MSG.POSITION, msg)
 }
 
 export function createJoinMessage(creature, displayName = 'Player') {

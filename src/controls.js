@@ -12,7 +12,7 @@
  *   T           - Increase scale
  *   G           - Mutate creature (new random of same type)
  *   N / B       - Next / Previous species
- *   Z           - Cycle variant (e.g., Yellowfin Ã¢â€ â€™ Bluefin)
+ *   Z           - Cycle variant (e.g., Yellowfin ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ Bluefin)
  *   M           - New map (synced in multiplayer)
  *   P           - Toggle debug overlays (wireframes + volume labels)
  *   V           - Toggle debug viz (spawn grid + fish paths)
@@ -81,6 +81,7 @@ import { FishAdder } from './FishAdder.js'
 import { Determine } from './determine.js'
 import { activateCapacity, deactivateCapacity, hasCapacity } from './hud.js'
 import * as Chat from './chats.js'
+import { togglePlayerScalePanel, updatePlayerScalePanel } from '../network/PlayerScaleDebugPanel.js'
 
 // ============================================================================
 // STATE
@@ -379,8 +380,9 @@ export function initControls() {
         const scaleDownResult = decreasePlayerScale()
         if (scaleDownResult) {
           rebuildPlayerPhysics()
+          updatePlayerScalePanel()  // Update debug panel
           showNotification(
-            `Scale: ${scaleDownResult.scalePercent.toFixed(0)}% | Vol: ${scaleDownResult.volume.toFixed(2)} mÃ‚Â³`,
+            `Scale: ${scaleDownResult.scalePercent.toFixed(0)}% | Vol: ${scaleDownResult.volume.toFixed(2)} m³`,
             '#ff8888'
           )
         }
@@ -391,8 +393,9 @@ export function initControls() {
         const scaleUpResult = increasePlayerScale()
         if (scaleUpResult) {
           rebuildPlayerPhysics()
+          updatePlayerScalePanel()  // Update debug panel
           showNotification(
-            `Scale: ${scaleUpResult.scalePercent.toFixed(0)}% | Vol: ${scaleUpResult.volume.toFixed(2)} mÃ‚Â³`,
+            `Scale: ${scaleUpResult.scalePercent.toFixed(0)}% | Vol: ${scaleUpResult.volume.toFixed(2)} m³`,
             '#88ff88'
           )
         }
@@ -436,7 +439,7 @@ export function initControls() {
         }
         break
       
-      // Z = Cycle variant (e.g., Yellowfin Tuna Ã¢â€ â€™ Bluefin Tuna)
+      // Z = Cycle variant (e.g., Yellowfin Tuna ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ Bluefin Tuna)
       case 'KeyZ':
         const variantResult = cycleVariant()
         if (variantResult.hasVariants) {
@@ -456,13 +459,14 @@ export function initControls() {
         }
         break
       
-      // P = Toggle wireframes + volume labels
+      // P = Toggle wireframes + volume labels + player scale panel
       case 'KeyP':
         const wireframeOn = toggleWireframe()
         toggleTerrainWireframe()
         toggleStaticColliderWireframe()
         toggleRemotePlayerWireframe()
         FishAdder.toggleLabels()
+        togglePlayerScalePanel()  // Toggle the player scale debug panel
         showNotification(
           `Debug overlays: ${wireframeOn ? 'ON' : 'OFF'}`,
           wireframeOn ? '#00ff00' : '#ff6600'

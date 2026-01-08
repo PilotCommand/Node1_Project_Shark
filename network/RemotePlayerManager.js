@@ -9,6 +9,7 @@ import { PositionBuffer } from './Interpolation.js'
 import { generateCreature } from '../src/Encyclopedia.js'
 import { computeCapsuleParams } from '../src/ScaleMesh.js'
 import { computeCapsuleVolume } from '../src/NormalScale.js'
+import { computeGroupVolume } from '../src/MeshVolume.js'
 import { MeshRegistry, Category } from '../src/MeshRegistry.js'
 import {
   isPhysicsReady,
@@ -61,10 +62,19 @@ class RemotePlayer {
     this.position = new THREE.Vector3()
     this.rotation = new THREE.Euler(0, 0, 0, 'YXZ')  // Use YXZ order like local player
     this.scale = 1
+    this.worldVolume = 1  // Authoritative world volume from network
     
     this.targetPosition = new THREE.Vector3()
     this.targetRotation = new THREE.Euler(0, 0, 0, 'YXZ')  // Use YXZ order like local player
     this.targetScale = 1
+    
+    // Encyclopedia volumes (immutable - computed at scale=1)
+    this.encyclopediaVisualVolume = 1    // Sum of visual mesh boxes at scale=1
+    this.encyclopediaCapsuleVolume = 1   // Capsule volume at scale=1
+    
+    // Physics rebuild tracking
+    this._lastPhysicsScale = 0           // Scale at which physics body was last built
+    this._physicsInitialized = false     // Has physics been properly initialized?
     
     this.creatureData = data.creature || null
     this.mesh = null
@@ -93,9 +103,13 @@ class RemotePlayer {
       this.targetRotation.copy(this.rotation)
     }
     
+    // Store initial values - scale will be computed from volume after mesh creation
+    if (data.volume) {
+      this.worldVolume = data.volume
+    }
+    // Keep received scale as fallback only
     if (data.scale) {
-      this.scale = data.scale
-      this.targetScale = data.scale
+      this._receivedScale = data.scale
     }
     
     this.createMesh(data.creature)
@@ -116,19 +130,89 @@ class RemotePlayer {
       this.mesh.position.copy(this.position)
       this.mesh.rotation.order = 'YXZ'  // Match local player rotation order
       this.mesh.rotation.copy(this.rotation)
-      // Apply the actual scale from the player
-      this.mesh.scale.setScalar(this.scale || 1)
+      
+      // CRITICAL: Mesh is created at scale=1, compute ALL encyclopedia volumes NOW
+      // before any scaling is applied
+      this.computeAllEncyclopediaVolumes()
+      
+      // Compute the correct scale from world volume using CAPSULE volume
+      // (same formula as local player in NormalScale.js)
+      this.scale = this.computeScaleFromWorldVolume(this.worldVolume)
+      this.targetScale = this.scale
+      
+      // Apply the computed scale
+      this.mesh.scale.setScalar(this.scale)
       this.scene.add(this.mesh)
       
-      // Create physics body for this remote player
-      this.createPhysicsBody()
+      // Create physics body (uses already-computed base capsule params)
+      this.createPhysicsBodyFromCachedParams()
       
       // Compute visual volume for attacker detection
       this.computeVisualVolume()
       
       // Register with MeshRegistry for attacker detection
       this.registerWithMeshRegistry()
+      
+      console.log(`[RemotePlayer] ${this.id} scale computed: worldVol=${this.worldVolume.toFixed(2)}, capsuleVol=${this.encyclopediaCapsuleVolume.toFixed(4)}, scale=${this.scale.toFixed(4)}`)
     }
+  }
+  
+  /**
+   * Compute ALL encyclopedia volumes at scale=1
+   * MUST be called before any scaling is applied to the mesh
+   * These are immutable and used as reference for computing display scale
+   */
+  computeAllEncyclopediaVolumes() {
+    if (!this.mesh) return
+    
+    // Mesh should be at scale=1 when this is called
+    this.mesh.scale.setScalar(1)
+    this.mesh.updateWorldMatrix(true, true)
+    
+    // 1. Compute visual mesh volume at scale=1
+    this.encyclopediaVisualVolume = computeGroupVolume(this.mesh, false)
+    if (this.encyclopediaVisualVolume < 0.001) {
+      this.encyclopediaVisualVolume = 1
+      console.warn(`[RemotePlayer] ${this.id} visual volume too small, using fallback`)
+    }
+    
+    // 2. Compute CAPSULE volume at scale=1 (this is what local player uses!)
+    const baseCapsuleParams = computeCapsuleParams(this.mesh, this.creature)
+    this.baseCapsuleParams = baseCapsuleParams
+    this.encyclopediaCapsuleVolume = computeCapsuleVolume(baseCapsuleParams.radius, baseCapsuleParams.halfHeight)
+    
+    if (this.encyclopediaCapsuleVolume < 0.001) {
+      this.encyclopediaCapsuleVolume = 1
+      console.warn(`[RemotePlayer] ${this.id} capsule volume too small, using fallback`)
+    }
+    
+    console.log(`[RemotePlayer] ${this.id} encyclopedia volumes: visual=${this.encyclopediaVisualVolume.toFixed(4)}, capsule=${this.encyclopediaCapsuleVolume.toFixed(4)}`)
+  }
+  
+  /**
+   * Compute the correct scale factor from world volume
+   * Uses CAPSULE volume (same formula as local player in NormalScale.js)
+   * 
+   * scale = cbrt(worldVolume / encyclopediaCapsuleVolume)
+   * 
+   * @param {number} worldVolume - Target world volume in m³
+   * @returns {number} Scale factor to apply to mesh
+   */
+  computeScaleFromWorldVolume(worldVolume) {
+    // Use CAPSULE volume - this matches how local player computes scale
+    if (this.encyclopediaCapsuleVolume > 0.001) {
+      return Math.cbrt(worldVolume / this.encyclopediaCapsuleVolume)
+    }
+    
+    // Fallback to visual volume if capsule not available
+    if (this.encyclopediaVisualVolume > 0.001) {
+      console.warn(`[RemotePlayer] ${this.id} using visual volume fallback for scale`)
+      return Math.cbrt(worldVolume / this.encyclopediaVisualVolume)
+    }
+    
+    // Last resort: use received scale
+    console.warn(`[RemotePlayer] ${this.id} no encyclopedia volumes, using received scale`)
+    return this._receivedScale || 1
   }
   
   /**
@@ -142,7 +226,7 @@ class RemotePlayer {
       return
     }
     
-    // Use capsule volume formula: π * r² * (4/3 * r + 2 * h)
+    // Use capsule volume formula: Ãâ‚¬ * rÃ‚Â² * (4/3 * r + 2 * h)
     // where r = radius and h = halfHeight
     const r = this.capsuleParams.radius
     const h = this.capsuleParams.halfHeight
@@ -163,11 +247,12 @@ class RemotePlayer {
         playerId: this.id,
         playerName: this.name,
         visualVolume: this.visualVolume || 1,
+        worldVolume: this.worldVolume || 1,  // NEW: Authoritative volume for feeding
         isRemotePlayer: true,
       }
     }, true)  // Use explicit ID
     
-    console.log(`[RemotePlayer] Registered ${this.id} with MeshRegistry (volume: ${(this.visualVolume || 1).toFixed(2)})`)
+    console.log(`[RemotePlayer] Registered ${this.id} with MeshRegistry (worldVolume: ${(this.worldVolume || 1).toFixed(2)})`)
   }
   
   /**
@@ -181,27 +266,59 @@ class RemotePlayer {
   }
   
   /**
-   * Create physics body and debug wireframe for this remote player
+   * Create physics body using cached base capsule params
+   * Called AFTER computeAllEncyclopediaVolumes and AFTER scale is applied
    */
-  createPhysicsBody() {
-    if (!isPhysicsReady() || !this.mesh) return
+  createPhysicsBodyFromCachedParams() {
+    if (!isPhysicsReady() || !this.mesh || !this.baseCapsuleParams) return
     
-    // Compute capsule params from the mesh
-    const capsuleParams = computeCapsuleParams(this.mesh, this.creature)
-    
-    // Scale the capsule params by the player's scale
+    // Use the base params computed at scale=1, scale them by current scale
+    // These are the ACTUAL physics capsule dimensions
     const scaledCapsuleParams = {
-      radius: capsuleParams.radius * (this.scale || 1),
-      halfHeight: capsuleParams.halfHeight * (this.scale || 1),
+      radius: this.baseCapsuleParams.radius * this.scale,
+      halfHeight: this.baseCapsuleParams.halfHeight * this.scale,
     }
     
     // Store for later updates
     this.capsuleParams = scaledCapsuleParams
+    this._lastPhysicsScale = this.scale
+    this._physicsInitialized = true
     
-    // Create the physics body with debug wireframe
-    createRemotePlayerBody(this.id, this.mesh, scaledCapsuleParams)
+    // Create the physics body
+    // IMPORTANT: Pass BASE capsule params for the debug wireframe
+    // The wireframe is attached to the mesh as a child, so it will be scaled automatically
+    // If we pass scaled params, it would be double-scaled!
+    createRemotePlayerBody(this.id, this.mesh, this.baseCapsuleParams, scaledCapsuleParams)
     
-    console.log(`[RemotePlayer] Created physics body for ${this.id}`)
+    console.log(`[RemotePlayer] Created physics body for ${this.id}: r=${scaledCapsuleParams.radius.toFixed(3)}, h=${scaledCapsuleParams.halfHeight.toFixed(3)}, scale=${this.scale.toFixed(4)}`)
+  }
+  
+  /**
+   * Rebuild physics body with current scale
+   * Called when scale changes significantly to keep physics capsule in sync with visual mesh
+   */
+  rebuildPhysicsBody() {
+    if (!isPhysicsReady() || !this.mesh || !this.baseCapsuleParams) return
+    
+    // Remove old physics body
+    removeRemotePlayerBody(this.id)
+    
+    // Compute new scaled capsule params for physics
+    const scaledCapsuleParams = {
+      radius: this.baseCapsuleParams.radius * this.scale,
+      halfHeight: this.baseCapsuleParams.halfHeight * this.scale,
+    }
+    
+    // Store for later
+    this.capsuleParams = scaledCapsuleParams
+    this._lastPhysicsScale = this.scale
+    this._physicsInitialized = true
+    
+    // Create new physics body with updated scale
+    // Pass BASE params for wireframe (will be scaled by mesh), SCALED params for physics
+    createRemotePlayerBody(this.id, this.mesh, this.baseCapsuleParams, scaledCapsuleParams)
+    
+    console.log(`[RemotePlayer] Rebuilt physics body for ${this.id}: r=${scaledCapsuleParams.radius.toFixed(3)}, h=${scaledCapsuleParams.halfHeight.toFixed(3)}, scale=${this.scale.toFixed(4)}`)
   }
   
   /**
@@ -306,10 +423,17 @@ class RemotePlayer {
   }
   
   updateFromServer(data, serverTime) {
+    // Compute scale from world volume if provided (uses capsule volume internally)
+    let computedScale = data.scale || 1
+    if (data.volume !== undefined && data.volume !== null && 
+        (this.encyclopediaCapsuleVolume > 0.001 || this.encyclopediaVisualVolume > 0.001)) {
+      computedScale = this.computeScaleFromWorldVolume(data.volume)
+    }
+    
     this.positionBuffer.push(
       { x: data.x, y: data.y, z: data.z },
       { x: data.rx || 0, y: data.ry || 0, z: 0 },  // Ignore Z rotation
-      data.scale || 1,
+      computedScale,
       serverTime
     )
     
@@ -320,8 +444,13 @@ class RemotePlayer {
       this.targetRotation.y = data.ry || 0
       this.targetRotation.z = 0
     }
-    if (data.scale !== undefined) {
-      this.targetScale = data.scale
+    
+    // Use computed scale from world volume
+    this.targetScale = computedScale
+    
+    // Update world volume if provided
+    if (data.volume !== undefined && data.volume !== null) {
+      this.updateVolume(data.volume)
     }
   }
   
@@ -341,18 +470,31 @@ class RemotePlayer {
   updateScale(newScale) {
     this.targetScale = newScale
     
+    // If we have encyclopedia capsule volume, compute what world volume this scale represents
+    // Using capsule volume to match local player formula
+    if (this.encyclopediaCapsuleVolume > 0.001) {
+      // scale = cbrt(worldVolume / capsuleVolume)
+      // worldVolume = scale³ * capsuleVolume
+      this.worldVolume = Math.pow(newScale, 3) * this.encyclopediaCapsuleVolume
+    } else if (this.encyclopediaVisualVolume > 0.001) {
+      // Fallback to visual volume
+      this.worldVolume = Math.pow(newScale, 3) * this.encyclopediaVisualVolume
+    }
+    
     // Recalculate visual volume based on the new scale
-    // The capsule params are scaled proportionally
-    if (this.capsuleParams) {
-      // Recalculate capsule params at new scale
+    if (this.baseCapsuleParams) {
+      const newRadius = this.baseCapsuleParams.radius * newScale
+      const newHalfHeight = this.baseCapsuleParams.halfHeight * newScale
+      this.visualVolume = computeCapsuleVolume(newRadius, newHalfHeight)
+    } else if (this.capsuleParams) {
+      // Fallback: recalculate from current capsule params
       const baseRadius = this.capsuleParams.radius / (this.scale || 1)
       const baseHalfHeight = this.capsuleParams.halfHeight / (this.scale || 1)
       const newRadius = baseRadius * newScale
       const newHalfHeight = baseHalfHeight * newScale
-      
       this.visualVolume = computeCapsuleVolume(newRadius, newHalfHeight)
     } else {
-      // Fallback: estimate from scale
+      // Last resort: estimate from scale
       this.visualVolume = Math.pow(newScale, 3)
     }
     
@@ -360,7 +502,81 @@ class RemotePlayer {
     if (this.registryId) {
       MeshRegistry.updateMetadata(this.registryId, {
         visualVolume: this.visualVolume,
+        worldVolume: this.worldVolume,
       })
+    }
+  }
+  
+  /**
+   * Update world volume (authoritative volume from network)
+   * This also recomputes the display scale
+   * @param {number} newVolume - World volume in m³ [1, 1000]
+   */
+  updateVolume(newVolume) {
+    if (Math.abs(newVolume - this.worldVolume) < 0.01) return
+    
+    const oldVolume = this.worldVolume
+    this.worldVolume = newVolume
+    
+    // Recompute scale from new volume (uses capsule volume internally)
+    if (this.encyclopediaCapsuleVolume > 0.001 || this.encyclopediaVisualVolume > 0.001) {
+      this.targetScale = this.computeScaleFromWorldVolume(newVolume)
+    }
+    
+    // Update the MeshRegistry metadata with authoritative volume
+    if (this.registryId) {
+      MeshRegistry.updateMetadata(this.registryId, {
+        worldVolume: this.worldVolume,
+      })
+    }
+    
+    // Only log significant changes
+    if (Math.abs(newVolume - oldVolume) > 1) {
+      console.log(`[RemotePlayer] ${this.id} volume: ${oldVolume.toFixed(2)} → ${newVolume.toFixed(2)} m³, scale: ${this.targetScale.toFixed(4)}`)
+    }
+  }
+  
+  /**
+   * Get debug info for this remote player
+   * Used by the P key debug panel
+   * @returns {object} Debug information
+   */
+  getDebugInfo() {
+    // Compute actual physics capsule volume from current capsule params
+    let actualPhysicsCapsuleVolume = 0
+    if (this.capsuleParams) {
+      actualPhysicsCapsuleVolume = computeCapsuleVolume(
+        this.capsuleParams.radius, 
+        this.capsuleParams.halfHeight
+      )
+    }
+    
+    return {
+      id: this.id,
+      name: this.name,
+      fishType: this.creatureData?.type || 'unknown',
+      fishClass: this.creatureData?.class || 'unknown',
+      
+      // Volumes
+      encyclopediaVisualVolume: this.encyclopediaVisualVolume,
+      encyclopediaCapsuleVolume: this.encyclopediaCapsuleVolume,
+      worldVolume: this.worldVolume,
+      visualVolume: this.visualVolume || 0,
+      actualPhysicsCapsuleVolume: actualPhysicsCapsuleVolume,
+      
+      // Scale
+      currentScale: this.scale,
+      targetScale: this.targetScale,
+      receivedScale: this._receivedScale || null,
+      lastPhysicsScale: this._lastPhysicsScale || 0,
+      physicsInitialized: this._physicsInitialized || false,
+      
+      // Position
+      position: {
+        x: this.position.x,
+        y: this.position.y,
+        z: this.position.z,
+      },
     }
   }
   
@@ -505,7 +721,17 @@ class RemotePlayer {
       this.targetRotation.x = interpolated.rot.x
       this.targetRotation.y = interpolated.rot.y
       this.targetRotation.z = 0
-      this.targetScale = interpolated.scale
+      
+      // IMPORTANT: Don't use interpolated.scale - it may be the raw received scale
+      // which doesn't account for different creature volumes.
+      // Instead, always compute scale from world volume using our local encyclopedia volumes.
+      // This ensures consistent scaling regardless of what scale value was sent.
+    }
+    
+    // Always compute target scale from world volume (authoritative)
+    // This overrides any interpolated scale values
+    if (this.encyclopediaCapsuleVolume > 0.001) {
+      this.targetScale = this.computeScaleFromWorldVolume(this.worldVolume)
     }
     
     // Frame-rate independent smoothing using exponential decay
@@ -524,6 +750,9 @@ class RemotePlayer {
     this.rotation.y += this.angleDiff(this.rotation.y, this.targetRotation.y) * rotFactor
     // Z stays at 0
     
+    // Track previous scale for physics rebuild check
+    const prevScale = this.scale
+    
     // Smooth scale
     this.scale += (this.targetScale - this.scale) * scaleFactor
     
@@ -531,6 +760,19 @@ class RemotePlayer {
     this.mesh.position.copy(this.position)
     this.mesh.rotation.copy(this.rotation)
     this.mesh.scale.setScalar(this.scale)
+    
+    // Rebuild physics body if scale differs significantly from when physics was last built
+    // Compare against _lastPhysicsScale (not prevScale) because scale changes smoothly
+    // and small per-frame changes would never trigger a rebuild
+    if (this.baseCapsuleParams) {
+      const scaleDiff = Math.abs(this.scale - this._lastPhysicsScale)
+      const scaleRatio = this._lastPhysicsScale > 0 ? this.scale / this._lastPhysicsScale : 999
+      
+      // Rebuild if scale changed by more than 5% from last physics build
+      if (scaleDiff > 0.05 || scaleRatio > 1.05 || scaleRatio < 0.95) {
+        this.rebuildPhysicsBody()
+      }
+    }
     
     // Sync physics body position
     if (isPhysicsReady()) {
@@ -678,6 +920,18 @@ export class RemotePlayerManager {
     }
   }
   
+  /**
+   * Update world volume for a remote player
+   * @param {number} id - Player ID
+   * @param {number} volume - World volume in mÂ³
+   */
+  updateVolume(id, volume) {
+    const player = this.players.get(id)
+    if (player) {
+      player.updateVolume(volume)
+    }
+  }
+  
   getPlayer(id) {
     return this.players.get(id)
   }
@@ -719,6 +973,19 @@ export class RemotePlayerManager {
    */
   toggleWireframes() {
     return physicsToggleRemotePlayerWireframe()
+  }
+  
+  /**
+   * Get debug info for all remote players
+   * Used by the P key debug panel
+   * @returns {Array} Array of debug info objects
+   */
+  getAllDebugInfo() {
+    const debugInfo = []
+    this.players.forEach(player => {
+      debugInfo.push(player.getDebugInfo())
+    })
+    return debugInfo
   }
   
   destroy() {
