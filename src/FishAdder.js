@@ -27,6 +27,7 @@ import { computeCapsuleParams } from './ScaleMesh.js'
 import { computeCapsuleVolume, getNPCNormalDistributedScale } from './NormalScale.js'
 import { computeGroupVolume, getMeshVolumeBreakdown } from './MeshVolume.js'
 import { Determine } from './determine.js'
+import { networkManager } from '../network/NetworkManager.js'
 
 // ============================================================================
 // SPECIES BEHAVIOR CLASSIFICATION
@@ -954,6 +955,12 @@ function removeFish(fishId, respawn = true) {
 }
 
 function maintainPopulation() {
+  // MULTIPLAYER: Only host spawns new fish to maintain population
+  // Followers just see what host has via snapshots
+  if (networkManager.isConnected() && !networkManager.isNPCHost()) {
+    return
+  }
+  
   const needed = CONFIG.targetPopulation - npcs.size
   if (needed <= 0) return
   
@@ -1559,6 +1566,13 @@ function followGridPath(npc, deltaTime) {
 function checkPredation() {
   if (activeChasers.size === 0) return
   
+  // MULTIPLAYER: Only host runs NPC predation
+  // Followers just receive the results via snapshots
+  // In single-player (not connected), run normally
+  if (networkManager.isConnected() && !networkManager.isNPCHost()) {
+    return
+  }
+  
   const toRemove = []
   
   for (const predatorId of activeChasers) {
@@ -1584,6 +1598,8 @@ function checkPredation() {
     const predator = npcs.get(predatorId)
     if (!predator) continue
     
+    // Host respawns, single-player respawns
+    // Followers don't run this code (returned early above)
     removeFish(preyId, true)
     
     if (predator.scaleMultiplier < CONFIG.maxScale) {
@@ -2430,12 +2446,20 @@ function applySnapshot(snapshot) {
   let corrected = 0
   let missing = 0
   
+  // Build set of fish IDs from snapshot for quick lookup
+  const snapshotIds = new Set()
+  for (const fishData of snapshot.fish) {
+    snapshotIds.add(fishData.id)
+  }
+  
+  // Apply corrections for fish that exist in both
   for (const fishData of snapshot.fish) {
     const npc = npcs.get(fishData.id)
     
     if (!npc) {
       // Fish exists on host but not on follower
-      // This can happen if fish was just spawned or eaten
+      // This can happen if fish was just spawned by host
+      // We can't spawn it here without full creature data
       missing++
       continue
     }
@@ -2460,9 +2484,23 @@ function applySnapshot(snapshot) {
     corrected++
   }
   
+  // Remove fish that exist locally but not on host
+  // This handles NPC-eating-NPC events that only host processes
+  const toRemove = []
+  for (const [id] of npcs) {
+    if (!snapshotIds.has(id)) {
+      toRemove.push(id)
+    }
+  }
+  
+  for (const id of toRemove) {
+    // Remove without respawn - host handles population
+    removeFish(id, false)
+  }
+  
   // Log if there's significant mismatch
-  if (missing > 5) {
-    console.log(`[FishAdder] Snapshot: corrected ${corrected}, missing ${missing} fish`)
+  if (missing > 5 || toRemove.length > 0) {
+    console.log(`[FishAdder] Snapshot: corrected ${corrected}, missing ${missing}, removed ${toRemove.length}`)
   }
 }
 

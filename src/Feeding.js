@@ -4,8 +4,8 @@
  * DESIGN:
  *   - Visual mesh volume determines "size" for eating eligibility
  *   - Larger creatures can eat smaller creatures
- *   - Player → NPC: Pure distance + volume check (no physics needed)
- *   - Player → Player: Physics capsule collision triggers check
+ *   - Player â†’ NPC: Pure distance + volume check (no physics needed)
+ *   - Player â†’ Player: Physics capsule collision triggers check
  * 
  * VOLUME HIERARCHY:
  *   - visualVolume: True mesh volume (sum of all BoxGeometry parts)
@@ -29,6 +29,7 @@ import * as THREE from 'three'
 import { getPlayer, addFood, getPlayerNormalizationInfo } from './player.js'
 import { MeshRegistry } from './MeshRegistry.js'
 import { computeGroupVolume } from './MeshVolume.js'
+import { networkManager } from '../network/NetworkManager.js'
 
 // ============================================================================
 // CONFIGURATION
@@ -164,7 +165,7 @@ function calculateFoodValue(preyVolume) {
 }
 
 // ============================================================================
-// PLAYER → NPC FEEDING
+// PLAYER â†’ NPC FEEDING
 // ============================================================================
 
 /**
@@ -247,8 +248,17 @@ function consumeNPC(npc, playerVolume, npcVolume, currentTime) {
   meal.playerVolumeAfter = growthResult.totalVolume
   meal.volumeGained = growthResult.volumeGained
   
-  // Remove NPC from world
-  fishAdderRef.removeFish(npc.id, true)  // true = respawn replacement
+  // MULTIPLAYER: Send eat event to server
+  // Server will broadcast NPC_DEATH to all players (including us for confirmation)
+  // Don't respawn locally - host handles respawn via NPC snapshots
+  if (networkManager.isConnected()) {
+    networkManager.sendEatNPC(npc.id)
+    // Remove locally WITHOUT respawn - host will handle population via snapshots
+    fishAdderRef.removeFish(npc.id, false)
+  } else {
+    // Single-player: Remove and respawn locally
+    fishAdderRef.removeFish(npc.id, true)
+  }
   
   // Update state
   lastEatTime = currentTime
@@ -282,7 +292,7 @@ function consumeNPC(npc, playerVolume, npcVolume, currentTime) {
 }
 
 // ============================================================================
-// PLAYER → PLAYER FEEDING (Multiplayer)
+// PLAYER â†’ PLAYER FEEDING (Multiplayer)
 // ============================================================================
 
 /**
@@ -372,7 +382,7 @@ function consumePlayer(predator, prey, predatorVolume, preyVolume) {
 }
 
 // ============================================================================
-// NPC → NPC FEEDING (AI Predation)
+// NPC â†’ NPC FEEDING (AI Predation)
 // ============================================================================
 
 /**
@@ -529,7 +539,7 @@ function debug() {
   console.group('[Feeding] Debug')
   
   const stats = getStats()
-  console.log('Player volume:', stats.playerVolume.toFixed(2), 'm³')
+  console.log('Player volume:', stats.playerVolume.toFixed(2), 'mÂ³')
   console.log('Recent meals:', stats.recentMeals)
   console.log('Total food eaten:', stats.totalFoodEaten.toFixed(2))
   console.log('NPCs eaten:', stats.npcsEaten)
