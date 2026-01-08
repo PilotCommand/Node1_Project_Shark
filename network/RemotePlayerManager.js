@@ -8,6 +8,8 @@ import * as THREE from 'three'
 import { PositionBuffer } from './Interpolation.js'
 import { generateCreature } from '../src/Encyclopedia.js'
 import { computeCapsuleParams } from '../src/ScaleMesh.js'
+import { computeCapsuleVolume } from '../src/NormalScale.js'
+import { MeshRegistry, Category } from '../src/MeshRegistry.js'
 import {
   isPhysicsReady,
   createRemotePlayerBody,
@@ -120,6 +122,61 @@ class RemotePlayer {
       
       // Create physics body for this remote player
       this.createPhysicsBody()
+      
+      // Compute visual volume for attacker detection
+      this.computeVisualVolume()
+      
+      // Register with MeshRegistry for attacker detection
+      this.registerWithMeshRegistry()
+    }
+  }
+  
+  /**
+   * Compute the visual volume of this remote player based on capsule params and scale
+   * This is used by the attacker ability to determine threat level
+   */
+  computeVisualVolume() {
+    if (!this.capsuleParams) {
+      // Fallback: estimate from scale (assume base volume of ~1)
+      this.visualVolume = Math.pow(this.scale || 1, 3)
+      return
+    }
+    
+    // Use capsule volume formula: π * r² * (4/3 * r + 2 * h)
+    // where r = radius and h = halfHeight
+    const r = this.capsuleParams.radius
+    const h = this.capsuleParams.halfHeight
+    this.visualVolume = computeCapsuleVolume(r, h)
+  }
+  
+  /**
+   * Register this remote player with MeshRegistry for detection by attacker ability
+   */
+  registerWithMeshRegistry() {
+    if (!this.mesh) return
+    
+    this.registryId = MeshRegistry.register(`remote_player_${this.id}`, {
+      mesh: this.mesh,
+      category: Category.REMOTE_PLAYER,
+      tags: [],
+      metadata: {
+        playerId: this.id,
+        playerName: this.name,
+        visualVolume: this.visualVolume || 1,
+        isRemotePlayer: true,
+      }
+    }, true)  // Use explicit ID
+    
+    console.log(`[RemotePlayer] Registered ${this.id} with MeshRegistry (volume: ${(this.visualVolume || 1).toFixed(2)})`)
+  }
+  
+  /**
+   * Unregister this remote player from MeshRegistry
+   */
+  unregisterFromMeshRegistry() {
+    if (this.registryId) {
+      MeshRegistry.unregister(this.registryId)
+      this.registryId = null
     }
   }
   
@@ -283,6 +340,28 @@ class RemotePlayer {
   
   updateScale(newScale) {
     this.targetScale = newScale
+    
+    // Recalculate visual volume based on the new scale
+    // The capsule params are scaled proportionally
+    if (this.capsuleParams) {
+      // Recalculate capsule params at new scale
+      const baseRadius = this.capsuleParams.radius / (this.scale || 1)
+      const baseHalfHeight = this.capsuleParams.halfHeight / (this.scale || 1)
+      const newRadius = baseRadius * newScale
+      const newHalfHeight = baseHalfHeight * newScale
+      
+      this.visualVolume = computeCapsuleVolume(newRadius, newHalfHeight)
+    } else {
+      // Fallback: estimate from scale
+      this.visualVolume = Math.pow(newScale, 3)
+    }
+    
+    // Update the MeshRegistry metadata
+    if (this.registryId) {
+      MeshRegistry.updateMetadata(this.registryId, {
+        visualVolume: this.visualVolume,
+      })
+    }
   }
   
   /**
@@ -505,6 +584,9 @@ class RemotePlayer {
         camper.removeRemoteCamouflage(cleanupData)
       })
     }
+    
+    // Unregister from MeshRegistry (for attacker detection)
+    this.unregisterFromMeshRegistry()
     
     // Remove physics body first
     removeRemotePlayerBody(this.id)

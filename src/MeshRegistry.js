@@ -13,6 +13,7 @@
 export const Category = {
   PLAYER: 'player',
   NPC: 'npc',
+  REMOTE_PLAYER: 'remote_player',  // Other players in multiplayer
   MAP: 'map',
   PROJECTILE: 'projectile',
   PICKUP: 'pickup',

@@ -19,7 +19,7 @@ import { FishAdder } from './FishAdder.js'
 import { MeshRegistry, Category } from './MeshRegistry.js'
 
 // ============================================================================
-// ⭐ CAPACITY CONFIG - EASY TO EDIT! ⭐
+// â­ CAPACITY CONFIG - EASY TO EDIT! â­
 // ============================================================================
 
 const CAPACITY_CONFIG = {
@@ -163,6 +163,7 @@ function refreshNPCRoots() {
   
   if (!playerRef) return
   
+  // Get NPC fish from FishAdder
   const nearby = FishAdder.getNearbyNPCs(playerRef.position, CONFIG.detectionRange)
   if (nearby) {
     for (let i = 0; i < nearby.length; i++) {
@@ -173,11 +174,21 @@ function refreshNPCRoots() {
     }
   }
   
+  // Get registered NPCs from MeshRegistry
   const regNPCs = MeshRegistry.getByCategory(Category.NPC)
   for (let i = 0; i < regNPCs.length; i++) {
     const e = regNPCs[i]
     if (e.mesh && !npcRoots.has(e.mesh.uuid)) {
       npcRoots.set(e.mesh.uuid, e.metadata?.visualVolume || 1)
+    }
+  }
+  
+  // Get remote players from MeshRegistry
+  const remotePlayers = MeshRegistry.getByCategory(Category.REMOTE_PLAYER)
+  for (let i = 0; i < remotePlayers.length; i++) {
+    const rp = remotePlayers[i]
+    if (rp.mesh && !npcRoots.has(rp.mesh.uuid)) {
+      npcRoots.set(rp.mesh.uuid, rp.metadata?.visualVolume || 1)
     }
   }
 }
@@ -248,7 +259,11 @@ function buildCache() {
       })
     }
     
-    const npcVol = getNPCVolume(child)
+    // Check if this is a disguise mimic mesh (from camper ability)
+    // These should be treated as world geometry, not as NPCs
+    const isDisguiseMimic = child.userData?.isDisguiseMimic === true
+    
+    const npcVol = isDisguiseMimic ? null : getNPCVolume(child)
     
     if (npcVol !== null) {
       // It's an NPC - store in npcCache (fog will be disabled gradually in applyToNPCs)
@@ -259,7 +274,7 @@ function buildCache() {
         fogDisabled: false,  // Track fog state
       })
     } else {
-      // World geometry
+      // World geometry (or disguise mimic - treated as world)
       worldCache.set(child.uuid, {
         mesh: child,
         origColors,
@@ -582,6 +597,14 @@ export function debugAttacker() {
   console.log('World meshes:', worldCache.size)
   console.log('NPC meshes:', npcCache.size)
   console.log('Player volume:', playerVolume.toFixed(2))
+  
+  // Count remote players in npcRoots
+  const remotePlayers = MeshRegistry.getByCategory(Category.REMOTE_PLAYER)
+  console.log('Remote players detected:', remotePlayers.length)
+  remotePlayers.forEach(rp => {
+    console.log(`  - ${rp.metadata?.playerName || rp.id}: volume ${(rp.metadata?.visualVolume || 1).toFixed(2)}`)
+  })
+  
   console.groupEnd()
 }
 
