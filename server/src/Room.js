@@ -187,6 +187,10 @@ export class Room {
         this.handlePrismRemove(ws, data)
         break
         
+      case MSG.CHAT:
+        this.handleChat(ws, data)
+        break
+        
       default:
         console.warn(`[Room ${this.id}] Unknown message type: ${data.type}`)
     }
@@ -401,6 +405,30 @@ export class Room {
     this.broadcast(MSG.PRISM_REMOVE, {
       id: ws.id,
       prismId: data.prismId,
+    }, ws.id)
+  }
+  
+  /**
+   * Handle chat message - relay to all other players
+   * @param {WebSocket} ws - The sending player
+   * @param {Object} data - { text: string, isEmoji: boolean }
+   */
+  handleChat(ws, data) {
+    // Validate message
+    if (!data.text || typeof data.text !== 'string') {
+      console.warn(`[Room ${this.id}] Invalid chat from player ${ws.id}`)
+      return
+    }
+    
+    // Limit message length
+    const text = data.text.substring(0, 200)
+    
+    // Relay to all OTHER players with sender info
+    this.broadcast(MSG.CHAT, {
+      senderId: ws.id,
+      sender: ws.name,
+      text: text,
+      isEmoji: data.isEmoji || false,
     }, ws.id)
   }
   

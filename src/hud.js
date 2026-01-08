@@ -31,6 +31,9 @@ let proximityBubbleTimeout = null
 const PROXIMITY_BUBBLE_DURATION = 4000 // How long bubble stays visible (ms)
 const PROXIMITY_BUBBLE_FADE = 300 // Fade out duration (ms)
 
+// Remote player bubble tracking (for multiplayer chat)
+const remotePlayerBubbles = new Map() // Map of playerId -> { element, timeout }
+
 // Capacity system state - DEFAULT/FALLBACK config (per-ability configs override these)
 // Edit capacity settings in each ability file: sprinter.js, attacker.js, etc.
 const DEFAULT_CAPACITY_CONFIG = {
@@ -927,11 +930,30 @@ function createChatPanel() {
   // This allows the core chat logic (chats.js) to be decoupled from the UI
   Chat.onMessage(renderChatMessage)
   
+  // Subscribe to remote chat messages from network
+  if (networkManager) {
+    networkManager.onChatMessage((data) => {
+      // data contains: senderId, sender (name), text, isEmoji
+      if (data.isEmoji) {
+        Chat.emojiMessage(data.text, data.sender, data.senderId)
+      } else {
+        Chat.remoteMessage(data.text, data.sender, data.senderId)
+      }
+      // Show proximity bubble above the remote player's fish
+      showRemotePlayerBubble(data.senderId, data.text)
+    })
+  }
+  
   // Chat input handling
   chatInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && chatInput.value.trim()) {
       const message = chatInput.value.trim()
       addChatMessage(message, 'player')
+      
+      // Send over network if connected
+      if (networkManager && networkManager.isConnected()) {
+        networkManager.sendChatMessage(message, false)
+      }
       
       // Show proximity bubble if checkbox is checked
       if (proximityCheckbox.checked) {
@@ -1176,10 +1198,14 @@ function createEmojiWheel() {
     cursorDot.setAttribute('cy', targetY)
   })
   
-  // Show proximity bubble on emoji select
+  // Show proximity bubble on emoji select and send over network
   Chat.onEmojiWheel('select', (data) => {
     if (proximityCheckbox && proximityCheckbox.checked) {
       showProximityBubble(data.emoji)
+    }
+    // Send emoji over network if connected
+    if (networkManager && networkManager.isConnected()) {
+      networkManager.sendChatMessage(data.emoji, true)
     }
   })
   
@@ -1494,6 +1520,92 @@ function updateProximityBubble() {
   
   proximityBubble.style.left = x + 'px'
   proximityBubble.style.top = y + 'px'
+}
+
+/**
+ * Show a chat bubble above a remote player's fish
+ * @param {string} playerId - The remote player's ID
+ * @param {string} text - The message text
+ */
+function showRemotePlayerBubble(playerId, text) {
+  // Get or create bubble for this player
+  let bubbleData = remotePlayerBubbles.get(playerId)
+  
+  if (!bubbleData) {
+    // Create new bubble element
+    const bubble = document.createElement('div')
+    bubble.className = 'proximity-bubble remote-player-bubble'
+    bubble.style.display = 'none'
+    document.body.appendChild(bubble)
+    bubbleData = { element: bubble, timeout: null }
+    remotePlayerBubbles.set(playerId, bubbleData)
+  }
+  
+  const bubble = bubbleData.element
+  
+  // Clear any existing timeout
+  if (bubbleData.timeout) {
+    clearTimeout(bubbleData.timeout)
+    bubble.classList.remove('fading')
+  }
+  
+  // Set the message and show the bubble
+  bubble.textContent = text
+  bubble.style.display = 'block'
+  bubble.dataset.playerId = playerId
+  
+  // Start fade out after duration
+  bubbleData.timeout = setTimeout(() => {
+    bubble.classList.add('fading')
+    
+    // Hide completely after fade
+    setTimeout(() => {
+      bubble.style.display = 'none'
+      bubble.classList.remove('fading')
+    }, PROXIMITY_BUBBLE_FADE)
+  }, PROXIMITY_BUBBLE_DURATION)
+}
+
+/**
+ * Update all remote player bubble positions
+ * Called each frame from updateHUD
+ */
+function updateRemotePlayerBubbles() {
+  if (!camera || !networkManager) return
+  
+  const remotePlayers = networkManager.getRemotePlayers()
+  if (!remotePlayers) return
+  
+  remotePlayerBubbles.forEach((bubbleData, playerId) => {
+    const bubble = bubbleData.element
+    if (bubble.style.display === 'none') return
+    
+    // Get the remote player
+    const remotePlayer = remotePlayers.getPlayer(playerId)
+    if (!remotePlayer || !remotePlayer.mesh) {
+      bubble.style.display = 'none'
+      return
+    }
+    
+    // Project player position to screen coordinates
+    const screenPos = remotePlayer.mesh.position.clone()
+    screenPos.y += 3 // Offset above player head
+    screenPos.project(camera)
+    
+    // Convert to CSS coordinates
+    const x = (screenPos.x * 0.5 + 0.5) * window.innerWidth
+    const y = (-screenPos.y * 0.5 + 0.5) * window.innerHeight
+    
+    // Check if in front of camera
+    if (screenPos.z > 1) {
+      bubble.style.visibility = 'hidden'
+      return
+    }
+    
+    bubble.style.visibility = 'visible'
+    bubble.style.left = x + 'px'
+    bubble.style.top = y + 'px'
+  })
 }
 
 // Pre-computed constants for NPC colors (avoid object allocation in hot loop)
@@ -1889,6 +2001,7 @@ export function updateHUD(delta) {
   updateCursorRing()
   updateCapacityBar(delta)
   updateProximityBubble()
+  updateRemotePlayerBubbles()
 }
 
 // Export for external use (e.g., feeding events)

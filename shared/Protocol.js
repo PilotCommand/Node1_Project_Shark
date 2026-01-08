@@ -10,29 +10,29 @@
 
 export const MSG = {
   // Connection lifecycle (1-9)
-  WELCOME: 1,           // Server â†’ Client: You connected, here's your ID
-  PLAYER_JOIN: 2,       // Server â†’ Client: Another player joined
-  PLAYER_LEAVE: 3,      // Server â†’ Client: Another player left
-  PING: 4,              // Client â†’ Server: Latency check
-  PONG: 5,              // Server â†’ Client: Latency response
+  WELCOME: 1,           // Server Ã¢â€ â€™ Client: You connected, here's your ID
+  PLAYER_JOIN: 2,       // Server Ã¢â€ â€™ Client: Another player joined
+  PLAYER_LEAVE: 3,      // Server Ã¢â€ â€™ Client: Another player left
+  PING: 4,              // Client Ã¢â€ â€™ Server: Latency check
+  PONG: 5,              // Server Ã¢â€ â€™ Client: Latency response
   
   // Movement (10-19)
-  POSITION: 10,         // Client â†’ Server: My position update
-  BATCH_POSITIONS: 11,  // Server â†’ Client: All players' positions
+  POSITION: 10,         // Client Ã¢â€ â€™ Server: My position update
+  BATCH_POSITIONS: 11,  // Server Ã¢â€ â€™ Client: All players' positions
   
   // Game state (20-29)
-  JOIN_GAME: 20,        // Client â†’ Server: I selected my creature, ready to play
-  CREATURE_UPDATE: 21,  // Client â†’ Server: I changed creature (R key, N/B keys)
-  SIZE_UPDATE: 22,      // Server â†’ Client: Player size changed significantly
+  JOIN_GAME: 20,        // Client Ã¢â€ â€™ Server: I selected my creature, ready to play
+  CREATURE_UPDATE: 21,  // Client Ã¢â€ â€™ Server: I changed creature (R key, N/B keys)
+  SIZE_UPDATE: 22,      // Server Ã¢â€ â€™ Client: Player size changed significantly
   
   // NPCs (30-39)
   NPC_SPAWN: 30,
   NPC_BATCH_SPAWN: 31,
   NPC_DEATH: 32,
   EAT_NPC: 33,
-  NPC_SNAPSHOT: 34,       // Host → Server → Others: NPC positions sync
-  HOST_ASSIGNED: 35,      // Server → Client: You are the NPC simulation host
-  HOST_CHANGED: 36,       // Server → All: New host assigned
+  NPC_SNAPSHOT: 34,       // Host â†’ Server â†’ Others: NPC positions sync
+  HOST_ASSIGNED: 35,      // Server â†’ Client: You are the NPC simulation host
+  HOST_CHANGED: 36,       // Server â†’ All: New host assigned
   
   // PvP (40-49) - Phase 4
   EAT_PLAYER: 40,
@@ -49,7 +49,7 @@ export const MSG = {
   SWITCH_ROOM: 62,
   
   // World sync (70-79)
-  REQUEST_MAP_CHANGE: 70,  // Client â†’ Server: Request new map
+  REQUEST_MAP_CHANGE: 70,  // Client Ã¢â€ â€™ Server: Request new map
   MAP_CHANGE: 71,          // Server -> All Clients: New map seed
 
   // Abilities (80-89)
@@ -57,6 +57,9 @@ export const MSG = {
   ABILITY_STOP: 81,        // Client -> Server -> Others: Player deactivated ability
   PRISM_PLACE: 82,         // Client -> Server -> Others: Player placed a stacker prism
   PRISM_REMOVE: 83,        // Client -> Server -> Others: Player's prism was removed
+  
+  // Chat (90-99)
+  CHAT: 90,                // Client -> Server -> Others: Chat message or emoji
 }
 
 // ============================================================================

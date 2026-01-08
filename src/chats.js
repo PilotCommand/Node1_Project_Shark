@@ -20,7 +20,7 @@ export const EMOJI_CONFIG = {
     { key: '1', emoji: '⚠️', label: 'Warning' },
     { key: '2', emoji: '✅', label: 'Yes' },
     { key: '3', emoji: '❌', label: 'No' },
-    { key: '4', emoji: '❔', label: 'Question' },
+    { key: '4', emoji: '❓', label: 'Question' },
     { key: '5', emoji: '☠️', label: 'Dead' },
     { key: '6', emoji: '❤️', label: 'Love' },
     { key: '7', emoji: '🍀', label: 'Lucky' },
@@ -510,16 +510,16 @@ function getSegmentFromPosition(dx, dy) {
   if (distance < MIN_MAGNITUDE) return -1
   
   // Calculate angle using atan2 (screen coords: Y down is positive)
-  // atan2 gives: 0° = right, 90° = down, -90° = up, ±180° = left
+  // atan2 gives: 0Â° = right, 90Â° = down, -90Â° = up, Â±180Â° = left
   let angle = Math.atan2(dy, dx)
   let degrees = angle * (180 / Math.PI)
   
-  // Convert to wheel coords: 0° = top, going clockwise
+  // Convert to wheel coords: 0Â° = top, going clockwise
   // Add 90 to shift from "right = 0" to "top = 0"
   let wheelDegrees = (degrees + 90 + 360) % 360
   
   // Each segment is 36 degrees
-  // Segment 0: 0° to 36°, Segment 1: 36° to 72°, etc.
+  // Segment 0: 0Â° to 36Â°, Segment 1: 36Â° to 72Â°, etc.
   const segmentIndex = Math.floor(wheelDegrees / 36) % 10
   
   return segmentIndex
@@ -653,7 +653,7 @@ function lineCircleIntersection(angle, offset, radius, cx, cy) {
   // where perpendicular = (-sin(angle), cos(angle)) and direction = (cos(angle), sin(angle))
   //
   // For intersection with circle of radius R:
-  // |P|² = R²  =>  offset² + t² = R²  =>  t = sqrt(R² - offset²)
+  // |P|Â² = RÂ²  =>  offsetÂ² + tÂ² = RÂ²  =>  t = sqrt(RÂ² - offsetÂ²)
   
   const t = Math.sqrt(radius * radius - offset * offset)
   
@@ -878,7 +878,7 @@ export function setEmojiConfig(newConfig) {
   if (newConfig.emojis !== undefined && Array.isArray(newConfig.emojis)) {
     EMOJI_CONFIG.emojis = newConfig.emojis.slice(0, 10).map((e, i) => ({
       key: e.key || String((i + 1) % 10),
-      emoji: e.emoji || '❓',
+      emoji: e.emoji || 'â“',
       label: e.label || `Emoji ${i}`
     }))
   }
