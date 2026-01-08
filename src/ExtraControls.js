@@ -13,7 +13,7 @@
 
 import Sprinter, { init as initSprinter, clear as clearSprinter } from './sprinter.js'
 import Stacker, { init as initStacker, debugStacker } from './stacker.js'
-import Camper, { init as initCamper, debugCamper, getTargetColorHex, getDetectedTerrainType } from './camper.js'
+import Camper, { init as initCamper, debugCamper, getTargetColorHex, getDetectedTerrainType, getMimicSeed } from './camper.js'
 import Attacker, { init as initAttacker, debugAttacker } from './attacker.js'
 import { networkManager } from '../network/NetworkManager.js'
 
@@ -175,8 +175,8 @@ export function activateExtra() {
     setTimeout(() => {
       const colorHex = getTargetColorHex()
       const terrainType = getDetectedTerrainType()
-      // Generate a seed for deterministic mimic generation across all clients
-      const mimicSeed = Math.floor(Math.random() * 0xFFFFFFFF)
+      // Get the seed that was used to create the local mimic (for identical remote mimics)
+      const mimicSeed = getMimicSeed()
       console.log(`[ExtraControls] Sending camper data: color=${colorHex}, terrain=${terrainType}, seed=${mimicSeed}`)
       networkManager.sendAbilityStart(ACTIVE_ABILITY, { color: colorHex, terrain: terrainType, mimicSeed })
     }, 100)

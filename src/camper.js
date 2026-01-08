@@ -92,6 +92,7 @@ let isCamouflaged = false       // Whether color is currently applied and should
 // Disguise mimic state
 let disguiseMimicGroup = null   // Group containing mimic pieces
 let detectedTerrainType = null  // 'coral', 'boulder', or null
+let currentMimicSeed = null     // Seed used for deterministic mimic generation
 
 // ============================================================================
 // COLOR UTILITIES
@@ -519,8 +520,9 @@ function createDisguiseMimic(player, color, terrainType) {
   // Get positions for mimic pieces
   const positions = getMimicPositions(config.pieceCount)
   
-  // Create RNG for consistent mimic shape
-  const rng = createMimicRNG(Math.floor(Math.random() * 100000))
+  // Generate and store seed for deterministic mimic (same seed sent to other players)
+  currentMimicSeed = Math.floor(Math.random() * 0xFFFFFFFF)
+  const rng = createMimicRNG(currentMimicSeed)
   
   // Vary color slightly for each piece (like coral does)
   const hsl = { h: 0, s: 0, l: 0 }
@@ -661,6 +663,7 @@ function clearDisguiseMimic() {
     disguiseMimicGroup = null
   }
   detectedTerrainType = null
+  currentMimicSeed = null
 }
 
 // ============================================================================
@@ -1398,6 +1401,15 @@ export function getDetectedTerrainType() {
   return detectedTerrainType
 }
 
+/**
+ * Get the current mimic seed for network sync
+ * This is the seed used to generate the local player's mimic
+ * @returns {number|null} Seed value or null if no mimic active
+ */
+export function getMimicSeed() {
+  return currentMimicSeed
+}
+
 // ============================================================================
 // REMOTE PLAYER CAMOUFLAGE SUPPORT
 // ============================================================================
@@ -1587,7 +1599,112 @@ export function startRemoteCamouflageFadeOut(cleanupData) {
   cleanupData.isFadingOut = true
   // fadeBlend should already be at 1.0 if fully faded in, or wherever it was
   
+  // Switch back to transparent mode for fade-out
+  makeRemoteCamouflageTransparent(cleanupData)
+  
   console.log('[Camper Remote] Starting camouflage fade out')
+}
+
+/**
+ * Switch remote camouflage to opaque mode (after fade-in completes)
+ * This fixes z-sorting issues with transparent objects
+ * @param {Object} cleanupData - Data returned from applyRemoteCamouflage
+ */
+function makeRemoteCamouflageOpaque(cleanupData) {
+  if (!cleanupData) return
+  
+  const { mesh, mimicGroup } = cleanupData
+  const processedMaterials = new Set()
+  
+  // Switch fish materials to final camo state with proper depth writing
+  if (mesh) {
+    mesh.traverse((child) => {
+      if (child.userData.isDisguiseMimic) return
+      
+      if (child.material) {
+        const materials = Array.isArray(child.material) ? child.material : [child.material]
+        
+        for (const mat of materials) {
+          if (processedMaterials.has(mat)) continue
+          processedMaterials.add(mat)
+          
+          const original = mat.userData._remoteCamoOriginal
+          if (!original) continue
+          
+          // Set final camo color
+          if (mat.color && cleanupData.camoColor) {
+            mat.color.copy(cleanupData.camoColor)
+          }
+          
+          // Set final camo opacity and restore proper depth writing
+          mat.opacity = CAMPER_CONFIG.fishCamoOpacity
+          // Keep transparent if camo opacity < 1, otherwise can go opaque
+          if (CAMPER_CONFIG.fishCamoOpacity >= 1) {
+            mat.transparent = false
+            mat.depthWrite = true
+          }
+          mat.needsUpdate = true
+        }
+      }
+    })
+  }
+  
+  // Switch mimic to opaque mode
+  if (mimicGroup) {
+    const targetOpacity = CAMPER_CONFIG.disguiseMimic.useOpacity ? CAMPER_CONFIG.disguiseMimic.opacity : 1.0
+    mimicGroup.traverse((child) => {
+      if (child.material && child.userData.isDisguiseMimic) {
+        child.material.transparent = false
+        child.material.opacity = targetOpacity
+        child.material.depthWrite = true
+        child.material.needsUpdate = true
+      }
+    })
+  }
+}
+
+/**
+ * Switch remote camouflage to transparent mode (for fade-out)
+ * @param {Object} cleanupData - Data returned from applyRemoteCamouflage
+ */
+function makeRemoteCamouflageTransparent(cleanupData) {
+  if (!cleanupData) return
+  
+  const { mesh, mimicGroup } = cleanupData
+  const processedMaterials = new Set()
+  
+  // Switch fish materials back to transparent for fading
+  if (mesh) {
+    mesh.traverse((child) => {
+      if (child.userData.isDisguiseMimic) return
+      
+      if (child.material) {
+        const materials = Array.isArray(child.material) ? child.material : [child.material]
+        
+        for (const mat of materials) {
+          if (processedMaterials.has(mat)) continue
+          processedMaterials.add(mat)
+          
+          if (mat.userData._remoteCamoOriginal) {
+            mat.transparent = true
+            mat.depthWrite = false
+            mat.needsUpdate = true
+          }
+        }
+      }
+    })
+  }
+  
+  // Switch mimic to transparent mode
+  if (mimicGroup) {
+    mimicGroup.traverse((child) => {
+      if (child.material && child.userData.isDisguiseMimic) {
+        child.material.transparent = true
+        child.material.depthWrite = false
+        child.material.needsUpdate = true
+      }
+    })
+  }
 }
 
 /**
@@ -1609,10 +1726,20 @@ export function updateRemoteCamouflageFade(cleanupData, delta) {
     // Check if fade-in complete
     if (cleanupData.fadeBlend >= 1) {
       cleanupData.isFadingIn = false
-      console.log('[Camper Remote] Fade-in complete')
+      
+      // Switch to opaque mode to fix z-sorting issues
+      makeRemoteCamouflageOpaque(cleanupData)
+      
+      console.log('[Camper Remote] Fade-in complete, switched to opaque mode')
     }
   } else if (cleanupData.isFadingOut) {
     cleanupData.fadeBlend = Math.max(0, cleanupData.fadeBlend - delta * CAMPER_CONFIG.transitionSpeed)
+  }
+  
+  // Only apply blend if still fading (not in stable opaque state)
+  if (!cleanupData.isFadingIn && !cleanupData.isFadingOut) {
+    // Stable state - don't update materials
+    return false
   }
   
   const blend = cleanupData.fadeBlend
