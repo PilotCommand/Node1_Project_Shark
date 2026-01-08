@@ -19,6 +19,9 @@ export class Room {
     // NPC seed - all players share this for deterministic NPC spawning
     this.npcSeed = options.npcSeed || Math.floor(Math.random() * 0xFFFFFFFF)
     
+    // Track dead NPCs for late joiners
+    this.deadNpcIds = new Set()
+    
     this.tickCount = 0
     this.tickRate = NETWORK_CONFIG.tickRate
     this.tickInterval = null
@@ -52,6 +55,7 @@ export class Room {
       worldSeed: this.worldSeed,
       npcSeed: this.npcSeed,
       players: existingPlayers,
+      deadNpcIds: [...this.deadNpcIds],  // Array of NPC IDs that have been eaten
     })
     
     console.log(`[Room ${this.id}] Player ${playerId} (${name}) joined`)
@@ -215,7 +219,29 @@ export class Room {
   }
   
   handleEatNPC(ws, data) {
-    // TODO: Phase 4
+    if (!data.npcId) {
+      console.warn(`[Room ${this.id}] Invalid EAT_NPC - missing npcId`)
+      return
+    }
+    
+    const npcId = data.npcId
+    
+    // Check if already eaten (prevent double-eat race condition)
+    if (this.deadNpcIds.has(npcId)) {
+      console.log(`[Room ${this.id}] NPC ${npcId} already dead, ignoring duplicate eat`)
+      return
+    }
+    
+    // Track as dead
+    this.deadNpcIds.add(npcId)
+    
+    // Broadcast NPC_DEATH to ALL players (including the eater, for confirmation)
+    this.broadcast(MSG.NPC_DEATH, {
+      npcId: npcId,
+      eatenBy: ws.id,
+    })
+    
+    console.log(`[Room ${this.id}] Player ${ws.id} ate NPC ${npcId} (${this.deadNpcIds.size} total dead)`)
   }
   
   handleEatPlayer(ws, data) {
@@ -223,21 +249,25 @@ export class Room {
   }
   
   handleMapChangeRequest(ws) {
-    // Generate new random seeds
-    const newWorldSeed = Math.floor(Math.random() * 0xFFFFFFFF)
-    const newNpcSeed = Math.floor(Math.random() * 0xFFFFFFFF)
+    // Generate ONE master seed - npcSeed is derived from it
+    // This ensures all clients derive the same seeds
+    const masterSeed = Math.floor(Math.random() * 0xFFFFFFFF)
+    const derivedNpcSeed = (masterSeed + 1) >>> 0  // Derived deterministically
     
-    this.worldSeed = newWorldSeed
-    this.npcSeed = newNpcSeed
+    this.worldSeed = masterSeed
+    this.npcSeed = derivedNpcSeed
+    
+    // Clear dead NPCs - all NPCs will respawn fresh
+    this.deadNpcIds.clear()
     
     // Broadcast to ALL players (including the requester)
+    // Send masterSeed as 'seed' - client will derive npcSeed the same way
     this.broadcast(MSG.MAP_CHANGE, {
-      seed: newWorldSeed,
-      npcSeed: newNpcSeed,
+      seed: masterSeed,
       requestedBy: ws.id,
     })
     
-    console.log(`[Room ${this.id}] Map changed - worldSeed: 0x${newWorldSeed.toString(16).toUpperCase()}, npcSeed: 0x${newNpcSeed.toString(16).toUpperCase()} (requested by player ${ws.id})`)
+    console.log(`[Room ${this.id}] Map changed - masterSeed: 0x${masterSeed.toString(16).toUpperCase()} (npcSeed derived as 0x${derivedNpcSeed.toString(16).toUpperCase()}) (requested by player ${ws.id})`)
   }
   
   startGameLoop() {

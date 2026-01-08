@@ -12,7 +12,7 @@
  *   T           - Increase scale
  *   G           - Mutate creature (new random of same type)
  *   N / B       - Next / Previous species
- *   Z           - Cycle variant (e.g., Yellowfin → Bluefin)
+ *   Z           - Cycle variant (e.g., Yellowfin â†’ Bluefin)
  *   M           - New map (synced in multiplayer)
  *   P           - Toggle debug overlays (wireframes + volume labels)
  *   V           - Toggle debug viz (spawn grid + fish paths)
@@ -77,6 +77,7 @@ import {
 } from './ExtraControls.js'
 import { SpawnFactory } from './SpawnFactory.js'
 import { FishAdder } from './FishAdder.js'
+import { Determine } from './determine.js'
 import { activateCapacity, deactivateCapacity, hasCapacity } from './hud.js'
 import * as Chat from './chats.js'
 
@@ -169,33 +170,73 @@ function showNotification(message, color = '#00ff88') {
 }
 
 /**
- * Perform map regeneration with a specific seed
+ * Perform map regeneration with a master seed
  * Used by both local M key press (singleplayer) and network MAP_CHANGE event (multiplayer)
+ * 
+ * This is the SINGLE coordinator for all map change logic:
+ * 1. Regenerate terrain with mapSeed (= masterSeed)
+ * 2. Rebuild terrain physics
+ * 3. Reset and re-analyze SpawnFactory
+ * 4. Clear old fish (before Determine reset for safety)
+ * 5. Reset Determine RNG with derived npcSeed
+ * 6. Spawn new fish (all clients in sync)
+ * 
+ * @param {number|null} masterSeed - The master seed (null = generate random for singleplayer)
  */
-export function performMapRegeneration(seed) {
+export function performMapRegeneration(masterSeed) {
+  // For singleplayer (null seed), generate a random master seed
+  if (masterSeed === null) {
+    masterSeed = Math.floor(Math.random() * 0xFFFFFFFF)
+  }
+  
+  // Derive seeds from master seed (must match server's derivation in Room.js)
+  const mapSeed = masterSeed
+  const npcSeed = (masterSeed + 1) >>> 0  // Same derivation as server
+  
+  console.log(`[Controls] Map regeneration - masterSeed: 0x${masterSeed.toString(16).toUpperCase()}, npcSeed: 0x${npcSeed.toString(16).toUpperCase()}`)
+  
   // Check if visualization was on before map change
   const wasVisualized = SpawnFactory.isVisualized
   
-  const newSeed = regenerateMap(seed)
-  if (newSeed !== null) {
-    rebuildTerrainPhysics()
-    
-    // Reset SpawnFactory when map changes
-    SpawnFactory.reset()
-    
-    // If visualization was on, re-analyze and re-visualize the new map
-    if (wasVisualized) {
-      SpawnFactory.analyzePlayableSpace()
-      SpawnFactory.visualize()
-    }
-    
-    showNotification(
-      `New terrain | Seed: ${newSeed.toString(16).toUpperCase().padStart(8, '0')}`,
-      '#00ffff'
-    )
+  // 1. Regenerate terrain with mapSeed
+  const newSeed = regenerateMap(mapSeed)
+  if (newSeed === null) {
+    console.error('[Controls] Map regeneration failed')
+    return null
   }
   
-  return newSeed
+  // 2. Rebuild terrain physics
+  rebuildTerrainPhysics()
+  
+  // 3. Reset and re-analyze SpawnFactory (MUST happen before fish spawn)
+  SpawnFactory.reset()
+  SpawnFactory.analyzePlayableSpace()
+  console.log(`[Controls] SpawnFactory re-analyzed: ${SpawnFactory.playablePoints.length} grid points`)
+  
+  // If visualization was on, re-visualize
+  if (wasVisualized) {
+    SpawnFactory.visualize()
+  }
+  
+  // 4. Clear old fish FIRST (before Determine reset)
+  // This ensures any accidental Determine calls during clear don't affect spawn
+  FishAdder.clear()
+  
+  // 5. Reset Determine RNG with derived npcSeed
+  // This MUST happen immediately before spawnInitialFish for determinism
+  Determine.reset(npcSeed)
+  
+  // 6. Spawn new fish (uses Determine - all clients will be in sync)
+  FishAdder.spawnInitialFish()
+  console.log(`[Controls] Fish respawned: ${FishAdder.getCount()} creatures`)
+  
+  // Show notification
+  showNotification(
+    `New world | Seed: ${masterSeed.toString(16).toUpperCase().padStart(8, '0')}`,
+    '#00ffff'
+  )
+  
+  return masterSeed
 }
 
 // ============================================================================
@@ -217,9 +258,10 @@ export function initControls() {
   initSwimming()
   
   // Set up multiplayer map change callback
-  networkManager.onMapChange((seed, requestedBy) => {
-    console.log(`[Controls] Map change from server (seed: ${seed}, requested by player ${requestedBy})`)
-    performMapRegeneration(seed)
+  // performMapRegeneration handles EVERYTHING: terrain, physics, SpawnFactory, fish
+  networkManager.onMapChange((masterSeed, requestedBy) => {
+    console.log(`[Controls] Map change from server (masterSeed: 0x${masterSeed.toString(16).toUpperCase()}, requested by player ${requestedBy})`)
+    performMapRegeneration(masterSeed)
   })
   
   // Track mouse position and movement for emoji wheel
@@ -337,7 +379,7 @@ export function initControls() {
         if (scaleDownResult) {
           rebuildPlayerPhysics()
           showNotification(
-            `Scale: ${scaleDownResult.scalePercent.toFixed(0)}% | Vol: ${scaleDownResult.volume.toFixed(2)} m³`,
+            `Scale: ${scaleDownResult.scalePercent.toFixed(0)}% | Vol: ${scaleDownResult.volume.toFixed(2)} mÂ³`,
             '#ff8888'
           )
         }
@@ -349,7 +391,7 @@ export function initControls() {
         if (scaleUpResult) {
           rebuildPlayerPhysics()
           showNotification(
-            `Scale: ${scaleUpResult.scalePercent.toFixed(0)}% | Vol: ${scaleUpResult.volume.toFixed(2)} m³`,
+            `Scale: ${scaleUpResult.scalePercent.toFixed(0)}% | Vol: ${scaleUpResult.volume.toFixed(2)} mÂ³`,
             '#88ff88'
           )
         }
@@ -393,7 +435,7 @@ export function initControls() {
         }
         break
       
-      // Z = Cycle variant (e.g., Yellowfin Tuna → Bluefin Tuna)
+      // Z = Cycle variant (e.g., Yellowfin Tuna â†’ Bluefin Tuna)
       case 'KeyZ':
         const variantResult = cycleVariant()
         if (variantResult.hasVariants) {

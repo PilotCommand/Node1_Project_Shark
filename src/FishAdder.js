@@ -131,6 +131,10 @@ const CONFIG = {
   labelScale: 1,            // World size of labels (units)
   labelOffset: 3,             // Height above fish (world units)
   
+  // Fixed timestep simulation (for multiplayer determinism)
+  tickRate: 20,               // Simulation ticks per second (20 = 50ms per tick)
+  maxTicksPerFrame: 10,       // Limit catch-up to prevent spiral of death
+  
   // Internal
   schoolPathOffset: 10,
 }
@@ -157,6 +161,12 @@ const schools = new Map()
 let allCreatures = []
 let npcIdCounter = 0
 let schoolIdCounter = 0
+
+// FIXED TIMESTEP SIMULATION
+let simulationTick = 0              // Current simulation tick number
+let simulationTime = 0              // Accumulated simulation time (seconds)
+let lastUpdateTime = 0              // Last real-world time update() was called
+let tickDuration = 1 / 20           // Duration of one tick in seconds (recalculated from CONFIG)
 
 // GRID DATA
 let gridPoints = []           // All playable points from SpawnFactory
@@ -293,7 +303,7 @@ function getFishInNearbyCells(pos, rangeSq) {
 
 /**
  * Build adjacency map from SpawnFactory grid
- * Uses spatial hashing for O(k) neighbor lookup instead of O(nÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â²)
+ * Uses spatial hashing for O(k) neighbor lookup instead of O(nÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â²)
  */
 function buildAdjacencyMap() {
   gridPoints = SpawnFactory.playablePoints
@@ -315,7 +325,7 @@ function buildAdjacencyMap() {
   
   adjacencyMap.clear()
   
-  // Use spatial hash to find neighbors (much faster than O(nÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â²))
+  // Use spatial hash to find neighbors (much faster than O(nÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â²))
   for (let i = 0; i < gridPoints.length; i++) {
     const neighbors = []
     const p1 = gridPoints[i]
@@ -501,6 +511,12 @@ function init(scene) {
   _chaseRangeSq = CONFIG.chaseRange * CONFIG.chaseRange
   _eatRangeSq = CONFIG.eatRange * CONFIG.eatRange
   
+  // Initialize fixed timestep
+  tickDuration = 1 / CONFIG.tickRate
+  simulationTick = 0
+  simulationTime = 0
+  lastUpdateTime = performance.now() / 1000
+  
   // Get ALL creature classes (fish, mammals, crustaceans, cephalopods, jellies, sea cucumbers)
   allCreatures = getAllCreatureClasses().filter(c => c.class !== 'starter')
   
@@ -519,6 +535,7 @@ function init(scene) {
   }
   console.log(`[FishAdder] Initialized with ${allCreatures.length} creature types:`, byType)
   console.log(`[FishAdder] Grid: ${gridPoints.length} points`)
+  console.log(`[FishAdder] Fixed timestep: ${CONFIG.tickRate} ticks/sec (${tickDuration * 1000}ms per tick)`)
 }
 
 // ============================================================================
@@ -528,6 +545,26 @@ function init(scene) {
 function spawnInitialFish() {
   if (!isInitialized) {
     console.error('[FishAdder] Not initialized')
+    return
+  }
+  
+  // Safety check: ensure SpawnFactory grid is ready and rebuild adjacency if needed
+  // This handles the case where map changed and SpawnFactory was re-analyzed
+  const spawnFactoryPoints = SpawnFactory.playablePoints
+  if (!spawnFactoryPoints || spawnFactoryPoints.length === 0) {
+    console.warn('[FishAdder] SpawnFactory has no grid points - analyzing now...')
+    SpawnFactory.analyzePlayableSpace()
+  }
+  
+  // Rebuild adjacency map if grid points changed (e.g., after map regeneration)
+  if (gridPoints.length === 0 || gridPoints !== SpawnFactory.playablePoints) {
+    console.log('[FishAdder] Rebuilding adjacency map for new grid...')
+    buildAdjacencyMap()
+    invHashCellSize = 1 / hashCellSize
+  }
+  
+  if (gridPoints.length === 0) {
+    console.error('[FishAdder] Still no grid points after rebuild - cannot spawn fish')
     return
   }
   
@@ -676,7 +713,7 @@ function spawnOneCreature(options = {}) {
   // Compute NATURAL visual volume at scale=1 (before any scaling)
   const naturalVisualVolume = computeGroupVolume(creatureData.mesh, false)
   
-  // Get normally distributed scale (volumes from 1 to 1000 mÃƒâ€šÃ‚Â³)
+  // Get normally distributed scale (volumes from 1 to 1000 mÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³)
   const normalization = getNPCNormalDistributedScale(naturalVisualVolume)
   const finalScaleMultiplier = normalization.scaleFactor
   
@@ -845,12 +882,16 @@ function removeFish(fishId, respawn = true) {
   activeChasers.delete(fishId)
   
   // Remove from school
+  // NOTE: When respawn=false (during clear), skip leadership reassignment
+  // because all fish will be removed anyway. This is CRITICAL for determinism
+  // since planGridPath uses Determine.random() and would desync RNG state.
   if (npc.schoolId) {
     const school = schools.get(npc.schoolId)
     if (school) {
       school.memberIds = school.memberIds.filter(id => id !== fishId)
       
-      if (school.leaderId === fishId && school.memberIds.length > 0) {
+      // Only reassign leadership if we're NOT clearing all fish
+      if (respawn && school.leaderId === fishId && school.memberIds.length > 0) {
         school.leaderId = school.memberIds[0]
         const newLeader = npcs.get(school.leaderId)
         if (newLeader) {
@@ -1278,16 +1319,51 @@ function findNearestPrey(npc) {
 }
 
 // ============================================================================
-// UPDATE LOOP (optimized)
+// UPDATE LOOP (Fixed Timestep for Determinism)
 // ============================================================================
 
+/**
+ * Main update function - uses fixed timestep for deterministic simulation
+ * Called every frame, but runs simulation in fixed tick increments
+ * 
+ * @param {number} deltaTime - Frame delta (used only for accumulator, not simulation)
+ */
 function update(deltaTime) {
   if (!isInitialized) return
   
+  // Accumulate time
+  simulationTime += deltaTime
+  
+  // Calculate how many ticks we need to run
+  const targetTick = Math.floor(simulationTime / tickDuration)
+  let ticksToRun = targetTick - simulationTick
+  
+  // Cap ticks per frame to prevent spiral of death (if game freezes briefly)
+  if (ticksToRun > CONFIG.maxTicksPerFrame) {
+    console.warn(`[FishAdder] Capping ${ticksToRun} ticks to ${CONFIG.maxTicksPerFrame}`)
+    ticksToRun = CONFIG.maxTicksPerFrame
+    // Adjust simulation time to prevent permanent lag
+    simulationTime = simulationTick * tickDuration + ticksToRun * tickDuration
+  }
+  
+  // Run fixed simulation ticks
+  for (let i = 0; i < ticksToRun; i++) {
+    simulateTick(tickDuration)
+    simulationTick++
+  }
+}
+
+/**
+ * Run one fixed simulation tick
+ * All clients run this with identical tickDuration, producing identical results
+ * 
+ * @param {number} dt - Fixed delta time (always tickDuration)
+ */
+function simulateTick(dt) {
   // Iterate directly over Map (no array allocation)
   for (const [, npc] of npcs) {
-    // Movement update
-    const moved = followGridPath(npc, deltaTime)
+    // Movement update with fixed delta
+    const moved = followGridPath(npc, dt)
     
     // Update spatial hash if moved to new cell
     if (moved) {
@@ -1311,6 +1387,23 @@ function update(deltaTime) {
   
   // Check for eating (only active chasers)
   checkPredation()
+}
+
+/**
+ * Reset simulation time (call when NPCs are cleared/respawned)
+ */
+function resetSimulationTime() {
+  simulationTick = 0
+  simulationTime = 0
+  lastUpdateTime = performance.now() / 1000
+}
+
+/**
+ * Get current simulation tick (for debugging/sync verification)
+ * @returns {number}
+ */
+function getSimulationTick() {
+  return simulationTick
 }
 
 /**
@@ -1633,22 +1726,22 @@ function debugVolumes() {
   const mean = volumes.length > 0 ? totalVisual / volumes.length : 0
   
   console.log(`Total NPCs: ${npcs.size}`)
-  console.log(`Total Visual Volume: ${totalVisual.toFixed(3)} mÃƒâ€šÃ‚Â³`)
-  console.log(`Total Capsule Volume: ${totalCapsule.toFixed(3)} mÃƒâ€šÃ‚Â³`)
+  console.log(`Total Visual Volume: ${totalVisual.toFixed(3)} mÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³`)
+  console.log(`Total Capsule Volume: ${totalCapsule.toFixed(3)} mÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³`)
   console.log(`Total Meshes: ${totalMeshes}`)
-  console.log(`ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬`)
+  console.log(`ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬`)
   console.log(`Volume Distribution:`)
-  console.log(`  Min: ${minVolume.toFixed(2)} mÃƒâ€šÃ‚Â³`)
-  console.log(`  Max: ${maxVolume.toFixed(2)} mÃƒâ€šÃ‚Â³`)
-  console.log(`  Mean: ${mean.toFixed(2)} mÃƒâ€šÃ‚Â³`)
-  console.log(`  Median: ${median.toFixed(2)} mÃƒâ€šÃ‚Â³`)
+  console.log(`  Min: ${minVolume.toFixed(2)} mÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³`)
+  console.log(`  Max: ${maxVolume.toFixed(2)} mÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³`)
+  console.log(`  Mean: ${mean.toFixed(2)} mÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³`)
+  console.log(`  Median: ${median.toFixed(2)} mÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³`)
   
   console.group('By Species')
   const sortedClasses = [...byClass.entries()].sort((a, b) => b[1].visualVolume - a[1].visualVolume)
   for (const [className, data] of sortedClasses) {
     const avgVol = (data.visualVolume / data.count).toFixed(2)
     const avgMeshes = (data.meshCount / data.count).toFixed(1)
-    console.log(`${className}: ${data.count} creatures | avg: ${avgVol} mÃƒâ€šÃ‚Â³ | range: [${data.minVol.toFixed(1)}, ${data.maxVol.toFixed(1)}] | meshes: ${avgMeshes}`)
+    console.log(`${className}: ${data.count} creatures | avg: ${avgVol} mÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³ | range: [${data.minVol.toFixed(1)}, ${data.maxVol.toFixed(1)}] | meshes: ${avgMeshes}`)
   }
   console.groupEnd()
   
@@ -2185,6 +2278,10 @@ function clear() {
     removeFish(id, false)
   }
   activeChasers.clear()
+  
+  // Reset simulation time for deterministic respawn
+  resetSimulationTime()
+  
   console.log('[FishAdder] Cleared all creatures')
 }
 
@@ -2244,6 +2341,10 @@ export const FishAdder = {
   isBottomDweller: (c) => BOTTOM_DWELLERS.has(c),
   isDrifter: (c) => DRIFTERS.has(c),
   
+  // Fixed timestep simulation
+  getSimulationTick,
+  resetSimulationTime,
+  
   // Debug
   debug,
   
@@ -2273,6 +2374,7 @@ export const FishAdder = {
   get gridPoints() { return gridPoints },
   get adjacencyMap() { return adjacencyMap },
   get activeChasers() { return activeChasers },
+  get simulationTick() { return simulationTick },
 }
 
 export default FishAdder
