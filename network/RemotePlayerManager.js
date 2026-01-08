@@ -6,6 +6,7 @@
 
 import * as THREE from 'three'
 import { PositionBuffer } from './Interpolation.js'
+import { generateCreature } from '../src/Encyclopedia.js'
 
 // ============================================================================
 // CONFIGURATION
@@ -31,11 +32,11 @@ class RemotePlayer {
     this.name = data.name || `Player ${id}`
     
     this.position = new THREE.Vector3()
-    this.rotation = new THREE.Euler()
+    this.rotation = new THREE.Euler(0, 0, 0, 'YXZ')  // Use YXZ order like local player
     this.scale = 1
     
     this.targetPosition = new THREE.Vector3()
-    this.targetRotation = new THREE.Euler()
+    this.targetRotation = new THREE.Euler(0, 0, 0, 'YXZ')  // Use YXZ order like local player
     this.targetScale = 1
     
     this.creatureData = data.creature || null
@@ -50,7 +51,10 @@ class RemotePlayer {
     }
     
     if (data.rotation) {
-      this.rotation.set(data.rotation.x, data.rotation.y, data.rotation.z)
+      // Only use X (pitch) and Y (yaw), ignore Z (roll) - matches local player behavior
+      this.rotation.x = data.rotation.x || 0
+      this.rotation.y = data.rotation.y || 0
+      this.rotation.z = 0  // Local player never sets Z rotation
       this.targetRotation.copy(this.rotation)
     }
     
@@ -75,6 +79,7 @@ class RemotePlayer {
     
     if (this.mesh) {
       this.mesh.position.copy(this.position)
+      this.mesh.rotation.order = 'YXZ'  // Match local player rotation order
       this.mesh.rotation.copy(this.rotation)
       // Use a minimum scale of 3 so players are visible
       const displayScale = Math.max(this.scale, 3)
@@ -84,47 +89,39 @@ class RemotePlayer {
   }
   
   /**
-   * Create creature mesh
+   * Create creature mesh using Encyclopedia's generateCreature
    * 
-   * TODO: Replace with actual Encyclopedia integration:
-   * 
-   * import { generateCreature } from '../src/Encyclopedia.js'
-   * 
-   * this.creature = generateCreature(
-   *   creature.seed,
-   *   creature.type,
-   *   creature.class,
-   *   creature.variant
-   * )
-   * this.mesh = this.creature.mesh
+   * Uses the same creature generation system as the local player
+   * to ensure visual consistency across all clients.
    */
   createCreatureMesh(creature) {
     try {
-      // Placeholder fish-like shape - BIGGER so it's visible!
-      // Body is now 1m radius, 3m long = ~5m total fish
-      const bodyGeo = new THREE.CapsuleGeometry(1, 3, 8, 16)
-      const bodyMat = new THREE.MeshStandardMaterial({
-        color: this.getCreatureColor(creature),
-        roughness: 0.6,
-        metalness: 0.2,
-        emissive: this.getCreatureColor(creature),
-        emissiveIntensity: 0.3,  // Slight glow so it's easier to see
-      })
+      if (!creature || !creature.type || !creature.class) {
+        console.warn(`[RemotePlayer] Invalid creature data, using placeholder`)
+        this.createPlaceholderMesh()
+        return
+      }
       
-      this.mesh = new THREE.Group()
+      // Use Encyclopedia's generateCreature - same as local player
+      const seed = creature.seed || Math.floor(Math.random() * 0xFFFFFFFF)
+      const variantIndex = creature.variant !== undefined ? creature.variant : 0
       
-      const body = new THREE.Mesh(bodyGeo, bodyMat)
-      body.rotation.z = Math.PI / 2
-      this.mesh.add(body)
+      const generatedCreature = generateCreature(
+        seed,
+        creature.type,
+        creature.class,
+        variantIndex
+      )
       
-      // Tail fin - bigger
-      const tailGeo = new THREE.ConeGeometry(0.8, 2, 8)
-      const tail = new THREE.Mesh(tailGeo, bodyMat)
-      tail.position.x = -2.5
-      tail.rotation.z = -Math.PI / 2
-      this.mesh.add(tail)
-      
-      this.creatureData = creature
+      if (generatedCreature && generatedCreature.mesh) {
+        this.creature = generatedCreature
+        this.mesh = generatedCreature.mesh
+        this.creatureData = creature
+        console.log(`[RemotePlayer] Created ${creature.class} (type: ${creature.type}, variant: ${variantIndex})`)
+      } else {
+        console.warn(`[RemotePlayer] generateCreature returned null for ${creature.class}`)
+        this.createPlaceholderMesh()
+      }
       
     } catch (err) {
       console.warn(`[RemotePlayer] Failed to create creature mesh:`, err)
@@ -195,14 +192,17 @@ class RemotePlayer {
   updateFromServer(data, serverTime) {
     this.positionBuffer.push(
       { x: data.x, y: data.y, z: data.z },
-      { x: data.rx || 0, y: data.ry || 0, z: data.rz || 0 },
+      { x: data.rx || 0, y: data.ry || 0, z: 0 },  // Ignore Z rotation
       data.scale || 1,
       serverTime
     )
     
     this.targetPosition.set(data.x, data.y, data.z)
     if (data.rx !== undefined) {
-      this.targetRotation.set(data.rx, data.ry || 0, data.rz || 0)
+      // Only update X (pitch) and Y (yaw), keep Z at 0
+      this.targetRotation.x = data.rx || 0
+      this.targetRotation.y = data.ry || 0
+      this.targetRotation.z = 0
     }
     if (data.scale !== undefined) {
       this.targetScale = data.scale
@@ -230,14 +230,18 @@ class RemotePlayer {
     
     if (interpolated) {
       this.position.set(interpolated.pos.x, interpolated.pos.y, interpolated.pos.z)
-      this.rotation.set(interpolated.rot.x, interpolated.rot.y, interpolated.rot.z)
+      // Only use X (pitch) and Y (yaw), ignore Z (roll)
+      this.rotation.x = interpolated.rot.x
+      this.rotation.y = interpolated.rot.y
+      this.rotation.z = 0  // Local player never uses Z rotation
       this.scale = interpolated.scale
     } else {
       this.position.lerp(this.targetPosition, CONFIG.positionLerpFactor)
       
+      // Only interpolate X and Y rotation
       this.rotation.x += (this.targetRotation.x - this.rotation.x) * CONFIG.rotationLerpFactor
       this.rotation.y += (this.targetRotation.y - this.rotation.y) * CONFIG.rotationLerpFactor
-      this.rotation.z += (this.targetRotation.z - this.rotation.z) * CONFIG.rotationLerpFactor
+      // Z stays at 0
       
       this.scale += (this.targetScale - this.scale) * CONFIG.scaleLerpFactor
     }
