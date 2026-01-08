@@ -7,6 +7,8 @@ import { getActiveCapacityConfig, getActiveAbilityName } from './ExtraControls.j
 import { getSlotInfo } from './stacker.js'
 // Import core chat logic (separated for multiplayer support)
 import * as Chat from './chats.js'
+// Import network manager for remote player detection on radar
+import { networkManager } from '../network/NetworkManager.js'
 
 let stats
 
@@ -1397,7 +1399,7 @@ export function restoreCapacity(amount) {
   }
   
   currentCapacity = Math.min(config.max, currentCapacity + amount)
-  console.log(`[Capacity] Restored ${amount.toFixed(1)} â†’ ${currentCapacity.toFixed(1)}/${config.max}`)
+  console.log(`[Capacity] Restored ${amount.toFixed(1)} -> ${currentCapacity.toFixed(1)}/${config.max}`)
 }
 
 /**
@@ -1650,6 +1652,61 @@ function updateMinimap() {
           worldX: npc.mesh.position.x,
           worldZ: npc.mesh.position.z,
           color: color
+        })
+      }
+    }
+  }
+  
+  // ==========================================================================
+  // DETECT PLAYER FISH - Same logic as NPCs but with distinct colors
+  // ==========================================================================
+  if (networkManager.remotePlayers) {
+    const remotePlayers = networkManager.remotePlayers.getAllPlayers()
+    for (const [remoteId, remotePlayer] of remotePlayers) {
+      if (!remotePlayer.mesh) continue
+      
+      // Check if within radar range
+      const dx = remotePlayer.position.x - playerPos.x
+      const dz = remotePlayer.position.z - playerPos.z
+      const distSq = dx * dx + dz * dz
+      const rangeSq = (MINIMAP_RANGE * 1.5) * (MINIMAP_RANGE * 1.5)
+      if (distSq > rangeSq) continue
+      
+      const relX = dx * scale
+      const relZ = dz * scale
+      
+      // Calculate player angle from center (matching sonar coordinate system)
+      const remoteAngle = Math.atan2(-relZ, relX)
+      const angleDiff = normalizeAngle(sonarAngle - remoteAngle)
+      
+      // If sonar is passing over this player right now, create a NEW independent ping
+      if (Math.abs(angleDiff) < pingWindow) {
+        // Debounce: don't ping same player too frequently
+        const playerUuid = 'player_' + remoteId
+        const lastPing = lastNpcPingTime.get(playerUuid) || 0
+        if (currentTime - lastPing < PING_DEBOUNCE_MS) continue
+        lastNpcPingTime.set(playerUuid, currentTime)
+        
+        const remoteVol = remotePlayer.visualVolume || 1
+        let color
+        if (remoteVol < playerVolLow) {
+          color = NPC_COLOR_EDIBLE
+        } else if (remoteVol > playerVolHigh) {
+          color = NPC_COLOR_DANGER
+        } else {
+          color = NPC_COLOR_SIMILAR
+        }
+        
+        // Create unique ping ID - each ping is independent
+        const pingId = pingIdCounter++
+        
+        // Store world position at ping time
+        pingData.set(pingId, {
+          time: currentTime,
+          worldX: remotePlayer.position.x,
+          worldZ: remotePlayer.position.z,
+          color: color,
+          isPlayer: true  // Mark as player for potential future features
         })
       }
     }
