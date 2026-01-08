@@ -509,7 +509,7 @@ class RemotePlayer {
   
   /**
    * Update world volume (authoritative volume from network)
-   * This also recomputes the display scale
+   * This also recomputes the display scale and triggers physics rebuild if needed
    * @param {number} newVolume - World volume in m³ [1, 1000]
    */
   updateVolume(newVolume) {
@@ -531,8 +531,8 @@ class RemotePlayer {
     }
     
     // Only log significant changes
-    if (Math.abs(newVolume - oldVolume) > 1) {
-      console.log(`[RemotePlayer] ${this.id} volume: ${oldVolume.toFixed(2)} → ${newVolume.toFixed(2)} m³, scale: ${this.targetScale.toFixed(4)}`)
+    if (Math.abs(newVolume - oldVolume) > 0.5) {
+      console.log(`[RemotePlayer] ${this.id} volume: ${oldVolume.toFixed(2)} → ${newVolume.toFixed(2)} m³, targetScale: ${this.targetScale.toFixed(4)}`)
     }
   }
   

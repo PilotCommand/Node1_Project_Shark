@@ -44,6 +44,7 @@ export class Room {
     ws.position = { x: 0, y: 10, z: 0 }
     ws.rotation = { x: 0, y: 0, z: 0 }
     ws.scale = 1
+    ws.volume = 1  // World volume for feeding system
     ws.creature = null
     ws.inGame = false
     ws.lastUpdate = Date.now()
@@ -133,6 +134,7 @@ export class Room {
         position: ws.position,
         rotation: ws.rotation,
         scale: ws.scale,
+        volume: ws.volume,  // World volume for feeding system
         creature: ws.creature,
       })
     })
@@ -219,6 +221,11 @@ export class Room {
       ws.scale = data.s
     }
     
+    // Store volume for feeding system (world volume in m³)
+    if (typeof data.v === 'number' && data.v > 0 && data.v < 10000) {
+      ws.volume = data.v
+    }
+    
     ws.lastUpdate = Date.now()
   }
   
@@ -247,6 +254,7 @@ export class Room {
       position: ws.position,
       rotation: ws.rotation,
       scale: ws.scale,
+      volume: ws.volume,  // World volume for feeding system
       creature: ws.creature,
     }, ws.id)
     
@@ -486,6 +494,7 @@ export class Room {
         ry: ws.rotation.y,
         rz: ws.rotation.z,
         s: ws.scale,
+        v: ws.volume,  // World volume for feeding system
       })
     })
     

@@ -34,6 +34,7 @@ import {
   getGrowthStats,
   addVolume as normalAddVolume,
   getWorldVolume,
+  getEffectiveWorldVolume,
   setWorldVolume,
   resetGrowth,
   debug as debugNormalScale,
@@ -122,7 +123,7 @@ export function initPlayer(scene, spawnPosition = null, options = {}) {
   // Compute NATURAL capsule params (META FACT - preserved from Encyclopedia)
   naturalCapsuleParams = computeCapsuleParams(currentCreature.mesh, currentCreature)
   
-  // Apply normalization - this scales the mesh to gameplay volume (starts at 1 m³)
+  // Apply normalization - this scales the mesh to gameplay volume (starts at 1 mÂ³)
   const normalization = normalizeCreature(currentCreature.mesh, naturalCapsuleParams)
   normalizedCapsuleParams = normalization.normalizedCapsuleParams
   
@@ -136,12 +137,12 @@ export function initPlayer(scene, spawnPosition = null, options = {}) {
   console.log(`[Player] Natural capsule:`, {
     radius: naturalCapsuleParams.radius.toFixed(3),
     halfHeight: naturalCapsuleParams.halfHeight.toFixed(3),
-    volume: normalization.naturalVolume.toFixed(3) + ' m³',
+    volume: normalization.naturalVolume.toFixed(3) + ' mÂ³',
   })
   console.log(`[Player] Normalized capsule:`, {
     radius: normalizedCapsuleParams.radius.toFixed(3),
     halfHeight: normalizedCapsuleParams.halfHeight.toFixed(3),
-    volume: normalization.targetVolume.toFixed(3) + ' m³',
+    volume: normalization.targetVolume.toFixed(3) + ' mÂ³',
     scaleFactor: normalization.scaleFactor.toFixed(3),
   })
   
@@ -168,7 +169,7 @@ export function initPlayer(scene, spawnPosition = null, options = {}) {
   
   const naturalSize = currentCreature.traits.length?.toFixed(1) || '1.5'
   const gameplayVolume = normalization.targetVolume.toFixed(2)
-  console.log(`Player: ${currentClass} | Natural: ${naturalSize}m | Vol: ${gameplayVolume}m³ | Seed: ${seedToString(currentCreature.seed)}`)
+  console.log(`Player: ${currentClass} | Natural: ${naturalSize}m | Vol: ${gameplayVolume}mÂ³ | Seed: ${seedToString(currentCreature.seed)}`)
   
   return currentCreature.mesh
 }
@@ -678,17 +679,17 @@ export function addFood(preyVolume) {
   const result = normalAddVolume(preyVolume)
   applyCurrentScale()
   
-  console.log(`[Player] Ate: +${result.volumeGained.toFixed(2)} m³ | Total: ${result.totalVolume.toFixed(2)} m³${result.wasCapped ? ' (CAPPED)' : ''}`)
+  console.log(`[Player] Ate: +${result.volumeGained.toFixed(2)} mÂ³ | Total: ${result.totalVolume.toFixed(2)} mÂ³${result.wasCapped ? ' (CAPPED)' : ''}`)
   
   return result
 }
 
 /**
  * Get player's current world volume
- * @returns {number} Volume in m³
+ * @returns {number} Volume in mÂ³
  */
 export function getPlayerWorldVolume() {
-  return getWorldVolume()
+  return getEffectiveWorldVolume()
 }
 
 /**
@@ -720,15 +721,15 @@ export function debugPlayerScale() {
     console.log('Natural (META FACT):')
     console.log(`  Length: ${currentCreature?.traits?.length?.toFixed(2) || '?'}m`)
     console.log(`  Capsule: r=${info.natural.radius.toFixed(3)}, h=${info.natural.halfHeight.toFixed(3)}`)
-    console.log(`  Volume: ${info.natural.volume.toFixed(3)} m³`)
+    console.log(`  Volume: ${info.natural.volume.toFixed(3)} mÂ³`)
     console.log('Gameplay (Normalized):')
-    console.log(`  Scale factor: ${info.scaleFactor.toFixed(3)}×`)
+    console.log(`  Scale factor: ${info.scaleFactor.toFixed(3)}Ã—`)
     console.log(`  Capsule: r=${info.gameplay.radius.toFixed(3)}, h=${info.gameplay.halfHeight.toFixed(3)}`)
-    console.log(`  Volume: ${info.gameplay.volume.toFixed(3)} m³`)
+    console.log(`  Volume: ${info.gameplay.volume.toFixed(3)} mÂ³`)
     console.log('Volume State:')
-    console.log(`  World Volume: ${getWorldVolume().toFixed(2)} m³`)
-    console.log(`  Manual Scale: ${info.manualScaleMultiplier.toFixed(2)}× (${(info.manualScaleMultiplier * 100).toFixed(0)}%)`)
-    console.log(`  Max Volume: 1000 m³`)
+    console.log(`  World Volume: ${getWorldVolume().toFixed(2)} mÂ³`)
+    console.log(`  Manual Scale: ${info.manualScaleMultiplier.toFixed(2)}Ã— (${(info.manualScaleMultiplier * 100).toFixed(0)}%)`)
+    console.log(`  Max Volume: 1000 mÂ³`)
     console.log(`  Progress: ${((getWorldVolume() / 1000) * 100).toFixed(1)}%`)
   } else {
     console.log('No normalization data available')
@@ -792,7 +793,7 @@ export function onEaten(eaterData = null) {
   naturalCapsuleParams = null
   normalizedCapsuleParams = null
   
-  // Reset growth (will start at 1 m³ again)
+  // Reset growth (will start at 1 mÂ³ again)
   resetGrowth()
   
   // Return to menu
