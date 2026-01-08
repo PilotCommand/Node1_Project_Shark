@@ -2,7 +2,7 @@
  * Room.js - Single game room containing players
  */
 
-import { MSG, encodeMessage, isValidPosition, isValidCreature, NETWORK_CONFIG } from '../../shared/Protocol.js'
+import { MSG, encodeMessage, isValidPosition, isValidCreature, isValidNPCSnapshot, NETWORK_CONFIG } from '../../shared/Protocol.js'
 
 export class Room {
   constructor(id, options = {}) {
@@ -21,6 +21,9 @@ export class Room {
     
     // Track dead NPCs for late joiners
     this.deadNpcIds = new Set()
+    
+    // NPC simulation host - first player to join becomes host
+    this.hostId = null
     
     this.tickCount = 0
     this.tickRate = NETWORK_CONFIG.tickRate
@@ -47,6 +50,13 @@ export class Room {
     
     this.players.set(playerId, ws)
     
+    // First player becomes the NPC simulation host
+    const isHost = this.hostId === null
+    if (isHost) {
+      this.hostId = playerId
+      console.log(`[Room ${this.id}] Player ${playerId} is now NPC HOST`)
+    }
+    
     const existingPlayers = this.getPlayersForWelcome(playerId)
     
     this.send(ws, MSG.WELCOME, {
@@ -54,6 +64,8 @@ export class Room {
       roomId: this.id,
       worldSeed: this.worldSeed,
       npcSeed: this.npcSeed,
+      hostId: this.hostId,        // Tell client who the host is
+      isHost: isHost,             // Tell client if THEY are the host
       players: existingPlayers,
       deadNpcIds: [...this.deadNpcIds],  // Array of NPC IDs that have been eaten
     })
@@ -74,8 +86,37 @@ export class Room {
     
     console.log(`[Room ${this.id}] Player ${playerId} left (${this.getPlayerCount()} remaining)`)
     
+    // Host migration - if host left, assign new host
+    if (playerId === this.hostId) {
+      this.migrateHost()
+    }
+    
     if (this.isEmpty() && this.onEmpty) {
       this.onEmpty()
+    }
+  }
+  
+  /**
+   * Migrate NPC host to another player when current host disconnects
+   */
+  migrateHost() {
+    // Pick first remaining player as new host
+    const iterator = this.players.values()
+    const newHost = iterator.next().value
+    
+    if (newHost) {
+      this.hostId = newHost.id
+      
+      // Tell the new host they are now responsible for NPC simulation
+      this.send(newHost, MSG.HOST_ASSIGNED, { isHost: true })
+      
+      // Tell everyone else who the new host is
+      this.broadcast(MSG.HOST_CHANGED, { hostId: this.hostId }, this.hostId)
+      
+      console.log(`[Room ${this.id}] NPC HOST migrated to player ${this.hostId}`)
+    } else {
+      this.hostId = null
+      console.log(`[Room ${this.id}] No players left, no NPC host`)
     }
   }
   
@@ -127,6 +168,10 @@ export class Room {
         
       case MSG.REQUEST_MAP_CHANGE:
         this.handleMapChangeRequest(ws)
+        break
+        
+      case MSG.NPC_SNAPSHOT:
+        this.handleNPCSnapshot(ws, data)
         break
         
       default:
@@ -246,6 +291,31 @@ export class Room {
   
   handleEatPlayer(ws, data) {
     // TODO: Phase 4
+  }
+  
+  /**
+   * Handle NPC snapshot from host - relay to all other players
+   * Server does NO processing - just forwards the bytes
+   */
+  handleNPCSnapshot(ws, data) {
+    // Only accept snapshots from the current host
+    if (ws.id !== this.hostId) {
+      // Silently ignore - could be stale snapshot from old host
+      return
+    }
+    
+    // Validate snapshot structure
+    if (!isValidNPCSnapshot(data)) {
+      console.warn(`[Room ${this.id}] Invalid NPC snapshot from host ${ws.id}`)
+      return
+    }
+    
+    // Relay to all OTHER players (not back to host)
+    // Pass the data directly - no processing needed
+    this.broadcast(MSG.NPC_SNAPSHOT, {
+      tick: data.tick,
+      fish: data.fish,
+    }, ws.id)
   }
   
   handleMapChangeRequest(ws) {
@@ -371,6 +441,7 @@ export class Room {
       maxPlayers: this.maxPlayers,
       worldSeed: this.worldSeed,
       npcSeed: this.npcSeed,
+      hostId: this.hostId,
     }
   }
   

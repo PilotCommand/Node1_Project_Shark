@@ -303,7 +303,7 @@ function getFishInNearbyCells(pos, rangeSq) {
 
 /**
  * Build adjacency map from SpawnFactory grid
- * Uses spatial hashing for O(k) neighbor lookup instead of O(nÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â²)
+ * Uses spatial hashing for O(k) neighbor lookup instead of O(nÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â²)
  */
 function buildAdjacencyMap() {
   gridPoints = SpawnFactory.playablePoints
@@ -325,7 +325,7 @@ function buildAdjacencyMap() {
   
   adjacencyMap.clear()
   
-  // Use spatial hash to find neighbors (much faster than O(nÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â²))
+  // Use spatial hash to find neighbors (much faster than O(nÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â²))
   for (let i = 0; i < gridPoints.length; i++) {
     const neighbors = []
     const p1 = gridPoints[i]
@@ -713,7 +713,7 @@ function spawnOneCreature(options = {}) {
   // Compute NATURAL visual volume at scale=1 (before any scaling)
   const naturalVisualVolume = computeGroupVolume(creatureData.mesh, false)
   
-  // Get normally distributed scale (volumes from 1 to 1000 mÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³)
+  // Get normally distributed scale (volumes from 1 to 1000 mÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³)
   const normalization = getNPCNormalDistributedScale(naturalVisualVolume)
   const finalScaleMultiplier = normalization.scaleFactor
   
@@ -1351,6 +1351,14 @@ function update(deltaTime) {
     simulateTick(tickDuration)
     simulationTick++
   }
+  
+  // Apply host corrections AFTER simulation (for follower clients)
+  // This smoothly lerps NPCs toward the host's authoritative positions
+  for (const npc of npcs.values()) {
+    if (npc.correctionTarget) {
+      applyCorrection(npc)
+    }
+  }
 }
 
 /**
@@ -1726,22 +1734,22 @@ function debugVolumes() {
   const mean = volumes.length > 0 ? totalVisual / volumes.length : 0
   
   console.log(`Total NPCs: ${npcs.size}`)
-  console.log(`Total Visual Volume: ${totalVisual.toFixed(3)} mÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³`)
-  console.log(`Total Capsule Volume: ${totalCapsule.toFixed(3)} mÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³`)
+  console.log(`Total Visual Volume: ${totalVisual.toFixed(3)} mÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³`)
+  console.log(`Total Capsule Volume: ${totalCapsule.toFixed(3)} mÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³`)
   console.log(`Total Meshes: ${totalMeshes}`)
-  console.log(`ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬`)
+  console.log(`ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬`)
   console.log(`Volume Distribution:`)
-  console.log(`  Min: ${minVolume.toFixed(2)} mÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³`)
-  console.log(`  Max: ${maxVolume.toFixed(2)} mÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³`)
-  console.log(`  Mean: ${mean.toFixed(2)} mÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³`)
-  console.log(`  Median: ${median.toFixed(2)} mÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³`)
+  console.log(`  Min: ${minVolume.toFixed(2)} mÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³`)
+  console.log(`  Max: ${maxVolume.toFixed(2)} mÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³`)
+  console.log(`  Mean: ${mean.toFixed(2)} mÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³`)
+  console.log(`  Median: ${median.toFixed(2)} mÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³`)
   
   console.group('By Species')
   const sortedClasses = [...byClass.entries()].sort((a, b) => b[1].visualVolume - a[1].visualVolume)
   for (const [className, data] of sortedClasses) {
     const avgVol = (data.visualVolume / data.count).toFixed(2)
     const avgMeshes = (data.meshCount / data.count).toFixed(1)
-    console.log(`${className}: ${data.count} creatures | avg: ${avgVol} mÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³ | range: [${data.minVol.toFixed(1)}, ${data.maxVol.toFixed(1)}] | meshes: ${avgMeshes}`)
+    console.log(`${className}: ${data.count} creatures | avg: ${avgVol} mÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³ | range: [${data.minVol.toFixed(1)}, ${data.maxVol.toFixed(1)}] | meshes: ${avgMeshes}`)
   }
   console.groupEnd()
   
@@ -2300,6 +2308,169 @@ function printConfig() {
 }
 
 // ============================================================================
+// NPC HOST SYNC (Option 6b - Host Client Model)
+// ============================================================================
+
+// State number mapping for compact snapshots
+const StateToNumber = {
+  [State.WANDER]: 0,
+  [State.FLEE]: 1,
+  [State.CHASE]: 2,
+  [State.SCHOOL]: 3,
+}
+
+const NumberToState = {
+  0: State.WANDER,
+  1: State.FLEE,
+  2: State.CHASE,
+  3: State.SCHOOL,
+}
+
+// Correction speed - how fast followers lerp to host positions
+let correctionSpeed = 0.15
+
+/**
+ * Set the correction lerp speed for follower clients
+ * @param {number} speed - Lerp factor (0-1, higher = faster correction)
+ */
+function setCorrectionSpeed(speed) {
+  correctionSpeed = Math.max(0.01, Math.min(1.0, speed))
+}
+
+/**
+ * Generate a snapshot of all NPC positions for network sync
+ * Called by HOST client to broadcast to followers
+ * 
+ * @returns {{tick: number, fish: Array}} Snapshot data
+ */
+function getSnapshot() {
+  const fishArray = []
+  
+  for (const [id, npc] of npcs) {
+    fishArray.push({
+      id: id,
+      x: npc.mesh.position.x,
+      y: npc.mesh.position.y,
+      z: npc.mesh.position.z,
+      ry: npc.mesh.rotation.y,
+      gi: npc.currentGridIdx,
+      pi: npc.pathIndex,
+      st: StateToNumber[npc.state] || 0,
+    })
+  }
+  
+  return {
+    tick: simulationTick,
+    fish: fishArray,
+  }
+}
+
+/**
+ * Apply a snapshot received from the host
+ * Called by FOLLOWER clients to correct their local simulation
+ * 
+ * Doesn't teleport instantly - sets correction targets that
+ * are smoothly lerped toward in update()
+ * 
+ * @param {object} snapshot - {tick, fish: [{id, x, y, z, ry, gi, pi, st}, ...]}
+ */
+function applySnapshot(snapshot) {
+  if (!snapshot || !snapshot.fish) {
+    console.warn('[FishAdder] Invalid snapshot received')
+    return
+  }
+  
+  let corrected = 0
+  let missing = 0
+  
+  for (const fishData of snapshot.fish) {
+    const npc = npcs.get(fishData.id)
+    
+    if (!npc) {
+      // Fish exists on host but not on follower
+      // This can happen if fish was just spawned or eaten
+      missing++
+      continue
+    }
+    
+    // Store correction target (applied smoothly in update)
+    npc.correctionTarget = {
+      x: fishData.x,
+      y: fishData.y,
+      z: fishData.z,
+      ry: fishData.ry,
+    }
+    
+    // Sync discrete state immediately (no lerping needed)
+    npc.currentGridIdx = fishData.gi
+    npc.pathIndex = fishData.pi
+    
+    const newState = NumberToState[fishData.st]
+    if (newState && npc.state !== newState) {
+      npc.state = newState
+    }
+    
+    corrected++
+  }
+  
+  // Log if there's significant mismatch
+  if (missing > 5) {
+    console.log(`[FishAdder] Snapshot: corrected ${corrected}, missing ${missing} fish`)
+  }
+}
+
+/**
+ * Apply correction lerping in update loop
+ * Called internally by update() for all NPCs with correction targets
+ * 
+ * @param {object} npc - NPC data object
+ */
+function applyCorrection(npc) {
+  const target = npc.correctionTarget
+  if (!target) return
+  
+  const pos = npc.mesh.position
+  
+  // Lerp position toward correction target
+  pos.x += (target.x - pos.x) * correctionSpeed
+  pos.y += (target.y - pos.y) * correctionSpeed
+  pos.z += (target.z - pos.z) * correctionSpeed
+  
+  // Lerp rotation (handle angle wrapping)
+  let angleDiff = target.ry - npc.mesh.rotation.y
+  
+  // Wrap to [-PI, PI]
+  while (angleDiff > Math.PI) angleDiff -= Math.PI * 2
+  while (angleDiff < -Math.PI) angleDiff += Math.PI * 2
+  
+  npc.mesh.rotation.y += angleDiff * correctionSpeed
+  
+  // Clear correction target if close enough
+  const dx = target.x - pos.x
+  const dy = target.y - pos.y
+  const dz = target.z - pos.z
+  const distSq = dx * dx + dy * dy + dz * dz
+  
+  if (distSq < 0.01 && Math.abs(angleDiff) < 0.01) {
+    npc.correctionTarget = null
+  }
+}
+
+/**
+ * Check if we're currently applying corrections
+ * (Useful for debugging/display)
+ * 
+ * @returns {number} Number of NPCs with pending corrections
+ */
+function getPendingCorrections() {
+  let count = 0
+  for (const npc of npcs.values()) {
+    if (npc.correctionTarget) count++
+  }
+  return count
+}
+
+// ============================================================================
 // EXPORT
 // ============================================================================
 
@@ -2344,6 +2515,12 @@ export const FishAdder = {
   // Fixed timestep simulation
   getSimulationTick,
   resetSimulationTime,
+  
+  // NPC Host Sync (Option 6b)
+  getSnapshot,
+  applySnapshot,
+  setCorrectionSpeed,
+  getPendingCorrections,
   
   // Debug
   debug,
