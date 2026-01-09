@@ -97,12 +97,12 @@ export const VOLUME_CONFIG = {
   
   // Volume bounds (cubic meters)
   MIN: 1.0,
-  MAX: 1000.0,
+  MAX: 10000.0,
   
   // Manual scale bounds (R/T debug keys) - LOCAL ONLY, not sent over network
   MANUAL_SCALE_MIN: 0.1,
-  MANUAL_SCALE_MAX: 10.0,
-  MANUAL_SCALE_STEP: 0.1,
+  MANUAL_SCALE_MAX: 10000.0,
+  MANUAL_SCALE_STEP: 1,
 }
 
 // ============================================================================
