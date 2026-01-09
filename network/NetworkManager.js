@@ -76,6 +76,7 @@ class NetworkManager {
     this.onAbilityChangeCallback = null // Called when a remote player changes ability state
     this.onPrismPlaceCallback = null    // Called when a remote player places a prism
     this.onPrismRemoveCallback = null   // Called when a remote player's prism is removed
+    this.onLocalPlayerEatenCallback = null  // Called when we are eaten by another player (PvP)
     
     this.debug = false  // Set to true for verbose logging
   }
@@ -409,7 +410,41 @@ class NetworkManager {
   }
   
   handlePvPMessage(data) {
-    // TODO: Phase 4
+    switch (data.type) {
+      case MSG.PLAYER_EATEN:
+        // We were eaten by another player!
+        console.log('[Network] Received PLAYER_EATEN - we were eaten!')
+        console.log('[Network] Eaten by:', data.predatorId)
+        console.log('[Network] Our volume was:', data.preyVolume)
+        console.log('[Network] Predator new volume:', data.predatorVolume)
+        
+        // Fire callback to show eaten menu
+        if (this.onLocalPlayerEatenCallback) {
+          this.onLocalPlayerEatenCallback({
+            predatorId: data.predatorId,
+            predatorName: data.predatorName || 'Unknown',
+            predatorVolume: data.predatorVolume || 0,
+            preyVolume: data.preyVolume || 0,
+          })
+        }
+        break
+        
+      case MSG.PLAYER_DIED:
+        // Another player died (eaten by someone else, not us)
+        console.log(`[Network] Player ${data.playerId} died (eaten by ${data.eatenBy})`)
+        // Remove them from our scene if we haven't already
+        if (data.playerId !== this.playerId) {
+          this.remotePlayers?.removePlayer(data.playerId)
+        }
+        break
+        
+      case MSG.PLAYER_RESPAWN:
+        // A player respawned - re-add them if we had removed them
+        console.log(`[Network] Player ${data.playerId} respawned at`, data.position)
+        // The player will show up again via normal position updates
+        // If they were previously removed, they'll be re-added when we get their PLAYER_JOIN or position
+        break
+    }
   }
   
   handleLeaderboard(data) {
@@ -768,6 +803,40 @@ class NetworkManager {
     })
   }
   
+  /**
+   * Send notification that we ate another player
+   * Server will relay this to the eaten player
+   * @param {number} preyId - The player ID we ate
+   * @param {number} preyVolume - Their volume when eaten
+   * @param {number} newVolume - Our new volume after eating
+   */
+  sendEatPlayer(preyId, preyVolume, newVolume) {
+    if (!this.connected) return false
+    console.log(`[Network] Sending EAT_PLAYER: ate ${preyId}, gained ${preyVolume}, now ${newVolume}`)
+    return this.send(MSG.EAT_PLAYER, {
+      preyId: preyId,
+      preyVolume: preyVolume,
+      newVolume: newVolume,
+    })
+  }
+  
+  /**
+   * Send notification that we respawned
+   * Server will relay this to other players
+   * @param {object} position - New spawn position {x, y, z}
+   */
+  sendPlayerRespawn(position) {
+    if (!this.connected) return false
+    console.log(`[Network] Sending PLAYER_RESPAWN at (${position.x.toFixed(1)}, ${position.y.toFixed(1)}, ${position.z.toFixed(1)})`)
+    return this.send(MSG.PLAYER_RESPAWN, {
+      position: {
+        x: position.x,
+        y: position.y,
+        z: position.z,
+      },
+    })
+  }
+  
   // ============================================================================
   // UPDATE LOOP
   // ============================================================================
@@ -891,6 +960,14 @@ class NetworkManager {
   
   onPrismRemove(callback) {
     this.onPrismRemoveCallback = callback
+  }
+  
+  /**
+   * Register callback for when the local player is eaten by another player
+   * @param {function} callback - Called with { predatorId, predatorName, predatorVolume, preyVolume }
+   */
+  onLocalPlayerEaten(callback) {
+    this.onLocalPlayerEatenCallback = callback
   }
   
   setDebug(enabled) {

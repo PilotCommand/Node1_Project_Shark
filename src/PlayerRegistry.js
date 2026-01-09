@@ -788,11 +788,12 @@ class PlayerRegistryClass {
   
   /**
    * Reset volumes to starter values (for respawn/death)
-   * Also clears feeding history
+   * Also clears feeding history and resets stats
    * 
    * @param {string} id - Player ID
+   * @param {boolean} resetStats - If true, also reset lifetime stats (default: true)
    */
-  resetVolumes(id) {
+  resetVolumes(id, resetStats = true) {
     const player = this.players.get(id)
     if (!player) return
     
@@ -803,10 +804,17 @@ class PlayerRegistryClass {
     // Clear feeding history
     player.feeding.meals = []
     
+    // Reset lifetime stats if requested (for full death/respawn)
+    if (resetStats) {
+      player.feeding.totalVolumeEaten = 0
+      player.feeding.npcsEaten = 0
+      player.feeding.playersEaten = 0
+    }
+    
     // Update capsule and scale
     this._updateCapsuleAndScale(player)
     
-    console.log(`[PlayerRegistry] Volumes reset for ${id}`)
+    console.log(`[PlayerRegistry] Volumes reset for ${id} (stats reset: ${resetStats})`)
   }
   
   // ==========================================================================

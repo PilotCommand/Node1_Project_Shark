@@ -168,6 +168,10 @@ export class Room {
         this.handleEatPlayer(ws, data)
         break
         
+      case MSG.PLAYER_RESPAWN:
+        this.handlePlayerRespawn(ws, data)
+        break
+        
       case MSG.REQUEST_MAP_CHANGE:
         this.handleMapChangeRequest(ws)
         break
@@ -221,7 +225,7 @@ export class Room {
       ws.scale = data.s
     }
     
-    // Store volume for feeding system (world volume in m³)
+    // Store volume for feeding system (world volume in mÂ³)
     if (typeof data.v === 'number' && data.v > 0 && data.v < 10000) {
       ws.volume = data.v
     }
@@ -315,7 +319,63 @@ export class Room {
   }
   
   handleEatPlayer(ws, data) {
-    // TODO: Phase 4
+    const predatorId = ws.id
+    const preyId = data.preyId
+    const preyVolume = data.preyVolume || 0
+    const predatorNewVolume = data.newVolume || 0
+    
+    console.log(`[Room ${this.id}] Player ${predatorId} ate player ${preyId}`)
+    
+    // Find the prey player
+    const preyWs = this.players.get(preyId)
+    if (!preyWs) {
+      console.warn(`[Room ${this.id}] Prey player ${preyId} not found`)
+      return
+    }
+    
+    // Send PLAYER_EATEN to the prey so they see the death screen
+    this.send(preyWs, MSG.PLAYER_EATEN, {
+      predatorId: predatorId,
+      predatorName: ws.name || 'Unknown',
+      predatorVolume: predatorNewVolume,
+      preyVolume: preyVolume,
+    })
+    
+    console.log(`[Room ${this.id}] Sent PLAYER_EATEN to player ${preyId}`)
+    
+    // Broadcast to all other players that this player was eaten (so they can remove them too)
+    this.broadcast(MSG.PLAYER_DIED, {
+      playerId: preyId,
+      eatenBy: predatorId,
+    }, predatorId)  // Exclude predator since they already know
+  }
+  
+  /**
+   * Handle player respawn - update their state and notify others
+   */
+  handlePlayerRespawn(ws, data) {
+    const playerId = ws.id
+    
+    console.log(`[Room ${this.id}] Player ${playerId} respawned`)
+    
+    // Update player state
+    if (data.position) {
+      ws.position = {
+        x: data.position.x || 0,
+        y: data.position.y || 0,
+        z: data.position.z || 0,
+      }
+    }
+    
+    // Reset their volume to starter
+    ws.volume = 1
+    ws.scale = 1
+    
+    // Broadcast to all other players that this player respawned
+    this.broadcast(MSG.PLAYER_RESPAWN, {
+      playerId: playerId,
+      position: ws.position,
+    }, playerId)  // Exclude the respawning player
   }
   
   /**

@@ -967,7 +967,7 @@ export function createPlayerBody(overrideCapsuleParams = null) {
       .setMass(CONFIG.player.mass)
       .setCollisionGroups(createCollisionGroups(CONFIG.groups.PLAYER, CONFIG.groups.TERRAIN | CONFIG.groups.NPC))
       // Rotate capsule to align with Z axis (fish forward direction)
-      .setRotation({ x: 0.7071068, y: 0, z: 0, w: 0.7071068 })  // 90Â° around X
+      .setRotation({ x: 0.7071068, y: 0, z: 0, w: 0.7071068 })  // 90Ã‚Â° around X
       // Enable collision events for debugging
       .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS)
     
@@ -1144,6 +1144,7 @@ export function createRemotePlayerBody(id, mesh, capsuleParams) {
       .setRestitution(CONFIG.npc.restitution)
       .setCollisionGroups(createCollisionGroups(CONFIG.groups.NPC, CONFIG.groups.TERRAIN | CONFIG.groups.PLAYER | CONFIG.groups.NPC))
       .setRotation({ x: 0.7071068, y: 0, z: 0, w: 0.7071068 })  // 90° around X
+      .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS)   // Enable collision events for player-player feeding
     
     const collider = world.createCollider(colliderDesc, rigidBody)
     
@@ -1159,13 +1160,15 @@ export function createRemotePlayerBody(id, mesh, capsuleParams) {
       }
     }
     
-    // Store reference
+    // Store reference (with player flags for collision detection)
     remotePlayerBodies.set(id, {
       rigidBody,
       collider,
       mesh,
       debugMesh,
       capsuleParams,
+      isPlayer: true,    // Flag for collision detection
+      isRemote: true,    // Distinguish from local player
     })
     
     if (CONFIG.debug) {
@@ -1446,7 +1449,7 @@ export function updatePhysics(delta) {
 
 /**
  * Sync rigid body rotation to match mesh rotation
- * For player: combines mesh rotation with capsule's initial 90Â° X offset
+ * For player: combines mesh rotation with capsule's initial 90Ã‚Â° X offset
  */
 function syncBodyRotation(body, mesh, isPlayer) {
   // Get mesh rotation as quaternion
@@ -1454,7 +1457,7 @@ function syncBodyRotation(body, mesh, isPlayer) {
   meshQuat.setFromEuler(mesh.rotation)
   
   if (isPlayer) {
-    // Player capsule has a 90Â° X rotation offset (capsule aligned to Z axis)
+    // Player capsule has a 90Ã‚Â° X rotation offset (capsule aligned to Z axis)
     // We need to combine: meshRotation * capsuleOffset
     const capsuleOffset = new THREE.Quaternion()
     capsuleOffset.setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2)
@@ -1510,13 +1513,23 @@ function processCollisionEvents() {
 
 /**
  * Find creature by its collider
+ * Searches both creature bodies (NPCs + local player) and remote player bodies
  */
 function findCreatureByCollider(collider) {
+  // Check creature bodies (NPCs and local player)
   for (const [id, creature] of creatureBodies) {
     if (creature.collider === collider) {
       return { id, ...creature }
     }
   }
+  
+  // Check remote player bodies
+  for (const [id, remotePlayer] of remotePlayerBodies) {
+    if (remotePlayer.collider === collider) {
+      return { id, ...remotePlayer }
+    }
+  }
+  
   return null
 }
 

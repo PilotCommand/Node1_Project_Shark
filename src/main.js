@@ -22,6 +22,7 @@ import {
   debugPhysics,
   isPhysicsReady,
   setPhysicsScene,
+  onCollision,
 } from './Physics.js'
 import { SpawnFactory } from './SpawnFactory.js'
 import { FishAdder } from './FishAdder.js'
@@ -31,6 +32,7 @@ import { initTrail, setActiveAbility } from './ExtraControls.js'
 
 // Import menu
 import { initMenu, showMenu, onSpawnRequested, isMenuActive, getPlayerSelection } from './menu.js'
+import { initEatenMenu, showEatenMenu, onRespawnRequested, isEatenMenuActive } from './eatenmenu.js'
 
 // Scene setup
 const scene = new THREE.Scene()
@@ -86,6 +88,8 @@ if (terrainMeshData) {
 // Track if player has spawned
 let playerSpawned = false
 let playerBodyCreated = false
+let listenersRegistered = false  // Prevent duplicate event listener registration
+let playerSpawnTime = 0  // Track when player spawned for survival time calculation
 
 // Initialize physics (async)
 initPhysics().then((success) => {
@@ -127,7 +131,90 @@ initCameraControls(renderer.domElement)
 
 // Initialize menu and show it
 initMenu()
+initEatenMenu()
 showMenu()
+
+// Handle respawn from eaten menu
+onRespawnRequested(({ type, stats }) => {
+  console.log(`[Main] Respawn requested: ${type}`, stats)
+  
+  const localId = PlayerRegistry.getLocalId()
+  const player = getPlayer()
+  
+  if (type === 'menu') {
+    // ========================================================================
+    // MAIN MENU RESPAWN
+    // ========================================================================
+    // Player wants to go back to main menu (may change creature/ability)
+    console.log('[Main] Returning to main menu...')
+    
+    const localId = PlayerRegistry.getLocalId()
+    
+    // Reset volumes and stats
+    if (localId) {
+      PlayerRegistry.resetVolumes(localId, true)  // true = reset all stats
+      
+      // Unregister the old player so we can create a fresh one
+      PlayerRegistry.unregister(localId, 'returning to menu')
+    }
+    
+    // Remove old player mesh from scene
+    const player = getPlayer()
+    if (player) {
+      player.visible = false
+      // The mesh will be replaced when spawning with new selection
+    }
+    
+    // Mark as not spawned so onSpawnRequested will run fresh
+    playerSpawned = false
+    playerBodyCreated = false
+    
+    // Show the main menu
+    showMenu()
+    
+    console.log('[Main] Returned to main menu')
+  } else {
+    // ========================================================================
+    // QUICK RESPAWN
+    // ========================================================================
+    // Player wants to immediately respawn with same creature/ability
+    console.log('[Main] Quick respawn...')
+    
+    // Reset volumes and feeding stats
+    if (localId) {
+      PlayerRegistry.resetVolumes(localId, true)  // true = reset all stats
+    }
+    
+    // Get new spawn point
+    const spawnPoint = SpawnFactory.getRandomPlayablePoint()
+    
+    if (player && spawnPoint) {
+      // Teleport to new spawn point
+      player.position.copy(spawnPoint)
+      
+      // Make sure player is visible
+      player.visible = true
+      
+      console.log(`[Main] Respawned at (${spawnPoint.x.toFixed(1)}, ${spawnPoint.y.toFixed(1)}, ${spawnPoint.z.toFixed(1)})`)
+    }
+    
+    // Reset spawn time for survival tracking
+    playerSpawnTime = performance.now() / 1000
+    
+    // Physics body will be rebuilt automatically via volumeChange event
+    // since resetVolumes calls _updateCapsuleAndScale which emits volumeChange
+    
+    // Notify server about respawn
+    if (networkManager.isConnected()) {
+      const pos = player?.position || spawnPoint
+      networkManager.sendPlayerRespawn(pos)
+      console.log('[Main] Sent PLAYER_RESPAWN to server')
+    }
+    
+    notifyEvent('Respawned!')
+    console.log('[Main] Quick respawn complete')
+  }
+})
 
 // Handle spawn request from menu
 onSpawnRequested(async () => {
@@ -182,14 +269,6 @@ onSpawnRequested(async () => {
     console.warn('[Main] No natural capsule params - volume system not initialized')
   }
   
-  // Listen for volume changes to rebuild physics body
-  PlayerRegistry.on('volumeChange', ({ player, scaleFactor }) => {
-    if (player.isLocal && isPhysicsReady()) {
-      console.log(`[Main] Rebuilding physics body at scale ${scaleFactor.toFixed(3)}`)
-      createPlayerBody()
-    }
-  })
-  
   initControls()
   initTrail(scene)
   initHUD()
@@ -204,13 +283,124 @@ onSpawnRequested(async () => {
   // Initialize feeding system (after player and FishAdder)
   Feeding.init(FishAdder)
   
-  // Register callback for when local player is eaten
-  Feeding.onPlayerEaten((meal) => {
-    console.log('[Main] Local player was eaten!', meal)
-    // TODO: Handle death - return to menu, reset volume, etc.
-    // For now, just reset volume
-    PlayerRegistry.resetVolumes(PlayerRegistry.getLocalId())
-  })
+  // Track spawn time for survival time calculation
+  playerSpawnTime = performance.now() / 1000
+  
+  // Register callbacks ONLY ONCE to prevent duplicates on respawn
+  if (!listenersRegistered) {
+    // Listen for volume changes to rebuild physics body
+    PlayerRegistry.on('volumeChange', ({ player, scaleFactor }) => {
+      if (player.isLocal && isPhysicsReady()) {
+        console.log(`[Main] Rebuilding physics body at scale ${scaleFactor.toFixed(3)}`)
+        createPlayerBody()
+      }
+    })
+    
+    // ========================================================================
+    // PLAYER-PLAYER COLLISION FEEDING
+    // ========================================================================
+    // Connect physics collisions to the feeding system
+    onCollision(({ type, creature1, creature2 }) => {
+      if (type !== 'start') return
+      
+      // Both must be players (have isPlayer flag)
+      if (!creature1?.isPlayer || !creature2?.isPlayer) return
+      
+      console.log('[Main] Player-player collision detected!')
+      console.log('[Main] creature1:', { id: creature1.id, isPlayer: creature1.isPlayer, isRemote: creature1.isRemote })
+      console.log('[Main] creature2:', { id: creature2.id, isPlayer: creature2.isPlayer, isRemote: creature2.isRemote })
+      
+      // Build player data objects for Feeding system
+      const localId = PlayerRegistry.getLocalId()
+      console.log('[Main] Local player ID from registry:', localId)
+      
+      const getPlayerData = (creature) => {
+        const isLocal = creature.id === 'player' || creature.id === localId
+        const playerId = isLocal ? localId : creature.id
+        
+        console.log(`[Main] getPlayerData for ${creature.id}: isLocal=${isLocal}, playerId=${playerId}`)
+        
+        // Get volume from PlayerRegistry (most accurate source)
+        let worldVolume = 0
+        if (isLocal) {
+          worldVolume = PlayerRegistry.getEffectiveVolume(localId)
+          console.log(`[Main] Local player volume from registry: ${worldVolume}`)
+        } else {
+          // For remote players, get from RemotePlayerManager via networkManager
+          const remotePlayers = networkManager.getRemotePlayers()
+          if (remotePlayers) {
+            const remotePlayer = remotePlayers.getPlayer(creature.id)
+            worldVolume = remotePlayer?.worldVolume || 0
+            console.log(`[Main] Remote player ${creature.id} volume: ${worldVolume}`)
+          } else {
+            console.log('[Main] No remote players manager available')
+          }
+        }
+        
+        return {
+          id: playerId,
+          mesh: creature.mesh,
+          worldVolume,
+          isLocal,
+          isRemote: creature.isRemote || false,
+        }
+      }
+      
+      const player1Data = getPlayerData(creature1)
+      const player2Data = getPlayerData(creature2)
+      
+      console.log('[Main] player1Data:', player1Data)
+      console.log('[Main] player2Data:', player2Data)
+      
+      // Let Feeding system handle the eating logic
+      const result = Feeding.handlePlayerCollision(player1Data, player2Data)
+      console.log('[Main] Feeding.handlePlayerCollision result:', result)
+    })
+    
+    // Register callback for when local player is eaten
+    Feeding.onPlayerEaten((meal) => {
+      console.log('[Main] ========================================')
+      console.log('[Main] onPlayerEaten CALLBACK FIRED!')
+      console.log('[Main] Meal data:', meal)
+      console.log('[Main] ========================================')
+      
+      // Calculate survival time
+      const survivalTime = (performance.now() / 1000) - playerSpawnTime
+      console.log('[Main] Survival time:', survivalTime)
+      
+      // Get feeding stats
+      const feedingStats = Feeding.getStats()
+      console.log('[Main] Feeding stats:', feedingStats)
+      
+      // Get predator name from remote players
+      let eatenByName = 'Unknown Predator'
+      const remotePlayers = networkManager.getRemotePlayers()
+      if (remotePlayers && meal.predatorId) {
+        const predator = remotePlayers.getPlayer(meal.predatorId)
+        eatenByName = predator?.name || meal.predatorId.substring(0, 8)
+      }
+      console.log('[Main] Eaten by:', eatenByName)
+      
+      // Show eaten menu with stats
+      console.log('[Main] Calling showEatenMenu...')
+      showEatenMenu({
+        finalVolume: meal.preyVolume || feedingStats.playerVolume,
+        eatenBy: eatenByName,
+        eatenByVolume: meal.predatorVolumeAfter || meal.predatorVolumeBefore || 0,
+        npcsEaten: feedingStats.npcsEaten || 0,
+        playersEaten: feedingStats.playersEaten || 0,
+        totalVolumeEaten: feedingStats.totalVolumeEaten || 0,
+        survivalTime,
+      })
+      console.log('[Main] showEatenMenu called!')
+      
+      // Reset volumes (will be fully reset on respawn)
+      PlayerRegistry.resetVolumes(PlayerRegistry.getLocalId())
+    })
+    
+    listenersRegistered = true
+    console.log('[Main] All event listeners registered')
+  }
   
   playerSpawned = true
   console.log('[Main] Player spawned!')
@@ -240,6 +430,40 @@ onSpawnRequested(async () => {
         console.log(`[Main] Remote player ${eatenBy} ate NPC ${npcId}`)
         FishAdder.removeFish(npcId, false)  // false = don't respawn
       }
+    })
+    
+    // Register handler for when we are eaten by another player (via network)
+    networkManager.onLocalPlayerEaten((data) => {
+      console.log('[Main] ========================================')
+      console.log('[Main] NETWORK: WE WERE EATEN!')
+      console.log('[Main] Predator:', data.predatorName, '(', data.predatorId, ')')
+      console.log('[Main] ========================================')
+      
+      // Calculate survival time
+      const survivalTime = (performance.now() / 1000) - playerSpawnTime
+      
+      // Get our feeding stats
+      const feedingStats = Feeding.getStats()
+      
+      // Hide local player mesh
+      const player = getPlayer()
+      if (player) {
+        player.visible = false
+      }
+      
+      // Show eaten menu with stats
+      showEatenMenu({
+        finalVolume: data.preyVolume || feedingStats.playerVolume,
+        eatenBy: data.predatorName || 'Unknown Predator',
+        eatenByVolume: data.predatorVolume || 0,
+        npcsEaten: feedingStats.npcsEaten || 0,
+        playersEaten: feedingStats.playersEaten || 0,
+        totalVolumeEaten: feedingStats.totalVolumeEaten || 0,
+        survivalTime,
+      })
+      
+      // Reset volumes
+      PlayerRegistry.resetVolumes(PlayerRegistry.getLocalId())
     })
     
     // NOTE: Map change handling (terrain + fish respawn) is done in controls.js
@@ -299,8 +523,8 @@ function animate() {
   
   const delta = clock.getDelta()
   
-  // Only run game logic if player has spawned and menu is not active
-  if (playerSpawned && !isMenuActive()) {
+  // Only run game logic if player has spawned and no menu is active
+  if (playerSpawned && !isMenuActive() && !isEatenMenuActive()) {
     // Ensure player physics body exists (handles race condition where player spawns before physics ready)
     if (!playerBodyCreated && isPhysicsReady() && getPlayer()) {
       createPlayerBody()
@@ -386,7 +610,7 @@ window.debugRemotePlayers = () => {
       const mesh = player.mesh
       console.log(`%cPlayer ${id}: ${player.name}`, 'color: #88aaff; font-weight: bold')
       console.log(`  Position: (${pos?.x?.toFixed(1) || '?'}, ${pos?.y?.toFixed(1) || '?'}, ${pos?.z?.toFixed(1) || '?'})`)
-      console.log(`  Scale: ${player.scale?.toFixed(3) || 'N/A'} | Volume: ${player.worldVolume?.toFixed(2) || 'N/A'} m³`)
+      console.log(`  Scale: ${player.scale?.toFixed(3) || 'N/A'} | Volume: ${player.worldVolume?.toFixed(2) || 'N/A'} mÂ³`)
       console.log(`  Mesh: ${mesh ? 'YES' : 'NO'} | In Scene: ${mesh?.parent ? 'YES' : 'NO'}`)
       console.log(`  Mesh Scale: ${mesh ? mesh.scale.x.toFixed(3) : 'N/A'}`)
       console.log(`  Ability: ${player.activeAbility || 'none'}`)

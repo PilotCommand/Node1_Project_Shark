@@ -79,6 +79,8 @@ const CONFIG = {
 let isInitialized = false
 let playerMesh = null
 let lastEatTime = 0
+let lastPlayerEatTime = 0  // Separate cooldown for player-player eating
+let recentlyEatenPlayers = new Set()  // Track players we've already processed eating
 
 // Callbacks for external systems
 const onEatCallbacks = []
@@ -349,6 +351,19 @@ function consumeNPC(npc, playerVolume, npcVolume, currentTime) {
  * @returns {object|null} Meal data or null
  */
 function handlePlayerCollision(player1Data, player2Data) {
+  const currentTime = performance.now() / 1000
+  
+  // Cooldown check for player-player eating (1 second)
+  if (currentTime - lastPlayerEatTime < 1.0) {
+    return null
+  }
+  
+  // Debug logging
+  console.log('[Feeding] handlePlayerCollision called:', {
+    player1: { id: player1Data.id, isLocal: player1Data.isLocal, volume: player1Data.worldVolume },
+    player2: { id: player2Data.id, isLocal: player2Data.isLocal, volume: player2Data.worldVolume },
+  })
+  
   // Get world volumes - try PlayerRegistry first, then fall back to provided data
   let vol1 = player1Data.worldVolume || player1Data.capsuleVolume || 0
   let vol2 = player2Data.worldVolume || player2Data.capsuleVolume || 0
@@ -361,13 +376,20 @@ function handlePlayerCollision(player1Data, player2Data) {
     vol2 = getPlayerWorldVolume()
   }
   
-  if (vol1 <= 0 || vol2 <= 0) return null
+  console.log('[Feeding] Volumes after PlayerRegistry lookup:', { vol1, vol2 })
+  
+  if (vol1 <= 0 || vol2 <= 0) {
+    console.log('[Feeding] Invalid volumes, aborting')
+    return null
+  }
   
   // Check feeding relationship using 5% rule
   const relationship = getFeedingRelationship(vol1, vol2)
+  console.log('[Feeding] Relationship:', relationship)
   
   if (relationship === 'NEUTRAL') {
     // Neither can eat the other
+    console.log('[Feeding] NEUTRAL - neither can eat')
     return null
   }
   
@@ -388,6 +410,29 @@ function handlePlayerCollision(player1Data, player2Data) {
     preyVolume = vol1
   }
   
+  // Check if we've already processed this eating event
+  const eatKey = `${predator.id}->${prey.id}`
+  if (recentlyEatenPlayers.has(eatKey)) {
+    console.log('[Feeding] Already processed this eating event:', eatKey)
+    return null
+  }
+  
+  // Mark this eating event as processed
+  recentlyEatenPlayers.add(eatKey)
+  lastPlayerEatTime = currentTime
+  
+  // Clear from set after a delay
+  setTimeout(() => {
+    recentlyEatenPlayers.delete(eatKey)
+  }, 2000)
+  
+  console.log('[Feeding] Processing eat event:', {
+    predator: predator.id,
+    predatorIsLocal: predator.isLocal,
+    prey: prey.id,
+    preyIsLocal: prey.isLocal,
+  })
+  
   // Consume!
   return consumePlayer(predator, prey, predatorVolume, preyVolume)
 }
@@ -403,6 +448,16 @@ function handlePlayerCollision(player1Data, player2Data) {
  */
 function consumePlayer(predator, prey, predatorVolume, preyVolume) {
   const volumeToAdd = calculateFoodValue(preyVolume)
+  
+  // Debug logging
+  console.log('[Feeding] consumePlayer called:', {
+    predatorId: predator.id,
+    predatorIsLocal: predator.isLocal,
+    preyId: prey.id,
+    preyIsLocal: prey.isLocal,
+    predatorVolume,
+    preyVolume,
+  })
   
   const meal = {
     type: 'player',
@@ -431,6 +486,7 @@ function consumePlayer(predator, prey, predatorVolume, preyVolume) {
   
   // Handle local player involvement
   if (predator.isLocal) {
+    console.log('[Feeding] Local player is the PREDATOR - gaining volume')
     // LOCAL PLAYER ATE SOMEONE - gain their volume (also applies scale to mesh)
     const growthResult = addPlayerFood(volumeToAdd)
     meal.predatorVolumeAfter = growthResult.totalVolume
@@ -446,11 +502,52 @@ function consumePlayer(predator, prey, predatorVolume, preyVolume) {
   
   if (prey.isLocal) {
     // LOCAL PLAYER WAS EATEN - trigger death
-    console.log('[Feeding] Local player was eaten! Returning to menu...')
+    console.log('[Feeding] LOCAL PLAYER IS THE PREY - triggering death!')
+    console.log('[Feeding] Number of onPlayerEatenCallbacks:', onPlayerEatenCallbacks.length)
+    
+    // Hide local player mesh immediately
+    if (prey.mesh) {
+      prey.mesh.visible = false
+    }
     
     // Fire eaten callbacks
     for (const callback of onPlayerEatenCallbacks) {
-      callback(meal)
+      console.log('[Feeding] Firing onPlayerEaten callback')
+      try {
+        callback(meal)
+      } catch (err) {
+        console.error('[Feeding] Error in onPlayerEaten callback:', err)
+      }
+    }
+  } else {
+    console.log('[Feeding] Prey is NOT local (prey.isLocal =', prey.isLocal, ')')
+    console.log('[Feeding] predator.isLocal =', predator.isLocal)
+    
+    // Remote player was eaten by LOCAL player - remove them from our scene
+    if (predator.isLocal) {
+      console.log('[Feeding] >>> LOCAL PLAYER ATE REMOTE PLAYER - REMOVING <<<')
+      console.log('[Feeding] Prey ID to remove:', prey.id)
+      
+      // Remove the remote player's mesh from scene and physics
+      try {
+        const remotePlayers = networkManager.getRemotePlayers()
+        console.log('[Feeding] Got remotePlayers:', remotePlayers ? 'yes' : 'no')
+        
+        if (remotePlayers) {
+          const playerExists = remotePlayers.getPlayer(prey.id)
+          console.log('[Feeding] Player exists before removal:', playerExists ? 'yes' : 'no')
+          
+          remotePlayers.removePlayer(prey.id)
+          console.log(`[Feeding] Called removePlayer(${prey.id})`)
+          
+          const playerExistsAfter = remotePlayers.getPlayer(prey.id)
+          console.log('[Feeding] Player exists after removal:', playerExistsAfter ? 'yes' : 'no')
+        } else {
+          console.log('[Feeding] ERROR: No remotePlayers manager available!')
+        }
+      } catch (err) {
+        console.error('[Feeding] Error removing remote player:', err)
+      }
     }
   }
   
@@ -459,9 +556,16 @@ function consumePlayer(predator, prey, predatorVolume, preyVolume) {
     callback(meal)
   }
   
-  // MULTIPLAYER: Send event to server
-  if (networkManager.isConnected()) {
-    // TODO: networkManager.sendPlayerEaten(predator.id, prey.id)
+  // MULTIPLAYER: Send event to server to notify the eaten player
+  if (networkManager.isConnected() && predator.isLocal && !prey.isLocal) {
+    console.log(`[Feeding] Notifying server that we ate player ${prey.id}`)
+    // Check if the method exists before calling
+    if (typeof networkManager.sendEatPlayer === 'function') {
+      networkManager.sendEatPlayer(prey.id, preyVolume, meal.predatorVolumeAfter)
+    } else {
+      console.log('[Feeding] networkManager.sendEatPlayer not available - server won\'t be notified')
+      // For now, at least the local removal works
+    }
   }
   
   // Spawn effects
