@@ -12,7 +12,7 @@
  *   T           - Increase scale
  *   G           - Mutate creature (new random of same type)
  *   N / B       - Next / Previous species
- *   Z           - Cycle variant (e.g., Yellowfin ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ Bluefin)
+ *   Z           - Cycle variant (e.g., Yellowfin -> Bluefin)
  *   M           - New map (synced in multiplayer)
  *   P           - Toggle debug overlays (wireframes + volume labels)
  *   V           - Toggle debug viz (spawn grid + fish paths)
@@ -241,6 +241,33 @@ export function performMapRegeneration(masterSeed) {
   return masterSeed
 }
 
+/**
+ * Sync terrain with server seed (without spawning NPCs)
+ * Used on initial multiplayer connect when server provides worldSeed and npcSeed separately
+ * 
+ * @param {number} worldSeed - Terrain seed from server
+ */
+export function syncTerrainWithSeed(worldSeed) {
+  console.log(`[Controls] Syncing terrain with seed: 0x${worldSeed.toString(16).toUpperCase()}`)
+  
+  // 1. Regenerate terrain with worldSeed
+  const newSeed = regenerateMap(worldSeed)
+  if (newSeed === null) {
+    console.error('[Controls] Terrain sync failed')
+    return false
+  }
+  
+  // 2. Rebuild terrain physics
+  rebuildTerrainPhysics()
+  
+  // 3. Reset and re-analyze SpawnFactory
+  SpawnFactory.reset()
+  SpawnFactory.analyzePlayableSpace()
+  console.log(`[Controls] SpawnFactory re-analyzed: ${SpawnFactory.playablePoints.length} grid points`)
+  
+  return true
+}
+
 // ============================================================================
 // INITIALIZATION
 // ============================================================================
@@ -249,14 +276,8 @@ export function performMapRegeneration(masterSeed) {
 let mouseX = 0
 let mouseY = 0
 
-/**
- * Check if pointer is currently locked (in-game cursor mode)
- */
-function isPointerLocked() {
-  return document.pointerLockElement !== null
-}
-
 export function initControls() {
+  // Initialize swimming system
   initSwimming()
   
   // Set up multiplayer map change callback
@@ -266,50 +287,38 @@ export function initControls() {
     performMapRegeneration(masterSeed)
   })
   
-  // Track mouse position and movement for emoji wheel
-  document.addEventListener('mousemove', (e) => {
+  // Track mouse movement for emoji wheel direction detection
+  window.addEventListener('mousemove', (e) => {
     mouseX = e.clientX
     mouseY = e.clientY
     
-    // If emoji wheel is open and pointer is locked, use movement deltas
-    if (Chat.isEmojiWheelOpen() && isPointerLocked()) {
-      Chat.addWheelMovement(e.movementX, e.movementY)
-    }
-  })
-  
-  // Click to select highlighted emoji when wheel is open
-  document.addEventListener('mousedown', (e) => {
-    if (Chat.isEmojiWheelOpen() && e.button === 0) {
-      // If pointer is locked, select whatever is highlighted
-      if (isPointerLocked()) {
-        const highlighted = Chat.getHighlightedSegment()
-        if (highlighted >= 0) {
-          e.preventDefault()
-          Chat.selectEmoji(highlighted)
-        }
-      }
-      // If pointer is NOT locked, the SVG click handlers in hud.js handle it
+    // Update emoji wheel cursor position if open
+    if (Chat.isEmojiWheelOpen()) {
+      Chat.updateWheelMouse(e.clientX, e.clientY)
     }
   })
   
   window.addEventListener('keydown', (e) => {
+    // Ignore if typing in input
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return
+    
     switch(e.code) {
-      // Movement
+      // Movement keys
       case 'KeyW': keys.w = true; break
       case 'KeyA': keys.a = true; break
       case 'KeyS': keys.s = true; break
       case 'KeyD': keys.d = true; break
       case 'Space': 
-        keys.space = true
         e.preventDefault()
+        keys.space = true
         break
-      case 'ShiftLeft': 
+      case 'ShiftLeft':
       case 'ShiftRight': 
         keys.shift = true
         shiftHeld = true
         break
       
-      // Q = Extra ability
+      // Q = Extra ability (hold)
       case 'KeyQ':
         if (!keys.q) {
           const capacityMode = getActiveCapacityMode()
@@ -375,27 +384,27 @@ export function initControls() {
         }
         break
       
-      // R = Decrease scale
+      // R = Decrease scale (DEBUG - visual only, affects effective volume)
       case 'KeyR':
         const scaleDownResult = decreasePlayerScale()
         if (scaleDownResult) {
           rebuildPlayerPhysics()
           updatePlayerScalePanel()  // Update debug panel
           showNotification(
-            `Scale: ${scaleDownResult.scalePercent.toFixed(0)}% | Vol: ${scaleDownResult.volume.toFixed(2)} m³`,
+            `Scale: ${scaleDownResult.scalePercent.toFixed(0)}% | Vol: ${scaleDownResult.volume.toFixed(2)} m^3`,
             '#ff8888'
           )
         }
         break
       
-      // T = Increase scale
+      // T = Increase scale (DEBUG - visual only, affects effective volume)
       case 'KeyT':
         const scaleUpResult = increasePlayerScale()
         if (scaleUpResult) {
           rebuildPlayerPhysics()
           updatePlayerScalePanel()  // Update debug panel
           showNotification(
-            `Scale: ${scaleUpResult.scalePercent.toFixed(0)}% | Vol: ${scaleUpResult.volume.toFixed(2)} m³`,
+            `Scale: ${scaleUpResult.scalePercent.toFixed(0)}% | Vol: ${scaleUpResult.volume.toFixed(2)} m^3`,
             '#88ff88'
           )
         }
@@ -439,7 +448,7 @@ export function initControls() {
         }
         break
       
-      // Z = Cycle variant (e.g., Yellowfin Tuna ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ Bluefin Tuna)
+      // Z = Cycle variant (e.g., Yellowfin Tuna -> Bluefin Tuna)
       case 'KeyZ':
         const variantResult = cycleVariant()
         if (variantResult.hasVariants) {

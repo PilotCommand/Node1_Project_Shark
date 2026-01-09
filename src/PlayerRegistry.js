@@ -5,27 +5,31 @@
  * Each player entry tracks:
  *   - Identity (id, displayName, account status)
  *   - Creature (type, class, variant, seed, mesh, parts)
- *   - Physics (capsule params, body reference, position, velocity)
- *   - Stats (health, score, kills, deaths, food eaten)
+ *   - Volumes (natural, world, manualScale, effective) - SINGLE SOURCE OF TRUTH
+ *   - Capsule (natural, normalized, scaleFactor) - Physics dimensions
+ *   - Feeding (meals history, stats)
+ *   - Physics (body reference, collider)
+ *   - Stats (health, score, kills, deaths)
  *   - Capabilities/Abilities (active ability, cooldowns)
  *   - Network (ping, connectionState, lastUpdate)
  * 
  * Usage:
- *   import { PlayerRegistry } from './PlayerRegistry.js'
+ *   import { PlayerRegistry, VOLUME_CONFIG } from './PlayerRegistry.js'
  *   
  *   // Register local player
  *   PlayerRegistry.registerLocal(playerId, { creature, mesh, ... })
  *   
- *   // Register remote player (from network)
- *   PlayerRegistry.registerRemote(playerId, { displayName, creature, ... })
+ *   // Initialize volumes after mesh creation
+ *   PlayerRegistry.initVolumes(playerId, naturalCapsuleParams)
  *   
- *   // Update player state
- *   PlayerRegistry.updatePosition(playerId, position, rotation)
- *   PlayerRegistry.updateStats(playerId, { health: 80 })
+ *   // Add volume from eating (linear additive growth)
+ *   PlayerRegistry.addVolume(playerId, preyVolume)
  *   
- *   // Query players
- *   const nearby = PlayerRegistry.getNearby(position, radius)
- *   const all = PlayerRegistry.getAll()
+ *   // Get volume for network (excludes manual scale)
+ *   const netVolume = PlayerRegistry.getNetworkVolume(playerId)
+ *   
+ *   // Get effective volume for feeding (includes manual scale)
+ *   const effVolume = PlayerRegistry.getEffectiveVolume(playerId)
  */
 
 import * as THREE from 'three'
@@ -83,6 +87,24 @@ const CONFIG = {
   respawnTime: 3000,           // Time before respawn (ms)
 }
 
+/**
+ * Volume configuration - SINGLE SOURCE OF TRUTH for volume bounds
+ * Used by all systems (feeding, scaling, network)
+ */
+export const VOLUME_CONFIG = {
+  // Starting volume for all creatures
+  STARTER: 1.0,
+  
+  // Volume bounds (cubic meters)
+  MIN: 1.0,
+  MAX: 1000.0,
+  
+  // Manual scale bounds (R/T debug keys) - LOCAL ONLY, not sent over network
+  MANUAL_SCALE_MIN: 0.1,
+  MANUAL_SCALE_MAX: 10.0,
+  MANUAL_SCALE_STEP: 0.1,
+}
+
 // ============================================================================
 // PLAYER DATA STRUCTURE
 // ============================================================================
@@ -117,13 +139,34 @@ function createPlayerData(id, isLocal = false) {
     parts: null,                  // Creature parts reference
     wireframeVisible: false,
     
+    // === VOLUMES (SINGLE SOURCE OF TRUTH) ===
+    volumes: {
+      natural: 0,                 // Capsule volume at scale=1 (immutable after init)
+      world: VOLUME_CONFIG.STARTER, // Gameplay volume [1, 1000] - grows by eating
+      manualScale: 1.0,           // R/T debug multiplier [0.1, 10] - LOCAL ONLY, not networked
+      effective: VOLUME_CONFIG.STARTER, // Computed: clamp(world * manualScale, MIN, MAX)
+    },
+    
+    // === CAPSULE (Physics Dimensions) ===
+    capsule: {
+      natural: null,              // { radius, halfHeight, center } from Encyclopedia (immutable)
+      normalized: null,           // { radius, halfHeight, center } at current scale
+      scaleFactor: 1.0,           // Current mesh scale factor
+    },
+    
+    // === FEEDING (Meal History & Stats) ===
+    feeding: {
+      meals: [],                  // Recent meal records
+      maxMeals: 20,               // Keep last N meals
+      totalVolumeEaten: 0,        // Lifetime volume consumed
+      npcsEaten: 0,               // Total NPCs eaten
+      playersEaten: 0,            // Total players eaten
+    },
+    
     // === PHYSICS ===
     physics: {
       body: null,                 // Rapier RigidBody reference
       collider: null,             // Rapier Collider reference
-      naturalCapsuleParams: null, // Original capsule from Encyclopedia
-      normalizedCapsuleParams: null, // Gameplay-scaled capsule
-      scaleFactor: 1.0,           // Current scale multiplier
     },
     
     // === TRANSFORM (for interpolation) ===
@@ -142,15 +185,9 @@ function createPlayerData(id, isLocal = false) {
       health: CONFIG.defaultHealth,
       maxHealth: CONFIG.defaultHealth,
       
-      // Growth
-      volume: 0,                  // Current volume in m³
-      foodEaten: 0,               // Total food value consumed
-      growthMultiplier: 1.0,
-      
-      // Combat/Feeding
+      // Combat
       kills: 0,                   // Players eaten
       deaths: 0,                  // Times been eaten
-      npcsEaten: 0,               // NPCs eaten
       
       // Session
       score: 0,
@@ -216,6 +253,7 @@ class PlayerRegistryClass {
       spawn: [],
       death: [],
       eat: [],
+      volumeChange: [],
       stateChange: [],
     }
     
@@ -488,6 +526,351 @@ class PlayerRegistryClass {
    */
   has(id) {
     return this.players.has(id)
+  }
+  
+  // ==========================================================================
+  // VOLUME MANAGEMENT (SINGLE SOURCE OF TRUTH)
+  // ==========================================================================
+  
+  /**
+   * Compute capsule volume from radius and halfHeight
+   * V = pi * r^2 * (h + 4r/3) where h = 2 * halfHeight
+   * @private
+   */
+  _computeCapsuleVolume(radius, halfHeight) {
+    const r = radius
+    const h = halfHeight * 2
+    return Math.PI * r * r * (h + (4 * r / 3))
+  }
+  
+  /**
+   * Update effective volume from world volume and manual scale
+   * Clamps to [MIN, MAX]
+   * @private
+   */
+  _updateEffectiveVolume(player) {
+    const raw = player.volumes.world * player.volumes.manualScale
+    player.volumes.effective = Math.min(
+      VOLUME_CONFIG.MAX,
+      Math.max(VOLUME_CONFIG.MIN, raw)
+    )
+  }
+  
+  /**
+   * Update capsule params and mesh scale based on current effective volume
+   * @private
+   */
+  _updateCapsuleAndScale(player) {
+    if (!player.capsule.natural || player.volumes.natural <= 0) return
+    
+    // Compute scale factor: cbrt(effectiveVolume / naturalVolume)
+    const scaleFactor = Math.cbrt(player.volumes.effective / player.volumes.natural)
+    player.capsule.scaleFactor = scaleFactor
+    
+    // Scale capsule params
+    const nat = player.capsule.natural
+    player.capsule.normalized = {
+      radius: nat.radius * scaleFactor,
+      halfHeight: nat.halfHeight * scaleFactor,
+      center: nat.center ? new THREE.Vector3(
+        nat.center.x * scaleFactor,
+        nat.center.y * scaleFactor,
+        nat.center.z * scaleFactor
+      ) : new THREE.Vector3(),
+    }
+    
+    // Apply scale to mesh
+    if (player.mesh) {
+      player.mesh.scale.setScalar(scaleFactor)
+    }
+    
+    player.updatedAt = Date.now()
+    this._emit('volumeChange', { player, scaleFactor })
+  }
+  
+  /**
+   * Initialize volumes for a player (call once after mesh creation)
+   * Sets up the natural volume from capsule params and resets to starter volume
+   * 
+   * @param {string} id - Player ID
+   * @param {object} naturalCapsuleParams - { radius, halfHeight, center } from Encyclopedia
+   * @returns {object|null} The volumes object or null if player not found
+   */
+  initVolumes(id, naturalCapsuleParams) {
+    const player = this.players.get(id)
+    if (!player) {
+      console.warn(`[PlayerRegistry] Cannot init volumes for unknown player: ${id}`)
+      return null
+    }
+    
+    if (!naturalCapsuleParams || !naturalCapsuleParams.radius || !naturalCapsuleParams.halfHeight) {
+      console.warn(`[PlayerRegistry] Invalid capsule params for player ${id}`)
+      return null
+    }
+    
+    // Compute natural volume from capsule (this is immutable)
+    const naturalVolume = this._computeCapsuleVolume(
+      naturalCapsuleParams.radius,
+      naturalCapsuleParams.halfHeight
+    )
+    
+    // Store natural capsule params (deep copy)
+    player.capsule.natural = {
+      radius: naturalCapsuleParams.radius,
+      halfHeight: naturalCapsuleParams.halfHeight,
+      center: naturalCapsuleParams.center 
+        ? new THREE.Vector3().copy(naturalCapsuleParams.center)
+        : new THREE.Vector3(),
+    }
+    
+    // Set volumes - preserve world volume if already set (for creature swap)
+    player.volumes.natural = naturalVolume
+    if (player.volumes.world === VOLUME_CONFIG.STARTER || player.volumes.world === 0) {
+      player.volumes.world = VOLUME_CONFIG.STARTER
+    }
+    // manualScale stays as-is (preserved across creature swaps for local player)
+    
+    // Compute effective volume and update capsule/scale
+    this._updateEffectiveVolume(player)
+    this._updateCapsuleAndScale(player)
+    
+    console.log(`[PlayerRegistry] Volumes initialized for ${id}: natural=${naturalVolume.toFixed(4)} m^3, world=${player.volumes.world.toFixed(2)} m^3, scale=${player.capsule.scaleFactor.toFixed(4)}`)
+    
+    return { ...player.volumes }
+  }
+  
+  /**
+   * Add volume from eating prey (LINEAR ADDITIVE GROWTH)
+   * newVolume = currentVolume + preyVolume (capped at MAX)
+   * 
+   * @param {string} id - Player ID
+   * @param {number} preyVolume - Volume of prey eaten
+   * @returns {object|null} { volumeGained, totalVolume, wasCapped, oldVolume, preyVolume }
+   */
+  addVolume(id, preyVolume) {
+    const player = this.players.get(id)
+    if (!player) {
+      console.warn(`[PlayerRegistry] Cannot add volume for unknown player: ${id}`)
+      return null
+    }
+    
+    const oldVolume = player.volumes.world
+    const uncapped = oldVolume + preyVolume
+    const newVolume = Math.min(VOLUME_CONFIG.MAX, Math.max(VOLUME_CONFIG.MIN, uncapped))
+    const wasCapped = uncapped > VOLUME_CONFIG.MAX
+    const volumeGained = newVolume - oldVolume
+    
+    player.volumes.world = newVolume
+    this._updateEffectiveVolume(player)
+    this._updateCapsuleAndScale(player)
+    
+    console.log(`[PlayerRegistry] Volume: ${oldVolume.toFixed(2)} + ${preyVolume.toFixed(2)} = ${newVolume.toFixed(2)} m^3${wasCapped ? ' (CAPPED)' : ''}`)
+    
+    return {
+      volumeGained,
+      totalVolume: newVolume,
+      wasCapped,
+      oldVolume,
+      preyVolume,
+    }
+  }
+  
+  /**
+   * Set world volume directly (for network sync or loading saved state)
+   * Does NOT affect manualScale
+   * 
+   * @param {string} id - Player ID
+   * @param {number} volume - Volume to set (will be clamped)
+   */
+  setWorldVolume(id, volume) {
+    const player = this.players.get(id)
+    if (!player) return
+    
+    const clampedVolume = Math.min(VOLUME_CONFIG.MAX, Math.max(VOLUME_CONFIG.MIN, volume))
+    
+    if (Math.abs(clampedVolume - player.volumes.world) < 0.01) return // No significant change
+    
+    player.volumes.world = clampedVolume
+    this._updateEffectiveVolume(player)
+    this._updateCapsuleAndScale(player)
+  }
+  
+  /**
+   * Adjust manual scale multiplier (R/T debug keys)
+   * LOCAL PLAYER ONLY - manual scale is not sent over network
+   * 
+   * @param {string} id - Player ID
+   * @param {number} delta - Amount to add to manual scale (positive or negative)
+   * @returns {object|null} { oldScale, newScale, effectiveVolume }
+   */
+  adjustManualScale(id, delta) {
+    const player = this.players.get(id)
+    if (!player) {
+      console.warn(`[PlayerRegistry] Cannot adjust scale for unknown player: ${id}`)
+      return null
+    }
+    
+    // Only allow for local player
+    if (!player.isLocal) {
+      console.warn(`[PlayerRegistry] Cannot adjust manual scale for remote player: ${id}`)
+      return null
+    }
+    
+    const oldScale = player.volumes.manualScale
+    const newScale = Math.min(
+      VOLUME_CONFIG.MANUAL_SCALE_MAX,
+      Math.max(VOLUME_CONFIG.MANUAL_SCALE_MIN, oldScale + delta)
+    )
+    
+    player.volumes.manualScale = newScale
+    this._updateEffectiveVolume(player)
+    this._updateCapsuleAndScale(player)
+    
+    console.log(`[PlayerRegistry] Manual scale: ${(oldScale * 100).toFixed(0)}% -> ${(newScale * 100).toFixed(0)}%`)
+    
+    return {
+      oldScale,
+      newScale,
+      effectiveVolume: player.volumes.effective,
+    }
+  }
+  
+  /**
+   * Get volume for network transmission
+   * Returns ONLY world volume (excludes manual scale)
+   * This ensures R/T debug keys are local-only visual effects
+   * 
+   * @param {string} id - Player ID
+   * @returns {number} World volume in m^3
+   */
+  getNetworkVolume(id) {
+    const player = this.players.get(id)
+    return player?.volumes.world || VOLUME_CONFIG.STARTER
+  }
+  
+  /**
+   * Get effective volume for feeding/gameplay calculations
+   * Includes manual scale (for local visual size matching gameplay)
+   * 
+   * @param {string} id - Player ID
+   * @returns {number} Effective volume in m^3
+   */
+  getEffectiveVolume(id) {
+    const player = this.players.get(id)
+    return player?.volumes.effective || VOLUME_CONFIG.STARTER
+  }
+  
+  /**
+   * Get the full volumes object for a player
+   * @param {string} id - Player ID
+   * @returns {object|null} { natural, world, manualScale, effective }
+   */
+  getVolumes(id) {
+    const player = this.players.get(id)
+    return player ? { ...player.volumes } : null
+  }
+  
+  /**
+   * Get the full capsule object for a player
+   * @param {string} id - Player ID
+   * @returns {object|null} { natural, normalized, scaleFactor }
+   */
+  getCapsule(id) {
+    const player = this.players.get(id)
+    if (!player) return null
+    
+    return {
+      natural: player.capsule.natural ? { ...player.capsule.natural } : null,
+      normalized: player.capsule.normalized ? { ...player.capsule.normalized } : null,
+      scaleFactor: player.capsule.scaleFactor,
+    }
+  }
+  
+  /**
+   * Reset volumes to starter values (for respawn/death)
+   * Also clears feeding history
+   * 
+   * @param {string} id - Player ID
+   */
+  resetVolumes(id) {
+    const player = this.players.get(id)
+    if (!player) return
+    
+    player.volumes.world = VOLUME_CONFIG.STARTER
+    player.volumes.manualScale = 1.0
+    player.volumes.effective = VOLUME_CONFIG.STARTER
+    
+    // Clear feeding history
+    player.feeding.meals = []
+    
+    // Update capsule and scale
+    this._updateCapsuleAndScale(player)
+    
+    console.log(`[PlayerRegistry] Volumes reset for ${id}`)
+  }
+  
+  // ==========================================================================
+  // FEEDING TRACKING
+  // ==========================================================================
+  
+  /**
+   * Record a meal in the player's feeding history
+   * 
+   * @param {string} id - Player ID
+   * @param {object} mealData - { type, preyId, preyClass, volumeGained, ... }
+   */
+  recordMeal(id, mealData) {
+    const player = this.players.get(id)
+    if (!player) return
+    
+    const meal = {
+      ...mealData,
+      timestamp: Date.now(),
+    }
+    
+    // Add to front of meals array
+    player.feeding.meals.unshift(meal)
+    
+    // Trim to max
+    if (player.feeding.meals.length > player.feeding.maxMeals) {
+      player.feeding.meals.pop()
+    }
+    
+    // Update stats
+    player.feeding.totalVolumeEaten += mealData.volumeGained || 0
+    if (mealData.type === 'npc') player.feeding.npcsEaten++
+    if (mealData.type === 'player') player.feeding.playersEaten++
+    
+    player.updatedAt = Date.now()
+    this._emit('eat', { player, meal })
+  }
+  
+  /**
+   * Get recent meals for a player
+   * @param {string} id - Player ID
+   * @returns {Array} Array of meal records
+   */
+  getMeals(id) {
+    const player = this.players.get(id)
+    return player ? [...player.feeding.meals] : []
+  }
+  
+  /**
+   * Get feeding statistics for a player
+   * @param {string} id - Player ID
+   * @returns {object|null} Feeding stats
+   */
+  getFeedingStats(id) {
+    const player = this.players.get(id)
+    if (!player) return null
+    
+    return {
+      meals: [...player.feeding.meals],
+      mealCount: player.feeding.meals.length,
+      totalVolumeEaten: player.feeding.totalVolumeEaten,
+      npcsEaten: player.feeding.npcsEaten,
+      playersEaten: player.feeding.playersEaten,
+    }
   }
   
   // ==========================================================================
@@ -764,30 +1147,6 @@ class PlayerRegistryClass {
   }
   
   /**
-   * Record player eating something
-   * @param {string} id 
-   * @param {object} meal - { type: 'npc'|'player', targetId, volumeGained, ... }
-   */
-  eat(id, meal) {
-    const player = this.players.get(id)
-    if (!player) return
-    
-    player.stats.foodEaten += meal.volumeGained || 0
-    player.stats.volume = (player.stats.volume || 0) + (meal.volumeGained || 0)
-    
-    if (meal.type === 'npc') {
-      player.stats.npcsEaten++
-    } else if (meal.type === 'player') {
-      player.stats.kills++
-    }
-    
-    player.stats.score += Math.floor((meal.volumeGained || 0) * 100)
-    player.updatedAt = Date.now()
-    
-    this._emit('eat', { player, meal })
-  }
-  
-  /**
    * Apply damage to player
    * @param {string} id 
    * @param {number} amount 
@@ -847,6 +1206,8 @@ class PlayerRegistryClass {
       position: { x: pos.x, y: pos.y, z: pos.z },
       rotation: { x: rot.x, y: rot.y, z: rot.z },
       velocity: { x: vel.x, y: vel.y, z: vel.z },
+      volume: player.volumes.world,  // Send world volume (not effective)
+      scale: player.capsule.scaleFactor,
       timestamp: Date.now(),
     }
     
@@ -859,9 +1220,6 @@ class PlayerRegistryClass {
         abilityState: player.capabilities.abilityState,
       }
       state.tags = Array.from(player.tags)
-      state.physics = {
-        scaleFactor: player.physics.scaleFactor,
-      }
     }
     
     return state
@@ -898,6 +1256,11 @@ class PlayerRegistryClass {
       this.updateVelocity(id, vel)
     }
     
+    // Volume (network volume is world volume only)
+    if (state.volume !== undefined) {
+      this.setWorldVolume(id, state.volume)
+    }
+    
     // Full state updates
     if (state.displayName) player.displayName = state.displayName
     if (state.creature) Object.assign(player.creature, state.creature)
@@ -905,9 +1268,6 @@ class PlayerRegistryClass {
     if (state.capabilities) Object.assign(player.capabilities, state.capabilities)
     if (state.tags) {
       player.tags = new Set(state.tags)
-    }
-    if (state.physics) {
-      Object.assign(player.physics, state.physics)
     }
     
     player.network.packetsReceived++
@@ -1127,6 +1487,9 @@ class PlayerRegistryClass {
       console.log(`  State: ${player.connectionState}`)
       console.log(`  Creature: ${player.creature.displayName} (${player.creature.type}/${player.creature.class})`)
       console.log(`  Position: (${player.transform.position.x.toFixed(1)}, ${player.transform.position.y.toFixed(1)}, ${player.transform.position.z.toFixed(1)})`)
+      console.log(`  Volumes: natural=${player.volumes.natural.toFixed(4)}, world=${player.volumes.world.toFixed(2)}, manual=${player.volumes.manualScale.toFixed(2)}, effective=${player.volumes.effective.toFixed(2)} m^3`)
+      console.log(`  Scale: ${player.capsule.scaleFactor.toFixed(4)}`)
+      console.log(`  Feeding: ${player.feeding.npcsEaten} NPCs, ${player.feeding.playersEaten} players, ${player.feeding.totalVolumeEaten.toFixed(2)} m^3 total`)
       console.log(`  Health: ${player.stats.health}/${player.stats.maxHealth}`)
       console.log(`  Ping: ${player.network.ping}ms`)
       console.log(`  Tags: ${Array.from(player.tags).join(', ') || 'none'}`)
@@ -1181,12 +1544,6 @@ class PlayerRegistryClass {
     // Physics
     if (options.physics) {
       Object.assign(player.physics, options.physics)
-    }
-    if (options.capsuleParams) {
-      player.physics.normalizedCapsuleParams = options.capsuleParams
-    }
-    if (options.naturalCapsuleParams) {
-      player.physics.naturalCapsuleParams = options.naturalCapsuleParams
     }
     
     // Transform

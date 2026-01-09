@@ -53,10 +53,12 @@ const currentVelocity = new THREE.Vector3()
 
 export function initSwimming() {
   console.log('[Swimming] Initialized')
+  console.log('[Swimming] Physics ready:', isPhysicsReady())
   
   if (isPhysicsReady()) {
     setPlayerDamping(PARAMS.linearDamping)
     setPlayerGravityScale(PARAMS.gravityScale)
+    console.log('[Swimming] Applied damping and gravity scale')
   }
 }
 
@@ -178,15 +180,16 @@ export function fullStop() {
 }
 
 export function debugSwimming() {
-  console.group('[Swimming] Debug')
-  console.log('Params:', PARAMS)
-  console.log('Input:', input)
-  console.log('Boosting:', isBoosting)
-  if (isPhysicsReady()) {
-    const vel = getPlayerVelocity()
-    console.log('Velocity:', vel.length().toFixed(2), 'm/s')
-  }
-  console.groupEnd()
+  const player = getPlayer()
+  const vel = isPhysicsReady() ? getPlayerVelocity() : null
+  
+  console.log('[Swimming] Debug:', {
+    physicsReady: isPhysicsReady(),
+    input: { ...input },
+    boosting: isBoosting,
+    velocity: vel ? `${vel.length().toFixed(2)} m/s` : 'N/A',
+    position: player ? player.position.toArray().map(v => v.toFixed(1)) : 'N/A',
+  })
 }
 
 export function setSwimConfig(config) {

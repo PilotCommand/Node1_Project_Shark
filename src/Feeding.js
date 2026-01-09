@@ -5,12 +5,17 @@
  *   - TotalWorldVolume determines "size" for eating eligibility
  *   - 5% RULE: Must be at least 5% larger to eat (ratio >= 1.05)
  *   - LINEAR ADDITIVE GROWTH: newVolume = predatorVolume + preyVolume
- *   - Volume capped at 1000 m³
+ *   - Volume capped at 1000 m^3
  * 
  * FEEDING RELATIONSHIPS:
  *   - CAN_EAT: predator/prey ratio >= 1.05 (5% larger)
  *   - CAN_BE_EATEN: predator/prey ratio <= 0.95 (5% smaller)
  *   - NEUTRAL: ratio between 0.95 and 1.05 (neither can eat)
+ * 
+ * ARCHITECTURE:
+ *   - Volume tracking is handled by PlayerRegistry (SINGLE SOURCE OF TRUTH)
+ *   - Meal history is stored in PlayerRegistry.feeding
+ *   - This module focuses on feeding logic and collision handling
  * 
  * USAGE:
  *   import { Feeding } from './Feeding.js'
@@ -29,8 +34,9 @@
  */
 
 import * as THREE from 'three'
-import { getPlayer, getPlayerNormalizationInfo } from './player.js'
+import { getPlayer, getPlayerNormalizationInfo, addFood as addPlayerFood } from './player.js'
 import { MeshRegistry } from './MeshRegistry.js'
+import { PlayerRegistry, VOLUME_CONFIG } from './PlayerRegistry.js'
 import { 
   computeGroupVolume, 
   getVolume, 
@@ -40,7 +46,6 @@ import {
   canEatByVolume,
   getFeedingRelationship as getVolumeRelationship,
 } from './MeshVolume.js'
-import { addVolume as addPlayerVolume, getWorldVolume, getEffectiveWorldVolume } from './NormalScale.js'
 import { networkManager } from '../network/NetworkManager.js'
 
 // ============================================================================
@@ -75,13 +80,9 @@ let isInitialized = false
 let playerMesh = null
 let lastEatTime = 0
 
-// Track recent meals for stats
-const recentMeals = []
-const MAX_RECENT_MEALS = 10
-
 // Callbacks for external systems
 const onEatCallbacks = []
-const onPlayerEatenCallbacks = []  // NEW: Callbacks for when local player is eaten
+const onPlayerEatenCallbacks = []  // Callbacks for when local player is eaten
 
 // Reference to FishAdder (set during init)
 let fishAdderRef = null
@@ -125,12 +126,13 @@ function init(fishAdder) {
 // ============================================================================
 
 /**
- * Get player's current world volume from NormalScale
- * Uses getEffectiveWorldVolume which includes manual scale (R/T keys)
+ * Get player's current effective volume from PlayerRegistry
+ * Uses effective volume which includes manual scale (R/T keys) for feeding calculations
  * @returns {number} Volume in cubic meters
  */
 function getPlayerWorldVolume() {
-  return getEffectiveWorldVolume()
+  const localId = PlayerRegistry.getLocalId()
+  return localId ? PlayerRegistry.getEffectiveVolume(localId) : VOLUME_CONFIG.STARTER
 }
 
 /**
@@ -206,7 +208,7 @@ function calculateFoodValue(preyVolume) {
 }
 
 // ============================================================================
-// PLAYER → NPC FEEDING
+// PLAYER -> NPC FEEDING
 // ============================================================================
 
 /**
@@ -229,7 +231,7 @@ function checkPlayerNPCFeeding(currentTime) {
   if (!playerMesh) return null
   
   const playerPos = playerMesh.position
-  const playerVolume = getPlayerWorldVolume()  // Use world volume
+  const playerVolume = getPlayerWorldVolume()  // Use effective volume from PlayerRegistry
   
   if (playerVolume <= 0) return null
   
@@ -273,7 +275,7 @@ function consumeNPC(npc, playerVolume, npcVolume, currentTime) {
   // LINEAR ADDITIVE: Add prey's full volume to player
   const volumeToAdd = calculateFoodValue(npcVolume)
   
-  // Record meal (before growth)
+  // Record meal data (before growth)
   const meal = {
     type: 'npc',
     preyId: npc.id,
@@ -286,8 +288,8 @@ function consumeNPC(npc, playerVolume, npcVolume, currentTime) {
     position: npc.mesh.position.clone(),
   }
   
-  // Add volume to player (linear additive growth)
-  const growthResult = addPlayerVolume(volumeToAdd)
+  // Add volume to player (linear additive growth) - this also applies scale to mesh
+  const growthResult = addPlayerFood(volumeToAdd)
   meal.playerVolumeAfter = growthResult.totalVolume
   meal.volumeGained = growthResult.volumeGained
   meal.wasCapped = growthResult.wasCapped
@@ -305,10 +307,10 @@ function consumeNPC(npc, playerVolume, npcVolume, currentTime) {
   // Update state
   lastEatTime = currentTime
   
-  // Track meal
-  recentMeals.unshift(meal)
-  if (recentMeals.length > MAX_RECENT_MEALS) {
-    recentMeals.pop()
+  // Record meal in PlayerRegistry (SINGLE SOURCE OF TRUTH for meal history)
+  const localId = PlayerRegistry.getLocalId()
+  if (localId) {
+    PlayerRegistry.recordMeal(localId, meal)
   }
   
   // Fire callbacks
@@ -335,7 +337,7 @@ function consumeNPC(npc, playerVolume, npcVolume, currentTime) {
 }
 
 // ============================================================================
-// PLAYER → PLAYER FEEDING (Multiplayer)
+// PLAYER -> PLAYER FEEDING (Multiplayer)
 // ============================================================================
 
 /**
@@ -347,9 +349,17 @@ function consumeNPC(npc, playerVolume, npcVolume, currentTime) {
  * @returns {object|null} Meal data or null
  */
 function handlePlayerCollision(player1Data, player2Data) {
-  // Get world volumes
-  const vol1 = player1Data.worldVolume || player1Data.capsuleVolume || 0
-  const vol2 = player2Data.worldVolume || player2Data.capsuleVolume || 0
+  // Get world volumes - try PlayerRegistry first, then fall back to provided data
+  let vol1 = player1Data.worldVolume || player1Data.capsuleVolume || 0
+  let vol2 = player2Data.worldVolume || player2Data.capsuleVolume || 0
+  
+  // For local player, use PlayerRegistry for authoritative volume
+  if (player1Data.isLocal) {
+    vol1 = getPlayerWorldVolume()
+  }
+  if (player2Data.isLocal) {
+    vol2 = getPlayerWorldVolume()
+  }
   
   if (vol1 <= 0 || vol2 <= 0) return null
   
@@ -408,10 +418,10 @@ function consumePlayer(predator, prey, predatorVolume, preyVolume) {
   }
   
   // Calculate new predator volume (linear additive)
-  const newPredatorVolume = Math.min(predatorVolume + volumeToAdd, 1000)
+  const newPredatorVolume = Math.min(predatorVolume + volumeToAdd, VOLUME_CONFIG.MAX)
   meal.predatorVolumeAfter = newPredatorVolume
   meal.volumeGained = newPredatorVolume - predatorVolume
-  meal.wasCapped = (predatorVolume + volumeToAdd) > 1000
+  meal.wasCapped = (predatorVolume + volumeToAdd) > VOLUME_CONFIG.MAX
   
   console.log(`[Feeding] Player ${predator.id} ate player ${prey.id}!`, {
     preyVolume: preyVolume.toFixed(2),
@@ -421,11 +431,17 @@ function consumePlayer(predator, prey, predatorVolume, preyVolume) {
   
   // Handle local player involvement
   if (predator.isLocal) {
-    // LOCAL PLAYER ATE SOMEONE - gain their volume
-    const growthResult = addPlayerVolume(volumeToAdd)
+    // LOCAL PLAYER ATE SOMEONE - gain their volume (also applies scale to mesh)
+    const growthResult = addPlayerFood(volumeToAdd)
     meal.predatorVolumeAfter = growthResult.totalVolume
     meal.volumeGained = growthResult.volumeGained
     meal.wasCapped = growthResult.wasCapped
+    
+    // Record meal in PlayerRegistry
+    const localId = PlayerRegistry.getLocalId()
+    if (localId) {
+      PlayerRegistry.recordMeal(localId, meal)
+    }
   }
   
   if (prey.isLocal) {
@@ -478,7 +494,7 @@ function offPlayerEaten(callback) {
 }
 
 // ============================================================================
-// NPC → NPC FEEDING (AI Predation)
+// NPC -> NPC FEEDING (AI Predation)
 // ============================================================================
 
 /**
@@ -512,7 +528,7 @@ function processNPCEatNPC(predatorNPC, preyNPC) {
   
   // Calculate new volume (linear additive, capped at 1000)
   const currentVolume = predatorNPC.totalWorldVolume || predatorNPC.visualVolume || 1
-  const newVolume = Math.min(currentVolume + volumeToAdd, 1000)
+  const newVolume = Math.min(currentVolume + volumeToAdd, VOLUME_CONFIG.MAX)
   
   // Calculate scale ratio for mesh update
   // Since we're tracking totalWorldVolume, we need the ratio of new encyclopedia-based scale
@@ -524,7 +540,7 @@ function processNPCEatNPC(predatorNPC, preyNPC) {
     oldVolume: currentVolume,
     newVolume,
     scaleRatio,
-    wasCapped: (currentVolume + volumeToAdd) > 1000,
+    wasCapped: (currentVolume + volumeToAdd) > VOLUME_CONFIG.MAX,
     preyId: preyNPC.id,
     preyClass: preyNPC.creatureClass,
   }
@@ -616,37 +632,33 @@ function offEat(callback) {
 
 /**
  * Get feeding statistics
+ * Uses PlayerRegistry as the SINGLE SOURCE OF TRUTH for meal history
  * @returns {object}
  */
 function getStats() {
   const playerVolume = getPlayerWorldVolume()
   
-  let totalVolumeEaten = 0
-  let npcsEaten = 0
-  let playersEaten = 0
-  
-  for (const meal of recentMeals) {
-    totalVolumeEaten += meal.volumeAdded || meal.foodValue || 0
-    if (meal.type === 'npc') npcsEaten++
-    if (meal.type === 'player') playersEaten++
-  }
+  // Get feeding stats from PlayerRegistry
+  const localId = PlayerRegistry.getLocalId()
+  const feedingStats = localId ? PlayerRegistry.getFeedingStats(localId) : null
   
   return {
     playerVolume,
-    recentMeals: recentMeals.length,
-    totalVolumeEaten,
-    npcsEaten,
-    playersEaten,
+    recentMeals: feedingStats?.mealCount || 0,
+    totalVolumeEaten: feedingStats?.totalVolumeEaten || 0,
+    npcsEaten: feedingStats?.npcsEaten || 0,
+    playersEaten: feedingStats?.playersEaten || 0,
     lastEatTime,
   }
 }
 
 /**
- * Get recent meals list
+ * Get recent meals list from PlayerRegistry
  * @returns {Array}
  */
 function getRecentMeals() {
-  return [...recentMeals]
+  const localId = PlayerRegistry.getLocalId()
+  return localId ? PlayerRegistry.getMeals(localId) : []
 }
 
 /**
@@ -656,12 +668,13 @@ function debug() {
   console.group('[Feeding] Debug')
   
   const stats = getStats()
-  console.log('Player volume:', stats.playerVolume.toFixed(2), 'm³')
+  console.log('Player volume:', stats.playerVolume.toFixed(2), 'm^3')
   console.log('Recent meals:', stats.recentMeals)
-  console.log('Total volume eaten:', stats.totalVolumeEaten.toFixed(2), 'm³')
+  console.log('Total volume eaten:', stats.totalVolumeEaten.toFixed(2), 'm^3')
   console.log('NPCs eaten:', stats.npcsEaten)
   console.log('Players eaten:', stats.playersEaten)
   
+  const recentMeals = getRecentMeals()
   if (recentMeals.length > 0) {
     console.log('Last meal:', recentMeals[0])
   }

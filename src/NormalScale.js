@@ -1,41 +1,38 @@
 /**
- * NormalScale.js - Normalize creatures to equal starting volume
+ * NormalScale.js - Volume Utilities and Deprecated Player State Wrappers
  * 
- * PURPOSE:
- *   Encyclopedia.js contains real-world accurate sizes (meta facts).
- *   This module normalizes all creatures to equal gameplay volume
- *   while PRESERVING the original data.
+ * ARCHITECTURE CHANGE:
+ *   As of the PlayerRegistry consolidation, all player volume/scale state
+ *   has moved to PlayerRegistry.js. This file now contains:
+ *   
+ *   1. PURE UTILITY FUNCTIONS (unchanged, no state)
+ *      - computeCapsuleVolume(), computeScaleFactor(), scaleCapsuleParams(), etc.
+ *   
+ *   2. DEPRECATED WRAPPERS (redirect to PlayerRegistry)
+ *      - addVolume(), getWorldVolume(), decreaseScale(), etc.
+ *      - These log deprecation warnings and call PlayerRegistry methods
+ *   
+ *   3. NPC FUNCTIONS (unchanged, self-contained)
+ *      - generateNPCTargetVolumeLogNormal(), computeNPCScaleFactor(), etc.
  * 
- * CONCEPT:
- *   - All players start at STARTER_VOLUME (1 mÂ³)
- *   - Growth is LINEAR ADDITIVE: eating adds prey's volume to your volume
- *   - Volume is capped at MAX_VOLUME (1000 mÂ³)
- *   - Scale factor = âˆ›(targetVolume / naturalVolume)
+ * MIGRATION GUIDE:
+ *   OLD: import { addVolume, getWorldVolume } from './NormalScale.js'
+ *   NEW: import { PlayerRegistry } from './PlayerRegistry.js'
+ *        PlayerRegistry.addVolume(id, preyVolume)
+ *        PlayerRegistry.getVolumes(id).world
  * 
  * VOLUME SYSTEM:
- *   - TotalWorldVolume: Your current gameplay volume [1, 1000] mÂ³
+ *   - TotalWorldVolume: Your current gameplay volume [1, 1000] m^3
  *   - When you eat prey, your volume = your volume + prey's volume (capped at 1000)
  *   - 5% rule: You can eat fish that are <= 95% of your volume
- * 
- * USAGE:
- *   import { normalizeCreature, addVolume, decreaseScale } from './NormalScale.js'
- *   
- *   // Normalize a creature to gameplay scale
- *   const result = normalizeCreature(mesh, naturalCapsuleParams)
- *   
- *   // When eating prey (linear additive growth)
- *   const result = addVolume(preyVolume)  // Returns new total volume
- *   
- *   // R/T keys for manual testing
- *   decreaseScale()  // R
- *   increaseScale()  // T
  */
 
 import * as THREE from 'three'
 import { Determine } from './determine.js'
+import { PlayerRegistry, VOLUME_CONFIG } from './PlayerRegistry.js'
 
 // ============================================================================
-// CONFIGURATION
+// CONFIGURATION (kept for reference and NPC use)
 // ============================================================================
 
 const CONFIG = {
@@ -51,33 +48,36 @@ const CONFIG = {
   // Manual scale adjustment (R/T keys) - for DEBUG/TESTING
   MANUAL_SCALE_STEP: 0.1,     // 10% per keypress
   MANUAL_SCALE_MIN: 0.1,      // Can't go below 10% of normalized
-  MANUAL_SCALE_MAX: 10.0,     // Can't exceed 10Ã— normalized
+  MANUAL_SCALE_MAX: 10.0,     // Can't exceed 10x normalized
 }
 
 // ============================================================================
-// STATE
+// DEPRECATION HELPERS
 // ============================================================================
 
-// Current world volume (starts at STARTER_VOLUME, grows by eating)
-let currentWorldVolume = CONFIG.STARTER_VOLUME
+const deprecationWarnings = new Set()
 
-// Manual scale multiplier (R/T keys) - applied ON TOP of world volume
-let manualScaleMultiplier = 1.0
+function warnDeprecated(fnName, replacement) {
+  if (!deprecationWarnings.has(fnName)) {
+    console.warn(`[NormalScale] ${fnName}() is deprecated. Use ${replacement} instead.`)
+    deprecationWarnings.add(fnName)
+  }
+}
 
-// Cache for creature's natural volume (before normalization)
-let cachedNaturalVolume = null
-let cachedEncyclopediaVisualVolume = null
+function getLocalId() {
+  return PlayerRegistry.getLocalId()
+}
 
 // ============================================================================
-// CORE MATH FUNCTIONS
+// PURE UTILITY FUNCTIONS (NO STATE - KEEP UNCHANGED)
 // ============================================================================
 
 /**
  * Compute capsule volume
  * 
  * Capsule = Cylinder + 2 Hemispheres (= 1 Sphere)
- * V = Ï€rÂ²h + (4/3)Ï€rÂ³
- *   = Ï€rÂ²(h + 4r/3)
+ * V = pi*r^2*h + (4/3)*pi*r^3
+ *   = pi*r^2*(h + 4r/3)
  * 
  * Where:
  *   r = capsule radius
@@ -91,7 +91,7 @@ export function computeCapsuleVolume(radius, halfHeight) {
   const r = radius
   const h = halfHeight * 2  // Full cylinder height
   
-  // V = Ï€rÂ²(h + 4r/3)
+  // V = pi*r^2*(h + 4r/3)
   const volume = Math.PI * r * r * (h + (4 * r / 3))
   
   return volume
@@ -101,8 +101,8 @@ export function computeCapsuleVolume(radius, halfHeight) {
  * Compute the scale factor needed to achieve target volume
  * 
  * Since volume scales with cube of linear dimension:
- *   targetVolume = currentVolume Ã— scaleÂ³
- *   scale = âˆ›(targetVolume / currentVolume)
+ *   targetVolume = currentVolume * scale^3
+ *   scale = cbrt(targetVolume / currentVolume)
  * 
  * @param {number} currentVolume - Current/natural capsule volume
  * @param {number} targetVolume - Desired gameplay volume
@@ -115,110 +115,6 @@ export function computeScaleFactor(currentVolume, targetVolume) {
   }
   
   return Math.cbrt(targetVolume / currentVolume)
-}
-
-/**
- * Compute total target volume considering world volume and manual scale
- * 
- * @returns {number} Target volume in cubic meters
- */
-export function computeTargetVolume() {
-  // World volume Ã— manual scale (for debug)
-  const targetVolume = currentWorldVolume * manualScaleMultiplier
-  // Clamp to bounds
-  return Math.max(CONFIG.MIN_VOLUME, Math.min(CONFIG.MAX_VOLUME, targetVolume))
-}
-
-/**
- * Clamp a volume to valid bounds
- * 
- * @param {number} volume - Volume to clamp
- * @returns {number} Clamped volume
- */
-export function clampVolume(volume) {
-  return Math.max(CONFIG.MIN_VOLUME, Math.min(CONFIG.MAX_VOLUME, volume))
-}
-
-// ============================================================================
-// MAIN NORMALIZATION FUNCTION
-// ============================================================================
-
-/**
- * Normalize a creature to gameplay scale
- * 
- * This is the main entry point. It:
- *   1. Computes the natural volume from capsule params
- *   2. Uses current world volume (+ manual scale for debug)
- *   3. Determines scale factor to apply
- *   4. Applies scale to mesh
- *   5. Returns normalized capsule params for physics
- * 
- * @param {THREE.Object3D} mesh - The creature mesh (will be scaled in place)
- * @param {object} naturalCapsuleParams - { radius, halfHeight, center } at natural scale
- * @param {boolean} applyToMesh - Whether to actually apply scale (default true)
- * @returns {object} Normalization result
- */
-export function normalizeCreature(mesh, naturalCapsuleParams, applyToMesh = true) {
-  if (!naturalCapsuleParams) {
-    console.warn('[NormalScale] No capsule params provided')
-    return null
-  }
-  
-  const { radius, halfHeight, center } = naturalCapsuleParams
-  
-  // 1. Compute natural volume (this is a META FACT we preserve)
-  const naturalVolume = computeCapsuleVolume(radius, halfHeight)
-  cachedNaturalVolume = naturalVolume
-  
-  // 2. Compute target volume for gameplay
-  const targetVolume = computeTargetVolume()
-  
-  // 3. Compute scale factor
-  const scaleFactor = computeScaleFactor(naturalVolume, targetVolume)
-  
-  // 4. Apply to mesh (uniform scale)
-  if (applyToMesh && mesh) {
-    mesh.scale.setScalar(scaleFactor)
-  }
-  
-  // 5. Compute normalized capsule params for physics
-  const normalizedCapsuleParams = {
-    radius: radius * scaleFactor,
-    halfHeight: halfHeight * scaleFactor,
-    center: center ? center.clone().multiplyScalar(scaleFactor) : new THREE.Vector3(),
-  }
-  
-  // 6. Return comprehensive result
-  return {
-    // Scale info
-    scaleFactor,
-    
-    // Capsule params
-    naturalCapsuleParams,           // Original (preserved)
-    normalizedCapsuleParams,        // For physics
-    
-    // Volume info
-    naturalVolume,                  // META FACT (preserved)
-    targetVolume,                   // Current gameplay volume
-    
-    // State
-    worldVolume: currentWorldVolume,
-    manualScaleMultiplier,
-  }
-}
-
-/**
- * Get scale factor without applying to mesh
- * Useful for queries and physics updates
- * 
- * @param {object} naturalCapsuleParams - { radius, halfHeight }
- * @returns {number} Scale factor
- */
-export function getScaleFactor(naturalCapsuleParams) {
-  const { radius, halfHeight } = naturalCapsuleParams
-  const naturalVolume = computeCapsuleVolume(radius, halfHeight)
-  const targetVolume = computeTargetVolume()
-  return computeScaleFactor(naturalVolume, targetVolume)
 }
 
 /**
@@ -238,239 +134,335 @@ export function scaleCapsuleParams(capsuleParams, scaleFactor) {
   }
 }
 
+/**
+ * Clamp a volume to valid bounds
+ * 
+ * @param {number} volume - Volume to clamp
+ * @returns {number} Clamped volume
+ */
+export function clampVolume(volume) {
+  return Math.max(CONFIG.MIN_VOLUME, Math.min(CONFIG.MAX_VOLUME, volume))
+}
+
+/**
+ * Get configuration (read-only)
+ * 
+ * @returns {object} Copy of config
+ */
+export function getConfig() {
+  return { ...CONFIG }
+}
+
 // ============================================================================
-// LINEAR ADDITIVE GROWTH SYSTEM
+// DEPRECATED WRAPPERS - REDIRECT TO PLAYERREGISTRY
 // ============================================================================
+
+/**
+ * Compute total target volume considering world volume and manual scale
+ * 
+ * @deprecated Use PlayerRegistry.getEffectiveVolume(id) instead
+ * @returns {number} Target volume in cubic meters
+ */
+export function computeTargetVolume() {
+  warnDeprecated('computeTargetVolume', 'PlayerRegistry.getEffectiveVolume(id)')
+  const localId = getLocalId()
+  return localId ? PlayerRegistry.getEffectiveVolume(localId) : VOLUME_CONFIG.STARTER
+}
+
+/**
+ * Normalize a creature to gameplay scale
+ * 
+ * @deprecated Use PlayerRegistry.initVolumes(id, naturalCapsuleParams) instead
+ * @param {THREE.Object3D} mesh - The creature mesh (will be scaled in place)
+ * @param {object} naturalCapsuleParams - { radius, halfHeight, center } at natural scale
+ * @param {boolean} applyToMesh - Whether to actually apply scale (default true)
+ * @returns {object} Normalization result
+ */
+export function normalizeCreature(mesh, naturalCapsuleParams, applyToMesh = true) {
+  warnDeprecated('normalizeCreature', 'PlayerRegistry.initVolumes(id, capsuleParams)')
+  
+  if (!naturalCapsuleParams) {
+    console.warn('[NormalScale] No capsule params provided')
+    return null
+  }
+  
+  const localId = getLocalId()
+  if (!localId) {
+    console.warn('[NormalScale] No local player registered')
+    return null
+  }
+  
+  // Initialize volumes in PlayerRegistry
+  PlayerRegistry.initVolumes(localId, naturalCapsuleParams)
+  
+  // Get results from PlayerRegistry
+  const player = PlayerRegistry.get(localId)
+  const volumes = player.volumes
+  const capsule = player.capsule
+  
+  // Apply to mesh if requested (PlayerRegistry already does this, but be explicit)
+  if (applyToMesh && mesh) {
+    mesh.scale.setScalar(capsule.scaleFactor)
+  }
+  
+  return {
+    scaleFactor: capsule.scaleFactor,
+    naturalCapsuleParams,
+    normalizedCapsuleParams: capsule.normalized,
+    naturalVolume: volumes.natural,
+    targetVolume: volumes.effective,
+    worldVolume: volumes.world,
+    manualScaleMultiplier: volumes.manualScale,
+  }
+}
+
+/**
+ * Get scale factor without applying to mesh
+ * 
+ * @deprecated Use PlayerRegistry.getCapsule(id).scaleFactor instead
+ * @param {object} naturalCapsuleParams - { radius, halfHeight }
+ * @returns {number} Scale factor
+ */
+export function getScaleFactor(naturalCapsuleParams) {
+  warnDeprecated('getScaleFactor', 'PlayerRegistry.getCapsule(id).scaleFactor')
+  
+  const localId = getLocalId()
+  if (localId) {
+    const capsule = PlayerRegistry.getCapsule(localId)
+    if (capsule) return capsule.scaleFactor
+  }
+  
+  // Fallback to computation
+  const { radius, halfHeight } = naturalCapsuleParams
+  const naturalVolume = computeCapsuleVolume(radius, halfHeight)
+  const targetVolume = PlayerRegistry.getEffectiveVolume(localId) || VOLUME_CONFIG.STARTER
+  return computeScaleFactor(naturalVolume, targetVolume)
+}
 
 /**
  * Add volume from eating prey (LINEAR ADDITIVE GROWTH)
  * 
- * New volume = current volume + prey volume (capped at MAX_VOLUME)
- * 
+ * @deprecated Use PlayerRegistry.addVolume(id, preyVolume) instead
  * @param {number} preyVolume - Volume of prey that was eaten
  * @returns {object} { volumeGained, totalVolume, wasCapped }
  */
 export function addVolume(preyVolume) {
-  const oldVolume = currentWorldVolume
-  const uncappedNewVolume = currentWorldVolume + preyVolume
-  const newVolume = clampVolume(uncappedNewVolume)
-  const wasCapped = uncappedNewVolume > CONFIG.MAX_VOLUME
+  warnDeprecated('addVolume', 'PlayerRegistry.addVolume(id, preyVolume)')
   
-  currentWorldVolume = newVolume
-  
-  const volumeGained = newVolume - oldVolume
-  
-  console.log(`[NormalScale] Volume: ${oldVolume.toFixed(2)} + ${preyVolume.toFixed(2)} = ${newVolume.toFixed(2)} mÂ³${wasCapped ? ' (CAPPED)' : ''}`)
-  
-  return {
-    volumeGained,
-    totalVolume: newVolume,
-    wasCapped,
-    oldVolume,
-    preyVolume,
+  const localId = getLocalId()
+  if (!localId) {
+    console.warn('[NormalScale] No local player registered')
+    return { volumeGained: 0, totalVolume: VOLUME_CONFIG.STARTER, wasCapped: false }
   }
+  
+  return PlayerRegistry.addVolume(localId, preyVolume)
 }
 
 /**
  * Set world volume directly (for loading saved state or syncing)
  * 
+ * @deprecated Use PlayerRegistry.setWorldVolume(id, volume) instead
  * @param {number} volume - Volume to set
  */
 export function setWorldVolume(volume) {
-  currentWorldVolume = clampVolume(volume)
-  console.log(`[NormalScale] World volume set to ${currentWorldVolume.toFixed(2)} mÂ³`)
+  warnDeprecated('setWorldVolume', 'PlayerRegistry.setWorldVolume(id, volume)')
+  
+  const localId = getLocalId()
+  if (localId) {
+    PlayerRegistry.setWorldVolume(localId, volume)
+  }
 }
 
 /**
  * Get current world volume (base volume without manual scale)
  * 
+ * @deprecated Use PlayerRegistry.getVolumes(id).world instead
  * @returns {number}
  */
 export function getWorldVolume() {
-  return currentWorldVolume
+  warnDeprecated('getWorldVolume', 'PlayerRegistry.getVolumes(id).world')
+  
+  const localId = getLocalId()
+  if (localId) {
+    const volumes = PlayerRegistry.getVolumes(localId)
+    return volumes ? volumes.world : VOLUME_CONFIG.STARTER
+  }
+  return VOLUME_CONFIG.STARTER
 }
 
 /**
  * Get effective world volume INCLUDING manual scale multiplier
- * This is what should be sent over the network for other players to see
+ * This is what should be used for feeding calculations
  * 
- * @returns {number} Effective volume in m³
+ * @deprecated Use PlayerRegistry.getEffectiveVolume(id) instead
+ * @returns {number} Effective volume in m^3
  */
 export function getEffectiveWorldVolume() {
-  return computeTargetVolume()
+  warnDeprecated('getEffectiveWorldVolume', 'PlayerRegistry.getEffectiveVolume(id)')
+  
+  const localId = getLocalId()
+  return localId ? PlayerRegistry.getEffectiveVolume(localId) : VOLUME_CONFIG.STARTER
 }
 
 /**
  * Reset to starter volume
+ * 
+ * @deprecated Use PlayerRegistry.resetVolumes(id) instead
  */
 export function resetGrowth() {
-  currentWorldVolume = CONFIG.STARTER_VOLUME
-  console.log('[NormalScale] Growth reset to starter volume')
+  warnDeprecated('resetGrowth', 'PlayerRegistry.resetVolumes(id)')
+  
+  const localId = getLocalId()
+  if (localId) {
+    PlayerRegistry.resetVolumes(localId)
+  }
 }
 
 /**
  * Get current growth stats
  * 
+ * @deprecated Use PlayerRegistry.getVolumes(id) and PlayerRegistry.getFeedingStats(id) instead
  * @returns {object} Growth statistics
  */
 export function getGrowthStats() {
-  const targetVolume = computeTargetVolume()
+  warnDeprecated('getGrowthStats', 'PlayerRegistry.getVolumes(id)')
+  
+  const localId = getLocalId()
+  if (!localId) {
+    return {
+      worldVolume: VOLUME_CONFIG.STARTER,
+      manualScaleMultiplier: 1.0,
+      targetVolume: VOLUME_CONFIG.STARTER,
+      starterVolume: CONFIG.STARTER_VOLUME,
+      maxVolume: CONFIG.MAX_VOLUME,
+      percentOfMax: (VOLUME_CONFIG.STARTER / CONFIG.MAX_VOLUME) * 100,
+    }
+  }
+  
+  const volumes = PlayerRegistry.getVolumes(localId)
   
   return {
-    worldVolume: currentWorldVolume,
-    manualScaleMultiplier,
-    targetVolume,
+    worldVolume: volumes.world,
+    manualScaleMultiplier: volumes.manualScale,
+    targetVolume: volumes.effective,
     starterVolume: CONFIG.STARTER_VOLUME,
     maxVolume: CONFIG.MAX_VOLUME,
-    percentOfMax: (currentWorldVolume / CONFIG.MAX_VOLUME) * 100,
+    percentOfMax: (volumes.world / CONFIG.MAX_VOLUME) * 100,
   }
 }
-
-// ============================================================================
-// LEGACY COMPATIBILITY - addFood (now wraps addVolume)
-// ============================================================================
-
-/**
- * Add food and update growth (LEGACY - redirects to addVolume)
- * 
- * @deprecated Use addVolume() instead
- * @param {number} foodValue - Amount of food eaten (treated as volume)
- * @returns {object} { volumeGained, totalVolume }
- */
-export function addFood(foodValue) {
-  const result = addVolume(foodValue)
-  
-  // Return in legacy format for compatibility
-  return {
-    newMultiplier: 1.0,  // No longer used
-    volumeGained: result.volumeGained,
-    totalVolume: result.totalVolume,
-    totalFood: result.totalVolume,  // Legacy field
-  }
-}
-
-/**
- * @deprecated Use getWorldVolume() instead
- */
-export function getFoodEaten() {
-  return currentWorldVolume
-}
-
-/**
- * @deprecated Use setWorldVolume() instead
- */
-export function setFoodEaten(food) {
-  setWorldVolume(food)
-}
-
-/**
- * @deprecated No longer used - growth is not logarithmic
- */
-export function computeGrowthMultiplier(foodEaten) {
-  // Return 1.0 for compatibility - growth is now linear
-  return 1.0
-}
-
-// ============================================================================
-// MANUAL SCALE (R/T Keys) - DEBUG/TESTING
-// ============================================================================
 
 /**
  * Decrease scale (R key)
  * 
+ * @deprecated Use PlayerRegistry.adjustManualScale(id, -VOLUME_CONFIG.MANUAL_SCALE_STEP) instead
  * @returns {object} { newMultiplier, newVolume }
  */
 export function decreaseScale() {
-  const oldMultiplier = manualScaleMultiplier
-  manualScaleMultiplier = Math.max(
-    CONFIG.MANUAL_SCALE_MIN,
-    manualScaleMultiplier - CONFIG.MANUAL_SCALE_STEP
-  )
+  warnDeprecated('decreaseScale', 'PlayerRegistry.adjustManualScale(id, -step)')
   
-  const newVolume = computeTargetVolume()
+  const localId = getLocalId()
+  if (!localId) {
+    return { newMultiplier: 1.0, newVolume: VOLUME_CONFIG.STARTER }
+  }
   
-  console.log(`[NormalScale] Manual scale: ${(oldMultiplier * 100).toFixed(0)}% â†’ ${(manualScaleMultiplier * 100).toFixed(0)}%`)
+  const result = PlayerRegistry.adjustManualScale(localId, -VOLUME_CONFIG.MANUAL_SCALE_STEP)
   
   return {
-    newMultiplier: manualScaleMultiplier,
-    newVolume,
+    newMultiplier: result ? result.newScale : 1.0,
+    newVolume: result ? result.effectiveVolume : VOLUME_CONFIG.STARTER,
   }
 }
 
 /**
  * Increase scale (T key)
  * 
+ * @deprecated Use PlayerRegistry.adjustManualScale(id, +VOLUME_CONFIG.MANUAL_SCALE_STEP) instead
  * @returns {object} { newMultiplier, newVolume }
  */
 export function increaseScale() {
-  const oldMultiplier = manualScaleMultiplier
-  manualScaleMultiplier = Math.min(
-    CONFIG.MANUAL_SCALE_MAX,
-    manualScaleMultiplier + CONFIG.MANUAL_SCALE_STEP
-  )
+  warnDeprecated('increaseScale', 'PlayerRegistry.adjustManualScale(id, +step)')
   
-  const newVolume = computeTargetVolume()
+  const localId = getLocalId()
+  if (!localId) {
+    return { newMultiplier: 1.0, newVolume: VOLUME_CONFIG.STARTER }
+  }
   
-  console.log(`[NormalScale] Manual scale: ${(oldMultiplier * 100).toFixed(0)}% â†’ ${(manualScaleMultiplier * 100).toFixed(0)}%`)
+  const result = PlayerRegistry.adjustManualScale(localId, VOLUME_CONFIG.MANUAL_SCALE_STEP)
   
   return {
-    newMultiplier: manualScaleMultiplier,
-    newVolume,
+    newMultiplier: result ? result.newScale : 1.0,
+    newVolume: result ? result.effectiveVolume : VOLUME_CONFIG.STARTER,
   }
 }
 
 /**
  * Reset manual scale to 1.0
+ * 
+ * @deprecated Manual scale is managed by PlayerRegistry
  */
 export function resetManualScale() {
-  manualScaleMultiplier = 1.0
-  console.log('[NormalScale] Manual scale reset to 100%')
+  warnDeprecated('resetManualScale', 'PlayerRegistry volume management')
+  
+  const localId = getLocalId()
+  if (localId) {
+    const player = PlayerRegistry.get(localId)
+    if (player) {
+      // Reset by adjusting to get back to 1.0
+      const currentScale = player.volumes.manualScale
+      PlayerRegistry.adjustManualScale(localId, 1.0 - currentScale)
+    }
+  }
 }
 
 /**
  * Get current manual scale multiplier
  * 
+ * @deprecated Use PlayerRegistry.getVolumes(id).manualScale instead
  * @returns {number}
  */
 export function getManualScaleMultiplier() {
-  return manualScaleMultiplier
+  warnDeprecated('getManualScaleMultiplier', 'PlayerRegistry.getVolumes(id).manualScale')
+  
+  const localId = getLocalId()
+  if (localId) {
+    const volumes = PlayerRegistry.getVolumes(localId)
+    return volumes ? volumes.manualScale : 1.0
+  }
+  return 1.0
 }
 
 /**
  * Set manual scale directly
  * 
+ * @deprecated Manual scale is managed by PlayerRegistry
  * @param {number} multiplier
  */
 export function setManualScaleMultiplier(multiplier) {
-  manualScaleMultiplier = Math.max(
-    CONFIG.MANUAL_SCALE_MIN,
-    Math.min(CONFIG.MANUAL_SCALE_MAX, multiplier)
-  )
+  warnDeprecated('setManualScaleMultiplier', 'PlayerRegistry.adjustManualScale(id, delta)')
+  
+  const localId = getLocalId()
+  if (localId) {
+    const player = PlayerRegistry.get(localId)
+    if (player) {
+      const delta = multiplier - player.volumes.manualScale
+      PlayerRegistry.adjustManualScale(localId, delta)
+    }
+  }
 }
-
-// ============================================================================
-// CREATURE SWAP - Equivalent Scale Transfer
-// ============================================================================
 
 /**
  * Compute the equivalent scale state when swapping to a new creature
  * 
- * When player switches creatures (N/B keys), we want to maintain
- * their "progression" - same gameplay volume, different shape.
- * 
+ * @deprecated Creature swaps should call PlayerRegistry.initVolumes() with new capsule params
  * @param {object} oldNaturalCapsuleParams - Old creature's natural capsule
  * @param {object} newNaturalCapsuleParams - New creature's natural capsule
- * @returns {object} No state change needed - world volume carries over
+ * @returns {object} Transfer info
  */
 export function transferToNewCreature(oldNaturalCapsuleParams, newNaturalCapsuleParams) {
-  // The beauty of volume-based normalization:
-  // We don't need to change anything!
-  // 
-  // The world volume is INDEPENDENT of creature type.
-  // A player at 50 mÂ³ volume will have 50 mÂ³ volume regardless of creature.
-  // 
-  // The scale FACTOR will be different (to achieve same volume from different natural size)
-  // but the gameplay VOLUME remains the same.
+  warnDeprecated('transferToNewCreature', 'PlayerRegistry.initVolumes(id, newCapsuleParams)')
+  
+  const localId = getLocalId()
+  const volumes = localId ? PlayerRegistry.getVolumes(localId) : null
   
   const oldNaturalVolume = computeCapsuleVolume(
     oldNaturalCapsuleParams.radius, 
@@ -481,38 +473,40 @@ export function transferToNewCreature(oldNaturalCapsuleParams, newNaturalCapsule
     newNaturalCapsuleParams.halfHeight
   )
   
-  const targetVolume = computeTargetVolume()
+  const targetVolume = volumes ? volumes.effective : VOLUME_CONFIG.STARTER
   const newScaleFactor = computeScaleFactor(newNaturalVolume, targetVolume)
   
   return {
-    // These stay the same (progression preserved)
-    worldVolume: currentWorldVolume,
-    manualScaleMultiplier,
+    worldVolume: volumes ? volumes.world : VOLUME_CONFIG.STARTER,
+    manualScaleMultiplier: volumes ? volumes.manualScale : 1.0,
     targetVolume,
-    
-    // These change (different creature shape)
     oldNaturalVolume,
     newNaturalVolume,
     newScaleFactor,
   }
 }
 
-// ============================================================================
-// UTILITY / DEBUG
-// ============================================================================
-
 /**
  * Get comprehensive normalization info for a creature
- * Useful for HUD display or debugging
  * 
+ * @deprecated Use PlayerRegistry.getVolumes(id) and PlayerRegistry.getCapsule(id) instead
  * @param {object} naturalCapsuleParams - { radius, halfHeight }
  * @returns {object} All normalization data
  */
 export function getNormalizationInfo(naturalCapsuleParams) {
+  warnDeprecated('getNormalizationInfo', 'PlayerRegistry.getVolumes(id) and PlayerRegistry.getCapsule(id)')
+  
   const { radius, halfHeight } = naturalCapsuleParams
   const naturalVolume = computeCapsuleVolume(radius, halfHeight)
-  const targetVolume = computeTargetVolume()
-  const scaleFactor = computeScaleFactor(naturalVolume, targetVolume)
+  
+  const localId = getLocalId()
+  const volumes = localId ? PlayerRegistry.getVolumes(localId) : null
+  const capsule = localId ? PlayerRegistry.getCapsule(localId) : null
+  
+  const targetVolume = volumes ? volumes.effective : VOLUME_CONFIG.STARTER
+  const scaleFactor = capsule ? capsule.scaleFactor : computeScaleFactor(naturalVolume, targetVolume)
+  const worldVolume = volumes ? volumes.world : VOLUME_CONFIG.STARTER
+  const manualScaleMultiplier = volumes ? volumes.manualScale : 1.0
   
   return {
     // Natural (META FACTS - preserved from Encyclopedia)
@@ -520,7 +514,7 @@ export function getNormalizationInfo(naturalCapsuleParams) {
       radius,
       halfHeight,
       volume: naturalVolume,
-      capsuleLength: halfHeight * 2 + radius * 2,  // Total capsule length
+      capsuleLength: halfHeight * 2 + radius * 2,
     },
     
     // Gameplay (normalized)
@@ -536,55 +530,105 @@ export function getNormalizationInfo(naturalCapsuleParams) {
     manualScaleMultiplier,
     
     // Volume state
-    worldVolume: currentWorldVolume,
+    worldVolume,
     starterVolume: CONFIG.STARTER_VOLUME,
     maxVolume: CONFIG.MAX_VOLUME,
     
     // Percentages for display
     scalePercent: scaleFactor * 100,
-    volumePercent: (currentWorldVolume / CONFIG.MAX_VOLUME) * 100,
+    volumePercent: (worldVolume / CONFIG.MAX_VOLUME) * 100,
     
     // Legacy compatibility
     growthMultiplier: 1.0,
     growthPercent: 100,
-    foodEaten: currentWorldVolume,
+    foodEaten: worldVolume,
   }
 }
 
 /**
  * Debug log current state
+ * 
+ * @deprecated Use PlayerRegistry.debug() instead
  */
 export function debug() {
-  const targetVolume = computeTargetVolume()
+  warnDeprecated('debug', 'PlayerRegistry.debug()')
   
-  console.group('[NormalScale] Debug')
-  console.log(`Starter volume:      ${CONFIG.STARTER_VOLUME.toFixed(2)} mÂ³`)
-  console.log(`Max volume:          ${CONFIG.MAX_VOLUME.toFixed(2)} mÂ³`)
-  console.log('â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€')
-  console.log(`World volume:        ${currentWorldVolume.toFixed(2)} mÂ³`)
-  console.log(`Manual scale:        ${manualScaleMultiplier.toFixed(2)}Ã— (${(manualScaleMultiplier * 100).toFixed(0)}%)`)
-  console.log('â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€')
-  console.log(`Target volume:       ${targetVolume.toFixed(2)} mÂ³`)
-  console.log(`Percent of max:      ${((currentWorldVolume / CONFIG.MAX_VOLUME) * 100).toFixed(1)}%`)
-  if (cachedNaturalVolume) {
-    const scaleFactor = computeScaleFactor(cachedNaturalVolume, targetVolume)
-    console.log(`Natural volume:      ${cachedNaturalVolume.toFixed(4)} mÂ³ (meta fact)`)
-    console.log(`Scale factor:        ${scaleFactor.toFixed(3)}Ã—`)
+  const localId = getLocalId()
+  const volumes = localId ? PlayerRegistry.getVolumes(localId) : null
+  const capsule = localId ? PlayerRegistry.getCapsule(localId) : null
+  
+  const worldVolume = volumes ? volumes.world : VOLUME_CONFIG.STARTER
+  const manualScale = volumes ? volumes.manualScale : 1.0
+  const targetVolume = volumes ? volumes.effective : VOLUME_CONFIG.STARTER
+  const naturalVolume = volumes ? volumes.natural : null
+  
+  console.group('[NormalScale] Debug (DEPRECATED - use PlayerRegistry.debug())')
+  console.log(`Starter volume:      ${CONFIG.STARTER_VOLUME.toFixed(2)} m^3`)
+  console.log(`Max volume:          ${CONFIG.MAX_VOLUME.toFixed(2)} m^3`)
+  console.log('----------------------------------------')
+  console.log(`World volume:        ${worldVolume.toFixed(2)} m^3`)
+  console.log(`Manual scale:        ${manualScale.toFixed(2)}x (${(manualScale * 100).toFixed(0)}%)`)
+  console.log('----------------------------------------')
+  console.log(`Target volume:       ${targetVolume.toFixed(2)} m^3`)
+  console.log(`Percent of max:      ${((worldVolume / CONFIG.MAX_VOLUME) * 100).toFixed(1)}%`)
+  if (naturalVolume) {
+    const scaleFactor = capsule ? capsule.scaleFactor : 1.0
+    console.log(`Natural volume:      ${naturalVolume.toFixed(4)} m^3 (meta fact)`)
+    console.log(`Scale factor:        ${scaleFactor.toFixed(3)}x`)
   }
   console.groupEnd()
 }
 
+// ============================================================================
+// LEGACY COMPATIBILITY - addFood (redirects through addVolume)
+// ============================================================================
+
 /**
- * Get configuration (read-only)
+ * Add food and update growth (LEGACY - redirects to PlayerRegistry)
  * 
- * @returns {object} Copy of config
+ * @deprecated Use PlayerRegistry.addVolume(id, preyVolume) instead
+ * @param {number} foodValue - Amount of food eaten (treated as volume)
+ * @returns {object} { volumeGained, totalVolume }
  */
-export function getConfig() {
-  return { ...CONFIG }
+export function addFood(foodValue) {
+  warnDeprecated('addFood', 'PlayerRegistry.addVolume(id, preyVolume)')
+  
+  const result = addVolume(foodValue)
+  
+  return {
+    newMultiplier: 1.0,
+    volumeGained: result.volumeGained,
+    totalVolume: result.totalVolume,
+    totalFood: result.totalVolume,
+  }
+}
+
+/**
+ * @deprecated Use PlayerRegistry.getVolumes(id).world instead
+ */
+export function getFoodEaten() {
+  warnDeprecated('getFoodEaten', 'PlayerRegistry.getVolumes(id).world')
+  return getWorldVolume()
+}
+
+/**
+ * @deprecated Use PlayerRegistry.setWorldVolume(id, volume) instead
+ */
+export function setFoodEaten(food) {
+  warnDeprecated('setFoodEaten', 'PlayerRegistry.setWorldVolume(id, volume)')
+  setWorldVolume(food)
+}
+
+/**
+ * @deprecated No longer used - growth is not logarithmic
+ */
+export function computeGrowthMultiplier(foodEaten) {
+  warnDeprecated('computeGrowthMultiplier', 'N/A - growth is now linear')
+  return 1.0
 }
 
 // ============================================================================
-// NPC VISUAL VOLUME NORMALIZATION
+// NPC VISUAL VOLUME NORMALIZATION (UNCHANGED - SELF-CONTAINED)
 // ============================================================================
 
 /**
@@ -599,7 +643,7 @@ const NPC_CONFIG = {
   MAX_VOLUME: 1000.0,   // Largest NPC visual volume
   
   // Log-normal distribution parameters
-  LOG_MEAN: 3.5,        // ~33 mÂ³ median
+  LOG_MEAN: 3.5,        // ~33 m^3 median
   LOG_STD: 1.5,         // Spread
   
   // Default target for "medium" creatures
@@ -627,7 +671,7 @@ function randomNormal() {
 export function generateNPCTargetVolumeLogNormal() {
   // Log-normal parameters
   // We want the distribution to span 1 to 1000
-  // ln(1) = 0, ln(1000) â‰ˆ 6.9
+  // ln(1) = 0, ln(1000) ~= 6.9
   const logMean = NPC_CONFIG.LOG_MEAN
   const logStd = NPC_CONFIG.LOG_STD
   
@@ -663,14 +707,14 @@ export function computeNPCScaleFactor(currentVisualVolume, targetVolume) {
   }
   
   // Volume scales with cube of linear dimension
-  // targetVolume = currentVolume Ã— scaleÂ³
-  // scale = âˆ›(targetVolume / currentVolume)
+  // targetVolume = currentVolume * scale^3
+  // scale = cbrt(targetVolume / currentVolume)
   return Math.cbrt(targetVolume / currentVisualVolume)
 }
 
 /**
  * Get scale factor to achieve a normally distributed volume
- * Uses log-normal distribution for natural spread across 1-1000 mÂ³
+ * Uses log-normal distribution for natural spread across 1-1000 m^3
  * 
  * @param {number} naturalVisualVolume - Visual volume at scale=1
  * @returns {{ scaleFactor: number, targetVolume: number }}
@@ -791,7 +835,7 @@ export function setNPCVolumeBounds(min, max) {
   if (min > 0 && max > min) {
     NPC_CONFIG.MIN_VOLUME = min
     NPC_CONFIG.MAX_VOLUME = max
-    console.log(`[NormalScale] NPC volume bounds set to [${min}, ${max}] mÂ³`)
+    console.log(`[NormalScale] NPC volume bounds set to [${min}, ${max}] m^3`)
   } else {
     console.warn('[NormalScale] Invalid volume bounds:', min, max)
   }
@@ -807,15 +851,15 @@ export function debugNPCNormalization(naturalVisualVolume, desiredScaleMultiplie
   const result = normalizeNPCVisualVolume(naturalVisualVolume, desiredScaleMultiplier)
   
   console.group('[NormalScale] NPC Normalization Debug')
-  console.log(`Natural visual volume: ${naturalVisualVolume.toFixed(4)} mÂ³`)
-  console.log(`Desired scale multiplier: ${desiredScaleMultiplier.toFixed(2)}Ã—`)
-  console.log(`Desired volume: ${(naturalVisualVolume * Math.pow(desiredScaleMultiplier, 3)).toFixed(2)} mÂ³`)
-  console.log('â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€')
-  console.log(`Volume bounds: [${NPC_CONFIG.MIN_VOLUME}, ${NPC_CONFIG.MAX_VOLUME}] mÂ³`)
+  console.log(`Natural visual volume: ${naturalVisualVolume.toFixed(4)} m^3`)
+  console.log(`Desired scale multiplier: ${desiredScaleMultiplier.toFixed(2)}x`)
+  console.log(`Desired volume: ${(naturalVisualVolume * Math.pow(desiredScaleMultiplier, 3)).toFixed(2)} m^3`)
+  console.log('-------------------------')
+  console.log(`Volume bounds: [${NPC_CONFIG.MIN_VOLUME}, ${NPC_CONFIG.MAX_VOLUME}] m^3`)
   console.log(`Was clamped: ${result.wasClamped}${result.clampReason ? ` (${result.clampReason})` : ''}`)
-  console.log('â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€')
-  console.log(`Final scale factor: ${result.scaleFactor.toFixed(3)}Ã—`)
-  console.log(`Final visual volume: ${result.targetVolume.toFixed(2)} mÂ³`)
+  console.log('-------------------------')
+  console.log(`Final scale factor: ${result.scaleFactor.toFixed(3)}x`)
+  console.log(`Final visual volume: ${result.targetVolume.toFixed(2)} m^3`)
   console.groupEnd()
   
   return result
@@ -829,18 +873,18 @@ export default {
   // Config
   getConfig,
   
-  // Core math
+  // Core math (pure utilities - KEEP USING THESE)
   computeCapsuleVolume,
   computeScaleFactor,
   computeTargetVolume,
   clampVolume,
   
-  // Main functions (Player)
+  // Main functions (Player) - DEPRECATED, use PlayerRegistry
   normalizeCreature,
   getScaleFactor,
   scaleCapsuleParams,
   
-  // Linear additive growth
+  // Linear additive growth - DEPRECATED, use PlayerRegistry
   addVolume,
   setWorldVolume,
   getWorldVolume,
@@ -848,27 +892,27 @@ export default {
   resetGrowth,
   getGrowthStats,
   
-  // Legacy compatibility
+  // Legacy compatibility - DEPRECATED
   addFood,
   setFoodEaten,
   getFoodEaten,
   computeGrowthMultiplier,
   
-  // Manual scale (debug)
+  // Manual scale (debug) - DEPRECATED, use PlayerRegistry
   decreaseScale,
   increaseScale,
   resetManualScale,
   getManualScaleMultiplier,
   setManualScaleMultiplier,
   
-  // Creature swap
+  // Creature swap - DEPRECATED, use PlayerRegistry
   transferToNewCreature,
   
-  // Utility
+  // Utility - DEPRECATED, use PlayerRegistry
   getNormalizationInfo,
   debug,
   
-  // NPC Visual Volume Normalization
+  // NPC Visual Volume Normalization (KEEP USING THESE)
   computeNPCScaleFactor,
   clampNPCVolume,
   normalizeNPCVisualVolume,
@@ -877,7 +921,7 @@ export default {
   setNPCVolumeBounds,
   debugNPCNormalization,
   
-  // NPC Normal Distribution
+  // NPC Normal Distribution (KEEP USING THESE)
   generateNPCTargetVolume,
   generateNPCTargetVolumeLogNormal,
   getNPCNormalDistributedScale,

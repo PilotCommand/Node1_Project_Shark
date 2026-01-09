@@ -11,6 +11,7 @@ import { computeCapsuleParams } from '../src/ScaleMesh.js'
 import { computeCapsuleVolume } from '../src/NormalScale.js'
 import { computeGroupVolume } from '../src/MeshVolume.js'
 import { MeshRegistry, Category } from '../src/MeshRegistry.js'
+import { PlayerRegistry, VOLUME_CONFIG } from '../src/PlayerRegistry.js'
 import {
   isPhysicsReady,
   createRemotePlayerBody,
@@ -163,27 +164,51 @@ class RemotePlayer {
    * These are immutable and used as reference for computing display scale
    */
   computeAllEncyclopediaVolumes() {
-    if (!this.mesh) return
+    if (!this.mesh) {
+      console.warn(`[RemotePlayer] ${this.id} no mesh for volume computation, using defaults`)
+      this.encyclopediaVisualVolume = 1
+      this.encyclopediaCapsuleVolume = 1
+      return
+    }
     
     // Mesh should be at scale=1 when this is called
     this.mesh.scale.setScalar(1)
     this.mesh.updateWorldMatrix(true, true)
     
     // 1. Compute visual mesh volume at scale=1
-    this.encyclopediaVisualVolume = computeGroupVolume(this.mesh, false)
-    if (this.encyclopediaVisualVolume < 0.001) {
+    try {
+      this.encyclopediaVisualVolume = computeGroupVolume(this.mesh, false)
+    } catch (e) {
+      console.warn(`[RemotePlayer] ${this.id} visual volume computation failed:`, e)
+      this.encyclopediaVisualVolume = NaN
+    }
+    
+    // Validate visual volume
+    if (!this.encyclopediaVisualVolume || isNaN(this.encyclopediaVisualVolume) || this.encyclopediaVisualVolume < 0.001) {
       this.encyclopediaVisualVolume = 1
-      console.warn(`[RemotePlayer] ${this.id} visual volume too small, using fallback`)
+      console.warn(`[RemotePlayer] ${this.id} visual volume invalid, using fallback: 1`)
     }
     
     // 2. Compute CAPSULE volume at scale=1 (this is what local player uses!)
-    const baseCapsuleParams = computeCapsuleParams(this.mesh, this.creature)
-    this.baseCapsuleParams = baseCapsuleParams
-    this.encyclopediaCapsuleVolume = computeCapsuleVolume(baseCapsuleParams.radius, baseCapsuleParams.halfHeight)
+    try {
+      const baseCapsuleParams = computeCapsuleParams(this.mesh, this.creature)
+      this.baseCapsuleParams = baseCapsuleParams
+      
+      if (baseCapsuleParams && baseCapsuleParams.radius && baseCapsuleParams.halfHeight) {
+        this.encyclopediaCapsuleVolume = computeCapsuleVolume(baseCapsuleParams.radius, baseCapsuleParams.halfHeight)
+      } else {
+        console.warn(`[RemotePlayer] ${this.id} capsule params invalid:`, baseCapsuleParams)
+        this.encyclopediaCapsuleVolume = NaN
+      }
+    } catch (e) {
+      console.warn(`[RemotePlayer] ${this.id} capsule computation failed:`, e)
+      this.encyclopediaCapsuleVolume = NaN
+    }
     
-    if (this.encyclopediaCapsuleVolume < 0.001) {
+    // Validate capsule volume
+    if (!this.encyclopediaCapsuleVolume || isNaN(this.encyclopediaCapsuleVolume) || this.encyclopediaCapsuleVolume < 0.001) {
       this.encyclopediaCapsuleVolume = 1
-      console.warn(`[RemotePlayer] ${this.id} capsule volume too small, using fallback`)
+      console.warn(`[RemotePlayer] ${this.id} capsule volume invalid, using fallback: 1`)
     }
     
     console.log(`[RemotePlayer] ${this.id} encyclopedia volumes: visual=${this.encyclopediaVisualVolume.toFixed(4)}, capsule=${this.encyclopediaCapsuleVolume.toFixed(4)}`)
@@ -195,23 +220,34 @@ class RemotePlayer {
    * 
    * scale = cbrt(worldVolume / encyclopediaCapsuleVolume)
    * 
-   * @param {number} worldVolume - Target world volume in mÂ³
+   * @param {number} worldVolume - Target world volume in m^3
    * @returns {number} Scale factor to apply to mesh
    */
   computeScaleFromWorldVolume(worldVolume) {
+    // Validate input
+    if (!worldVolume || isNaN(worldVolume) || worldVolume <= 0) {
+      worldVolume = 1
+    }
+    
     // Use CAPSULE volume - this matches how local player computes scale
-    if (this.encyclopediaCapsuleVolume > 0.001) {
-      return Math.cbrt(worldVolume / this.encyclopediaCapsuleVolume)
+    if (this.encyclopediaCapsuleVolume && !isNaN(this.encyclopediaCapsuleVolume) && this.encyclopediaCapsuleVolume > 0.001) {
+      const scale = Math.cbrt(worldVolume / this.encyclopediaCapsuleVolume)
+      if (!isNaN(scale) && scale > 0) {
+        return scale
+      }
     }
     
     // Fallback to visual volume if capsule not available
-    if (this.encyclopediaVisualVolume > 0.001) {
+    if (this.encyclopediaVisualVolume && !isNaN(this.encyclopediaVisualVolume) && this.encyclopediaVisualVolume > 0.001) {
       console.warn(`[RemotePlayer] ${this.id} using visual volume fallback for scale`)
-      return Math.cbrt(worldVolume / this.encyclopediaVisualVolume)
+      const scale = Math.cbrt(worldVolume / this.encyclopediaVisualVolume)
+      if (!isNaN(scale) && scale > 0) {
+        return scale
+      }
     }
     
-    // Last resort: use received scale
-    console.warn(`[RemotePlayer] ${this.id} no encyclopedia volumes, using received scale`)
+    // Last resort: use received scale or default to 1
+    console.warn(`[RemotePlayer] ${this.id} no valid encyclopedia volumes, using fallback scale`)
     return this._receivedScale || 1
   }
   
@@ -226,7 +262,7 @@ class RemotePlayer {
       return
     }
     
-    // Use capsule volume formula: ÃƒÂÃ¢â€šÂ¬ * rÃƒâ€šÃ‚Â² * (4/3 * r + 2 * h)
+    // Use capsule volume formula: PI * r^2 * (4/3 * r + 2 * h)
     // where r = radius and h = halfHeight
     const r = this.capsuleParams.radius
     const h = this.capsuleParams.halfHeight
@@ -247,7 +283,7 @@ class RemotePlayer {
         playerId: this.id,
         playerName: this.name,
         visualVolume: this.visualVolume || 1,
-        worldVolume: this.worldVolume || 1,  // NEW: Authoritative volume for feeding
+        worldVolume: this.worldVolume || 1,  // Authoritative volume for feeding
         isRemotePlayer: true,
       }
     }, true)  // Use explicit ID
@@ -425,9 +461,21 @@ class RemotePlayer {
   updateFromServer(data, serverTime) {
     // Compute scale from world volume if provided (uses capsule volume internally)
     let computedScale = data.scale || 1
-    if (data.volume !== undefined && data.volume !== null && 
-        (this.encyclopediaCapsuleVolume > 0.001 || this.encyclopediaVisualVolume > 0.001)) {
+    
+    // Only use volume for scale computation if it's a valid number
+    const hasValidVolume = data.volume !== undefined && 
+                           data.volume !== null && 
+                           !isNaN(data.volume) && 
+                           data.volume > 0
+    
+    if (hasValidVolume && (this.encyclopediaCapsuleVolume > 0.001 || this.encyclopediaVisualVolume > 0.001)) {
       computedScale = this.computeScaleFromWorldVolume(data.volume)
+    }
+    
+    // Safety check: if scale is still NaN or invalid, use fallback
+    if (isNaN(computedScale) || computedScale <= 0) {
+      console.warn(`[RemotePlayer] ${this.id} invalid scale computed, using fallback`)
+      computedScale = this._receivedScale || this.scale || 1
     }
     
     this.positionBuffer.push(
@@ -448,8 +496,8 @@ class RemotePlayer {
     // Use computed scale from world volume
     this.targetScale = computedScale
     
-    // Update world volume if provided
-    if (data.volume !== undefined && data.volume !== null) {
+    // Update world volume if provided and valid
+    if (hasValidVolume) {
       this.updateVolume(data.volume)
     }
   }
@@ -474,7 +522,7 @@ class RemotePlayer {
     // Using capsule volume to match local player formula
     if (this.encyclopediaCapsuleVolume > 0.001) {
       // scale = cbrt(worldVolume / capsuleVolume)
-      // worldVolume = scaleÂ³ * capsuleVolume
+      // worldVolume = scale^3 * capsuleVolume
       this.worldVolume = Math.pow(newScale, 3) * this.encyclopediaCapsuleVolume
     } else if (this.encyclopediaVisualVolume > 0.001) {
       // Fallback to visual volume
@@ -509,18 +557,31 @@ class RemotePlayer {
   
   /**
    * Update world volume (authoritative volume from network)
-   * This also recomputes the display scale and triggers physics rebuild if needed
-   * @param {number} newVolume - World volume in mÂ³ [1, 1000]
+   * This also recomputes the display scale, visualVolume, and triggers physics rebuild if needed
+   * Volume is clamped to valid bounds to match sender's constraints
+   * @param {number} newVolume - World volume in m^3 (will be clamped)
    */
   updateVolume(newVolume) {
-    if (Math.abs(newVolume - this.worldVolume) < 0.01) return
+    // Validate input
+    if (newVolume === undefined || newVolume === null || isNaN(newVolume) || newVolume <= 0) {
+      return  // Ignore invalid volume updates
+    }
+    
+    // Clamp volume to valid bounds (use VOLUME_CONFIG from PlayerRegistry)
+    const clampedVolume = Math.max(VOLUME_CONFIG.MIN, Math.min(VOLUME_CONFIG.MAX, newVolume))
+    
+    // Skip if volume hasn't changed significantly
+    if (Math.abs(clampedVolume - this.worldVolume) < 0.01) return
     
     const oldVolume = this.worldVolume
-    this.worldVolume = newVolume
+    this.worldVolume = clampedVolume
+    
+    // Also update PlayerRegistry to keep it in sync
+    PlayerRegistry.setWorldVolume(this.id, clampedVolume)
     
     // Recompute scale from new volume (uses capsule volume internally)
     if (this.encyclopediaCapsuleVolume > 0.001 || this.encyclopediaVisualVolume > 0.001) {
-      this.targetScale = this.computeScaleFromWorldVolume(newVolume)
+      this.targetScale = this.computeScaleFromWorldVolume(clampedVolume)
       
       // Also update visualVolume immediately based on targetScale
       // This ensures radar threat detection stays in sync with feeding system
@@ -539,9 +600,9 @@ class RemotePlayer {
       })
     }
     
-    // Only log significant changes
-    if (Math.abs(newVolume - oldVolume) > 0.5) {
-      console.log(`[RemotePlayer] ${this.id} volume: ${oldVolume.toFixed(2)} â†’ ${newVolume.toFixed(2)} mÂ³, targetScale: ${this.targetScale.toFixed(4)}`)
+    // Log significant changes
+    if (Math.abs(clampedVolume - oldVolume) > 0.5) {
+      console.log(`[RemotePlayer] ${this.id} volume: ${oldVolume.toFixed(2)} -> ${clampedVolume.toFixed(2)} m³`)
     }
   }
   
@@ -932,7 +993,7 @@ export class RemotePlayerManager {
   /**
    * Update world volume for a remote player
    * @param {number} id - Player ID
-   * @param {number} volume - World volume in mÃ‚Â³
+   * @param {number} volume - World volume in m^3
    */
   updateVolume(id, volume) {
     const player = this.players.get(id)

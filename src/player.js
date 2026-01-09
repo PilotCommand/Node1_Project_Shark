@@ -14,7 +14,7 @@ import {
   hasVariants,
 } from './Encyclopedia.js'
 import { MeshRegistry, Category, Tag } from './MeshRegistry.js'
-import { PlayerRegistry } from './PlayerRegistry.js'
+import { PlayerRegistry, VOLUME_CONFIG } from './PlayerRegistry.js'
 import { 
   attachCapsuleWireframe, 
   computeCapsuleParams,
@@ -25,21 +25,11 @@ import {
   disposeWireframe,
 } from './ScaleMesh.js'
 import {
-  normalizeCreature,
-  getNormalizationInfo,
-  getScaleFactor,
-  scaleCapsuleParams,
-  decreaseScale as normalDecreaseScale,
-  increaseScale as normalIncreaseScale,
-  getGrowthStats,
-  addVolume as normalAddVolume,
-  getWorldVolume,
-  getEffectiveWorldVolume,
-  setWorldVolume,
-  resetGrowth,
-  debug as debugNormalScale,
+  // Pure utility functions (keep using these)
   computeCapsuleVolume,
-  getManualScaleMultiplier,
+  scaleCapsuleParams,
+  // NPC functions (keep using these)
+  computeNPCScaleFactor,
 } from './NormalScale.js'
 import { showMenu } from './menu.js'
 
@@ -52,10 +42,6 @@ let currentType = CreatureType.FISH
 let currentClass = FishClass.STARTER
 let currentIndex = 0
 let currentVariantIndex = 0  // Track which variant of current class
-
-// Normalization state - tracks natural vs gameplay capsule params
-let naturalCapsuleParams = null      // Original size from Encyclopedia (META FACT)
-let normalizedCapsuleParams = null   // Gameplay size after normalization
 
 // All creature classes from Encyclopedia - fish AND mammals
 const CREATURE_CATALOG = getAllCreatureClasses()
@@ -75,8 +61,12 @@ export function initPlayer(scene, spawnPosition = null, options = {}) {
     variantIndex = 0,
   } = options
   
-  // Reset growth state for new player
-  resetGrowth()
+  // Get local player ID (should already be registered by NetworkManager)
+  const localId = PlayerRegistry.getLocalId()
+  if (localId) {
+    // Reset volumes for new player spawn
+    PlayerRegistry.resetVolumes(localId)
+  }
   
   // Generate creature based on selection
   if (creatureClass === FishClass.STARTER || !creatureClass) {
@@ -121,29 +111,36 @@ export function initPlayer(scene, spawnPosition = null, options = {}) {
   scene.add(currentCreature.mesh)
   
   // Compute NATURAL capsule params (META FACT - preserved from Encyclopedia)
-  naturalCapsuleParams = computeCapsuleParams(currentCreature.mesh, currentCreature)
+  const naturalCapsuleParams = computeCapsuleParams(currentCreature.mesh, currentCreature)
   
-  // Apply normalization - this scales the mesh to gameplay volume (starts at 1 mÂ³)
-  const normalization = normalizeCreature(currentCreature.mesh, naturalCapsuleParams)
-  normalizedCapsuleParams = normalization.normalizedCapsuleParams
+  // Initialize volumes in PlayerRegistry - this is now the SINGLE SOURCE OF TRUTH
+  // It will also apply the scale to the mesh
+  if (localId) {
+    PlayerRegistry.initVolumes(localId, naturalCapsuleParams)
+  }
+  
+  // Get the computed values from PlayerRegistry
+  const volumes = localId ? PlayerRegistry.getVolumes(localId) : null
+  const capsule = localId ? PlayerRegistry.getCapsule(localId) : null
+  const normalizedCapsuleParams = capsule?.normalized || scaleCapsuleParams(naturalCapsuleParams, 1.0)
   
   // Attach capsule wireframe at NORMALIZED scale
   attachCapsuleWireframe(currentCreature.mesh, null, { color: 0x00ff00 })
   // The wireframe needs to be at normalized scale, so we recreate it
-  updateWireframeToNormalizedScale()
+  updateWireframeToNormalizedScale(naturalCapsuleParams)
   setWireframeVisible(currentCreature.mesh, wireframeVisible)
   
   // Log both natural and normalized stats
   console.log(`[Player] Natural capsule:`, {
     radius: naturalCapsuleParams.radius.toFixed(3),
     halfHeight: naturalCapsuleParams.halfHeight.toFixed(3),
-    volume: normalization.naturalVolume.toFixed(3) + ' mÂ³',
+    volume: (volumes?.natural || 0).toFixed(3) + ' m^3',
   })
   console.log(`[Player] Normalized capsule:`, {
     radius: normalizedCapsuleParams.radius.toFixed(3),
     halfHeight: normalizedCapsuleParams.halfHeight.toFixed(3),
-    volume: normalization.targetVolume.toFixed(3) + ' mÂ³',
-    scaleFactor: normalization.scaleFactor.toFixed(3),
+    volume: (volumes?.effective || VOLUME_CONFIG.STARTER).toFixed(3) + ' m^3',
+    scaleFactor: (capsule?.scaleFactor || 1.0).toFixed(3),
   })
   
   MeshRegistry.register('player', {
@@ -162,14 +159,13 @@ export function initPlayer(scene, spawnPosition = null, options = {}) {
       // Store BOTH capsule params
       naturalCapsuleParams: naturalCapsuleParams,    // META FACT
       capsuleParams: normalizedCapsuleParams,        // For physics (gameplay scale)
-      normalization: normalization,
-      worldVolume: getWorldVolume(),                 // Track world volume
+      worldVolume: volumes?.world || VOLUME_CONFIG.STARTER,
     }
   }, true)
   
   const naturalSize = currentCreature.traits.length?.toFixed(1) || '1.5'
-  const gameplayVolume = normalization.targetVolume.toFixed(2)
-  console.log(`Player: ${currentClass} | Natural: ${naturalSize}m | Vol: ${gameplayVolume}mÂ³ | Seed: ${seedToString(currentCreature.seed)}`)
+  const gameplayVolume = (volumes?.effective || VOLUME_CONFIG.STARTER).toFixed(2)
+  console.log(`Player: ${currentClass} | Natural: ${naturalSize}m | Vol: ${gameplayVolume}m^3 | Seed: ${seedToString(currentCreature.seed)}`)
   
   return currentCreature.mesh
 }
@@ -211,16 +207,23 @@ function swapCreature(newCreatureData, newType, newClass) {
   sceneRef.add(currentCreature.mesh)
   
   // Compute NATURAL capsule params (META FACT - preserved from Encyclopedia)
-  naturalCapsuleParams = computeCapsuleParams(currentCreature.mesh, currentCreature)
+  const naturalCapsuleParams = computeCapsuleParams(currentCreature.mesh, currentCreature)
   
-  // Apply normalization - this scales the mesh to gameplay volume
-  // World volume is preserved, so player keeps their "size progression"
-  const normalization = normalizeCreature(currentCreature.mesh, naturalCapsuleParams)
-  normalizedCapsuleParams = normalization.normalizedCapsuleParams
+  // Initialize volumes in PlayerRegistry with new capsule params
+  // This PRESERVES world volume (progression) but recomputes scale for new creature shape
+  const localId = PlayerRegistry.getLocalId()
+  if (localId) {
+    PlayerRegistry.initVolumes(localId, naturalCapsuleParams)
+  }
+  
+  // Get the computed values from PlayerRegistry
+  const volumes = localId ? PlayerRegistry.getVolumes(localId) : null
+  const capsule = localId ? PlayerRegistry.getCapsule(localId) : null
+  const normalizedCapsuleParams = capsule?.normalized || scaleCapsuleParams(naturalCapsuleParams, 1.0)
   
   // Attach capsule wireframe at NORMALIZED scale
   attachCapsuleWireframe(currentCreature.mesh, null, { color: 0x00ff00 })
-  updateWireframeToNormalizedScale()
+  updateWireframeToNormalizedScale(naturalCapsuleParams)
   setWireframeVisible(currentCreature.mesh, wireframeVisible)
   
   MeshRegistry.register('player', {
@@ -238,13 +241,11 @@ function swapCreature(newCreatureData, newType, newClass) {
       parts: creatureParts,
       naturalCapsuleParams: naturalCapsuleParams,
       capsuleParams: normalizedCapsuleParams,
-      normalization: normalization,
-      worldVolume: getWorldVolume(),
+      worldVolume: volumes?.world || VOLUME_CONFIG.STARTER,
     }
   }, true)
   
-  // Notify PlayerRegistry of creature change
-  const localId = PlayerRegistry.getLocalId()
+  // Update PlayerRegistry with creature info
   if (localId) {
     PlayerRegistry.updateMesh(localId, currentCreature.mesh, creatureParts)
     PlayerRegistry.updateCreature(localId, {
@@ -253,10 +254,6 @@ function swapCreature(newCreatureData, newType, newClass) {
       variant: currentVariantIndex,
       seed: currentCreature.seed,
       displayName: currentClass,
-    })
-    PlayerRegistry.update(localId, {
-      capsuleParams: normalizedCapsuleParams,
-      naturalCapsuleParams: naturalCapsuleParams,
     })
   }
   
@@ -267,7 +264,6 @@ function swapCreature(newCreatureData, newType, newClass) {
     traits: currentCreature.traits,
     naturalCapsuleParams: naturalCapsuleParams,
     capsuleParams: normalizedCapsuleParams,
-    normalization: normalization,
   }
 }
 
@@ -538,8 +534,22 @@ export function setPlayerWireframeColor(color) {
  * @returns {{ radius: number, halfHeight: number, center: THREE.Vector3 } | null}
  */
 export function getPlayerCapsuleParams() {
-  // Return NORMALIZED capsule params for physics
-  return normalizedCapsuleParams
+  // First try PlayerRegistry
+  const localId = PlayerRegistry.getLocalId()
+  if (localId) {
+    const capsule = PlayerRegistry.getCapsule(localId)
+    if (capsule?.normalized) {
+      return capsule.normalized
+    }
+  }
+  
+  // Fallback to MeshRegistry (capsule stored there during initPlayer)
+  const playerEntry = MeshRegistry.get('player')
+  if (playerEntry?.metadata?.capsuleParams) {
+    return playerEntry.metadata.capsuleParams
+  }
+  
+  return null
 }
 
 /**
@@ -547,7 +557,22 @@ export function getPlayerCapsuleParams() {
  * @returns {{ radius: number, halfHeight: number, center: THREE.Vector3 } | null}
  */
 export function getNaturalCapsuleParams() {
-  return naturalCapsuleParams
+  // First try PlayerRegistry
+  const localId = PlayerRegistry.getLocalId()
+  if (localId) {
+    const capsule = PlayerRegistry.getCapsule(localId)
+    if (capsule?.natural) {
+      return capsule.natural
+    }
+  }
+  
+  // Fallback to MeshRegistry (capsule stored there during initPlayer)
+  const playerEntry = MeshRegistry.get('player')
+  if (playerEntry?.metadata?.naturalCapsuleParams) {
+    return playerEntry.metadata.naturalCapsuleParams
+  }
+  
+  return null
 }
 
 /**
@@ -565,9 +590,21 @@ export function isWireframeVisible() {
 /**
  * Helper: Update wireframe to match normalized scale
  * Called after normalization or scale change
+ * @param {object} naturalCapsuleParams - Natural capsule params (optional, will fetch from registry if not provided)
  */
-function updateWireframeToNormalizedScale() {
-  if (!currentCreature?.mesh || !normalizedCapsuleParams) return
+function updateWireframeToNormalizedScale(naturalCapsuleParams = null) {
+  if (!currentCreature?.mesh) return
+  
+  // Get natural params from registry if not provided
+  if (!naturalCapsuleParams) {
+    const localId = PlayerRegistry.getLocalId()
+    if (localId) {
+      const capsule = PlayerRegistry.getCapsule(localId)
+      naturalCapsuleParams = capsule?.natural
+    }
+  }
+  
+  if (!naturalCapsuleParams) return
   
   // Remove old wireframe
   const oldWireframe = currentCreature.mesh.getObjectByName('capsule-wireframe')
@@ -579,8 +616,6 @@ function updateWireframeToNormalizedScale() {
   // Create new wireframe at normalized scale
   // Since the mesh is already scaled, we need to create wireframe at original scale
   // (the wireframe will be scaled along with the mesh)
-  // So we use the natural params divided by the mesh scale
-  const meshScale = currentCreature.mesh.scale.x  // Uniform scale
   const wireframeParams = {
     radius: naturalCapsuleParams.radius,
     halfHeight: naturalCapsuleParams.halfHeight,
@@ -594,77 +629,94 @@ function updateWireframeToNormalizedScale() {
 /**
  * Apply current scale to mesh and update physics
  * Called after scale change (R/T keys, eating, etc.)
+ * 
+ * Note: With PlayerRegistry consolidation, scaling is handled automatically
+ * by PlayerRegistry._updateCapsuleAndScale(). This function now just
+ * updates MeshRegistry and returns current state.
  */
 export function applyCurrentScale() {
-  if (!currentCreature?.mesh || !naturalCapsuleParams) return null
+  if (!currentCreature?.mesh) return null
   
-  // Get new scale factor based on current world volume + manual scale
-  const scaleFactor = getScaleFactor(naturalCapsuleParams)
+  const localId = PlayerRegistry.getLocalId()
+  if (!localId) return null
   
-  // Apply to mesh
-  currentCreature.mesh.scale.setScalar(scaleFactor)
+  const player = PlayerRegistry.get(localId)
+  if (!player) return null
   
-  // Update normalized capsule params
-  normalizedCapsuleParams = scaleCapsuleParams(naturalCapsuleParams, scaleFactor)
+  const volumes = player.volumes
+  const capsule = player.capsule
   
-  // Update registry
+  // Update MeshRegistry
   const entry = MeshRegistry.get('player')
   if (entry) {
-    entry.metadata.capsuleParams = normalizedCapsuleParams
-    entry.metadata.normalization = getNormalizationInfo(naturalCapsuleParams)
-    entry.metadata.worldVolume = getWorldVolume()
-  }
-  
-  // Sync to PlayerRegistry
-  const localId = PlayerRegistry.getLocalId()
-  if (localId) {
-    PlayerRegistry.update(localId, {
-      capsuleParams: normalizedCapsuleParams,
-      physics: { scaleFactor },
-    })
-    PlayerRegistry.updateStats(localId, {
-      volume: getWorldVolume(),
-    })
+    entry.metadata.capsuleParams = capsule.normalized
+    entry.metadata.worldVolume = volumes.world
   }
   
   return {
-    scaleFactor,
-    normalizedCapsuleParams,
-    volume: getWorldVolume(),
+    scaleFactor: capsule.scaleFactor,
+    normalizedCapsuleParams: capsule.normalized,
+    volume: volumes.world,
   }
 }
 
 /**
  * Decrease player scale (R key) - DEBUG
- * @returns {object} { scalePercent, volume }
+ * @returns {object} { scalePercent, volume, newScale, effectiveVolume }
  */
 export function decreasePlayerScale() {
-  const result = normalDecreaseScale()
-  const scaleResult = applyCurrentScale()
+  const localId = PlayerRegistry.getLocalId()
+  if (!localId) {
+    return { scalePercent: 100, volume: VOLUME_CONFIG.STARTER }
+  }
   
-  console.log(`[Player] Scale decreased to ${(getManualScaleMultiplier() * 100).toFixed(0)}%`)
+  const result = PlayerRegistry.adjustManualScale(localId, -VOLUME_CONFIG.MANUAL_SCALE_STEP)
+  
+  if (!result) {
+    return { scalePercent: 100, volume: VOLUME_CONFIG.STARTER }
+  }
+  
+  // Update MeshRegistry
+  applyCurrentScale()
+  
+  console.log(`[Player] Scale decreased to ${(result.newScale * 100).toFixed(0)}%`)
   
   return {
-    scalePercent: getManualScaleMultiplier() * 100,
-    volume: scaleResult?.volume || 0,
-    normalizedCapsuleParams: scaleResult?.normalizedCapsuleParams,
+    scalePercent: result.newScale * 100,
+    volume: result.effectiveVolume,
+    newScale: result.newScale,
+    effectiveVolume: result.effectiveVolume,
+    normalizedCapsuleParams: PlayerRegistry.getCapsule(localId)?.normalized,
   }
 }
 
 /**
  * Increase player scale (T key) - DEBUG
- * @returns {object} { scalePercent, volume }
+ * @returns {object} { scalePercent, volume, newScale, effectiveVolume }
  */
 export function increasePlayerScale() {
-  const result = normalIncreaseScale()
-  const scaleResult = applyCurrentScale()
+  const localId = PlayerRegistry.getLocalId()
+  if (!localId) {
+    return { scalePercent: 100, volume: VOLUME_CONFIG.STARTER }
+  }
   
-  console.log(`[Player] Scale increased to ${(getManualScaleMultiplier() * 100).toFixed(0)}%`)
+  const result = PlayerRegistry.adjustManualScale(localId, VOLUME_CONFIG.MANUAL_SCALE_STEP)
+  
+  if (!result) {
+    return { scalePercent: 100, volume: VOLUME_CONFIG.STARTER }
+  }
+  
+  // Update MeshRegistry
+  applyCurrentScale()
+  
+  console.log(`[Player] Scale increased to ${(result.newScale * 100).toFixed(0)}%`)
   
   return {
-    scalePercent: getManualScaleMultiplier() * 100,
-    volume: scaleResult?.volume || 0,
-    normalizedCapsuleParams: scaleResult?.normalizedCapsuleParams,
+    scalePercent: result.newScale * 100,
+    volume: result.effectiveVolume,
+    newScale: result.newScale,
+    effectiveVolume: result.effectiveVolume,
+    normalizedCapsuleParams: PlayerRegistry.getCapsule(localId)?.normalized,
   }
 }
 
@@ -676,20 +728,45 @@ export function increasePlayerScale() {
  * @returns {object} { volumeGained, totalVolume, wasCapped }
  */
 export function addFood(preyVolume) {
-  const result = normalAddVolume(preyVolume)
+  const localId = PlayerRegistry.getLocalId()
+  if (!localId) {
+    console.warn('[Player] Cannot add food - no local player registered')
+    return { volumeGained: 0, totalVolume: VOLUME_CONFIG.STARTER, wasCapped: false }
+  }
+  
+  const result = PlayerRegistry.addVolume(localId, preyVolume)
+  
+  if (!result) {
+    return { volumeGained: 0, totalVolume: VOLUME_CONFIG.STARTER, wasCapped: false }
+  }
+  
+  // Update MeshRegistry
   applyCurrentScale()
   
-  console.log(`[Player] Ate: +${result.volumeGained.toFixed(2)} mÂ³ | Total: ${result.totalVolume.toFixed(2)} mÂ³${result.wasCapped ? ' (CAPPED)' : ''}`)
+  console.log(`[Player] Ate: +${result.volumeGained.toFixed(2)} m^3 | Total: ${result.totalVolume.toFixed(2)} m^3${result.wasCapped ? ' (CAPPED)' : ''}`)
   
   return result
 }
 
 /**
- * Get player's current world volume
- * @returns {number} Volume in mÂ³
+ * Get player's current effective volume (includes manual scale)
+ * Used for feeding calculations
+ * @returns {number} Volume in m^3
  */
 export function getPlayerWorldVolume() {
-  return getEffectiveWorldVolume()
+  const localId = PlayerRegistry.getLocalId()
+  return localId ? PlayerRegistry.getEffectiveVolume(localId) : VOLUME_CONFIG.STARTER
+}
+
+/**
+ * Get player's world volume for NETWORK transmission
+ * This returns ONLY the base world volume, NOT including manual scale
+ * R/T debug keys should be local-only visual effects
+ * @returns {number} Volume in m^3
+ */
+export function getPlayerNetworkVolume() {
+  const localId = PlayerRegistry.getLocalId()
+  return localId ? PlayerRegistry.getNetworkVolume(localId) : VOLUME_CONFIG.STARTER
 }
 
 /**
@@ -697,8 +774,11 @@ export function getPlayerWorldVolume() {
  * @param {number} volume - Volume to set
  */
 export function setPlayerWorldVolume(volume) {
-  setWorldVolume(volume)
-  applyCurrentScale()
+  const localId = PlayerRegistry.getLocalId()
+  if (localId) {
+    PlayerRegistry.setWorldVolume(localId, volume)
+    applyCurrentScale()
+  }
 }
 
 /**
@@ -706,8 +786,52 @@ export function setPlayerWorldVolume(volume) {
  * @returns {object}
  */
 export function getPlayerNormalizationInfo() {
-  if (!naturalCapsuleParams) return null
-  return getNormalizationInfo(naturalCapsuleParams)
+  const localId = PlayerRegistry.getLocalId()
+  if (!localId) return null
+  
+  const player = PlayerRegistry.get(localId)
+  if (!player) return null
+  
+  const volumes = player.volumes
+  const capsule = player.capsule
+  
+  if (!capsule.natural) return null
+  
+  return {
+    // Natural (META FACTS - preserved from Encyclopedia)
+    natural: {
+      radius: capsule.natural.radius,
+      halfHeight: capsule.natural.halfHeight,
+      volume: volumes.natural,
+      capsuleLength: capsule.natural.halfHeight * 2 + capsule.natural.radius * 2,
+    },
+    
+    // Gameplay (normalized)
+    gameplay: {
+      radius: capsule.normalized?.radius || 0,
+      halfHeight: capsule.normalized?.halfHeight || 0,
+      volume: volumes.effective,
+      capsuleLength: capsule.normalized ? (capsule.normalized.halfHeight * 2 + capsule.normalized.radius * 2) : 0,
+    },
+    
+    // Multipliers
+    scaleFactor: capsule.scaleFactor,
+    manualScaleMultiplier: volumes.manualScale,
+    
+    // Volume state
+    worldVolume: volumes.world,
+    starterVolume: VOLUME_CONFIG.STARTER,
+    maxVolume: VOLUME_CONFIG.MAX,
+    
+    // Percentages for display
+    scalePercent: capsule.scaleFactor * 100,
+    volumePercent: (volumes.world / VOLUME_CONFIG.MAX) * 100,
+    
+    // Legacy compatibility
+    growthMultiplier: 1.0,
+    growthPercent: 100,
+    foodEaten: volumes.world,
+  }
 }
 
 /**
@@ -716,26 +840,40 @@ export function getPlayerNormalizationInfo() {
 export function debugPlayerScale() {
   console.group('[Player] Scale Debug')
   
-  if (naturalCapsuleParams) {
-    const info = getNormalizationInfo(naturalCapsuleParams)
+  const localId = PlayerRegistry.getLocalId()
+  if (!localId) {
+    console.log('No local player registered')
+    console.groupEnd()
+    return
+  }
+  
+  const info = getPlayerNormalizationInfo()
+  if (info) {
     console.log('Natural (META FACT):')
     console.log(`  Length: ${currentCreature?.traits?.length?.toFixed(2) || '?'}m`)
     console.log(`  Capsule: r=${info.natural.radius.toFixed(3)}, h=${info.natural.halfHeight.toFixed(3)}`)
-    console.log(`  Volume: ${info.natural.volume.toFixed(3)} mÂ³`)
+    console.log(`  Volume: ${info.natural.volume.toFixed(3)} m^3`)
     console.log('Gameplay (Normalized):')
-    console.log(`  Scale factor: ${info.scaleFactor.toFixed(3)}Ã—`)
+    console.log(`  Scale factor: ${info.scaleFactor.toFixed(3)}x`)
     console.log(`  Capsule: r=${info.gameplay.radius.toFixed(3)}, h=${info.gameplay.halfHeight.toFixed(3)}`)
-    console.log(`  Volume: ${info.gameplay.volume.toFixed(3)} mÂ³`)
+    console.log(`  Volume: ${info.gameplay.volume.toFixed(3)} m^3`)
     console.log('Volume State:')
-    console.log(`  World Volume: ${getWorldVolume().toFixed(2)} mÂ³`)
-    console.log(`  Manual Scale: ${info.manualScaleMultiplier.toFixed(2)}Ã— (${(info.manualScaleMultiplier * 100).toFixed(0)}%)`)
-    console.log(`  Max Volume: 1000 mÂ³`)
-    console.log(`  Progress: ${((getWorldVolume() / 1000) * 100).toFixed(1)}%`)
+    console.log(`  World Volume: ${info.worldVolume.toFixed(2)} m^3`)
+    console.log(`  Manual Scale: ${info.manualScaleMultiplier.toFixed(2)}x (${(info.manualScaleMultiplier * 100).toFixed(0)}%)`)
+    console.log(`  Max Volume: ${VOLUME_CONFIG.MAX} m^3`)
+    console.log(`  Progress: ${((info.worldVolume / VOLUME_CONFIG.MAX) * 100).toFixed(1)}%`)
   } else {
     console.log('No normalization data available')
   }
   
-  debugNormalScale()
+  // Also show PlayerRegistry debug for this player
+  const player = PlayerRegistry.get(localId)
+  if (player) {
+    console.log('PlayerRegistry State:')
+    console.log(`  volumes:`, player.volumes)
+    console.log(`  capsule.scaleFactor:`, player.capsule.scaleFactor)
+  }
+  
   console.groupEnd()
 }
 
@@ -781,20 +919,17 @@ export function onEaten(eaterData = null) {
   // Unregister from MeshRegistry
   MeshRegistry.unregister('player')
   
-  // Unregister from PlayerRegistry
+  // Reset volumes in PlayerRegistry (will start at 1 m^3 again on respawn)
   const localId = PlayerRegistry.getLocalId()
   if (localId) {
-    PlayerRegistry.unregister(localId)
+    PlayerRegistry.resetVolumes(localId)
+    // Note: We don't unregister from PlayerRegistry here - that's handled by NetworkManager
+    // when we fully disconnect. We just reset volumes for respawn.
   }
   
-  // Reset state
+  // Reset local state
   currentCreature = null
   creatureParts = null
-  naturalCapsuleParams = null
-  normalizedCapsuleParams = null
-  
-  // Reset growth (will start at 1 mÂ³ again)
-  resetGrowth()
   
   // Return to menu
   showMenu()
